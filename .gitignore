@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+tasks.json
+feed_url.txt
+last_sync.txt
+brightspace_feed_url.txt
+.env
+
