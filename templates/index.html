@@ -19,7 +19,7 @@
       </div>
 
       <nav class="nav">
-        <a class="nav-item active" href="/?view={{ view }}&course={{ course_filter }}&deadlines={{ deadlines_only }}">
+        <a class="nav-item active" href="/dashboard?view={{ view }}&course={{ course_filter }}&deadlines={{ deadlines_only }}">
           <span class="nav-ic">🏠</span> Dashboard
         </a>
 
@@ -51,10 +51,10 @@
         </div>
 
         <div class="tabs">
-          <a class="pilltab {% if view=='today' %}active{% endif %}" href="/?view=today&course={{ course_filter }}&deadlines={{ deadlines_only }}">Today</a>
-          <a class="pilltab {% if view=='week' %}active{% endif %}" href="/?view=week&course={{ course_filter }}&deadlines={{ deadlines_only }}">Week</a>
-          <a class="pilltab {% if view=='all' %}active{% endif %}" href="/?view=all&course={{ course_filter }}&deadlines={{ deadlines_only }}">All</a>
-          <a class="pilltab {% if view=='archive' %}active{% endif %}" href="/?view=archive&course={{ course_filter }}&deadlines={{ deadlines_only }}">Archive</a>
+          <a class="pilltab {% if view=='today' %}active{% endif %}" href="/dashboard?view=today&course={{ course_filter }}&deadlines={{ deadlines_only }}">Today</a>
+          <a class="pilltab {% if view=='week' %}active{% endif %}" href="/dashboard?view=week&course={{ course_filter }}&deadlines={{ deadlines_only }}">Week</a>
+          <a class="pilltab {% if view=='all' %}active{% endif %}" href="/dashboard?view=all&course={{ course_filter }}&deadlines={{ deadlines_only }}">All</a>
+          <a class="pilltab {% if view=='archive' %}active{% endif %}" href="/dashboard?view=archive&course={{ course_filter }}&deadlines={{ deadlines_only }}">Archive</a>
         </div>
       </div>
 
