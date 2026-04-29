@@ -533,7 +533,12 @@ def auto_sync_if_needed():
 # ============================
 # ROUTES
 # ============================
-@app.route("/", methods=["GET", "POST"])
+
+@app.route("/")
+def landing():
+    return render_template("landing.html")
+
+@app.route("/dashboard", methods=["GET", "POST"])
 def home():
     view = request.args.get("view", "today")
     course_filter = request.args.get("course", "all")
