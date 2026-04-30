@@ -33,11 +33,36 @@
       </nav>
 
       <div class="sidebar-footer">
-        <button class="theme-toggle" id="themeToggle" type="button">
-          🌙 Dark mode
-        </button>
-        
+  <div class="account-menu">
+    <button class="account-button" id="accountButton" type="button">
+      <div class="account-avatar">
+        {{ user.name[0]|upper if user and user.name else "U" }}
       </div>
+
+      <div class="account-text">
+        <div class="account-name">{{ user.name if user else "Student" }}</div>
+        <div class="account-email">{{ user.email if user else "" }}</div>
+      </div>
+
+      <div class="account-caret">⌄</div>
+    </button>
+
+    <div class="account-dropdown" id="accountDropdown">
+      <a href="/profile">Profile</a>
+      {% if user and user.email == "bassemtamer2016@gmail.com" %}
+        <a href="/admin/feedback">Feedback</a>
+      {% else %}
+        <a href="/feedback">Feedback</a>
+      {% endif %}
+      <a href="/settings">Settings</a>
+      <a class="logout-link" href="/logout">Log out</a>
+    </div>
+  </div>
+
+  <button class="theme-toggle" id="themeToggle" type="button">
+    🌙 Dark mode
+  </button>
+</div>
     </aside>
 
     <main class="main">
@@ -117,6 +142,23 @@
         applyTheme(nextTheme);
       });
     }
+  
+  const accountButton = document.getElementById("accountButton");
+const accountDropdown = document.getElementById("accountDropdown");
+
+if(accountButton && accountDropdown){
+  accountButton.addEventListener("click", function(){
+    accountDropdown.classList.toggle("show");
+  });
+
+  document.addEventListener("click", function(event){
+    if(!accountButton.contains(event.target) && !accountDropdown.contains(event.target)){
+      accountDropdown.classList.remove("show");
+    }
+  });
+}
+  
+  
   </script>
 </body>
 </html>

@@ -726,6 +726,8 @@ a{
 }
 
 input[type="text"],
+input[type="email"],
+input[type="password"],
 input[type="date"],
 input[type="file"],
 select{
@@ -1067,6 +1069,8 @@ body.dark-mode .sync-mini-body{
 }
 
 body.dark-mode input[type="text"],
+body.dark-mode input[type="email"],
+body.dark-mode input[type="password"],
 body.dark-mode input[type="date"],
 body.dark-mode input[type="file"],
 body.dark-mode select{
@@ -1296,4 +1300,235 @@ body.dark-mode .landing-note{
   .landing-features{
     grid-template-columns:1fr;
   }
+}
+
+/* PROFILE + FEEDBACK */
+.profile-page-avatar{
+  width:84px;
+  height:84px;
+  margin:22px auto 16px;
+  border-radius:28px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:linear-gradient(135deg, var(--blue2), var(--blue));
+  color:#fff;
+  font-size:34px;
+  font-weight:950;
+  box-shadow:0 18px 35px rgba(37,99,235,0.25);
+}
+
+.profile-page-info{
+  max-width:360px;
+  margin:0 auto;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  color:#64748b;
+  font-size:15px;
+}
+
+textarea{
+  width:100%;
+  min-height:150px;
+  padding:14px;
+  border-radius:16px;
+  border:1px solid var(--line);
+  outline:none;
+  resize:vertical;
+  font-family:inherit;
+  background:#fff;
+}
+
+textarea:focus{
+  border-color:rgba(30,136,255,0.6);
+  box-shadow:0 0 0 4px rgba(30,136,255,0.10);
+}
+
+body.dark-mode textarea{
+  background:#0b1220;
+  color:#f8fafc;
+  border-color:rgba(148,163,184,0.22);
+}
+
+body.dark-mode .profile-page-info{
+  color:#9fb0c8;
+}
+
+/* ACCOUNT DROPDOWN */
+.account-menu{
+  position:relative;
+  margin-bottom:10px;
+}
+
+.account-button{
+  width:100%;
+  border:none;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:10px;
+  border-radius:14px;
+  background:rgba(255,255,255,0.78);
+  border:1px solid var(--line);
+  color:var(--text);
+  text-align:left;
+}
+
+.account-button:hover{
+  background:#fff;
+}
+
+.account-avatar{
+  width:38px;
+  height:38px;
+  border-radius:14px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:linear-gradient(135deg, var(--blue2), var(--blue));
+  color:#fff;
+  font-weight:950;
+  flex-shrink:0;
+}
+
+.account-text{
+  min-width:0;
+  flex:1;
+}
+
+.account-name{
+  font-size:13px;
+  font-weight:950;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.account-email{
+  margin-top:2px;
+  font-size:11px;
+  color:var(--muted);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.account-caret{
+  font-size:18px;
+  color:var(--muted);
+}
+
+.account-dropdown{
+  display:none;
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:62px;
+  padding:8px;
+  border-radius:16px;
+  background:#fff;
+  border:1px solid var(--line);
+  box-shadow:0 18px 40px rgba(15,23,42,0.16);
+  z-index:20;
+}
+
+.account-dropdown.show{
+  display:block;
+}
+
+.account-dropdown a{
+  display:block;
+  padding:10px 12px;
+  border-radius:12px;
+  font-size:13px;
+  font-weight:900;
+  color:var(--text);
+}
+
+.account-dropdown a:hover{
+  background:#eef5ff;
+}
+
+.account-dropdown .logout-link{
+  color:var(--danger);
+}
+
+body.dark-mode .account-button{
+  background:rgba(15,23,42,0.72);
+  border-color:rgba(148,163,184,0.22);
+  color:#f8fafc;
+}
+
+body.dark-mode .account-button:hover{
+  background:rgba(15,23,42,0.95);
+}
+
+body.dark-mode .account-dropdown{
+  background:#0d1828;
+  border-color:rgba(148,163,184,0.22);
+}
+
+body.dark-mode .account-dropdown a{
+  color:#f8fafc;
+}
+
+body.dark-mode .account-dropdown a:hover{
+  background:rgba(37,99,235,0.18);
+}
+
+/* ADMIN FEEDBACK */
+.admin-page{
+  justify-content:flex-start;
+  padding-top:50px;
+}
+
+.admin-panel{
+  width:min(900px, 100%);
+  max-width:900px;
+}
+
+.admin-feedback-list{
+  margin-top:26px;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+  text-align:left;
+}
+
+.feedback-card{
+  padding:18px;
+  border-radius:18px;
+  border:1px solid var(--line);
+  background:#f8fbff;
+}
+
+.feedback-meta{
+  font-size:12px;
+  font-weight:950;
+  color:var(--muted);
+}
+
+.feedback-user{
+  margin-top:6px;
+  font-size:13px;
+  font-weight:900;
+  color:#2563eb;
+}
+
+.feedback-message{
+  margin-top:12px;
+  color:#0f172a;
+  line-height:1.5;
+  white-space:pre-wrap;
+}
+
+body.dark-mode .feedback-card{
+  background:#0b1220;
+  border-color:rgba(148,163,184,0.22);
+}
+
+body.dark-mode .feedback-message{
+  color:#f8fafc;
 }
