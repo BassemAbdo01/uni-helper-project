@@ -8,23 +8,44 @@
 </head>
 
 <body>
-  <main class="landing">
-    <section class="landing-hero" style="max-width:520px;">
+  <main class="auth-page">
+    <section class="auth-card">
+      <a class="auth-back" href="/">← Back to home</a>
+
       <div class="landing-badge">Welcome back</div>
-      <h1 style="font-size:38px;">Log in</h1>
+
+      <h1>Log in to Uni Helper</h1>
+
+      <p class="auth-sub">
+        Check your deadlines, sync Brightspace, and get back to focusing.
+      </p>
 
       {% if error %}
-        <p style="color:#ff3b30; font-weight:900;">{{ error }}</p>
+        <div class="auth-error">{{ error }}</div>
       {% endif %}
 
-      <form method="POST" class="formstack" style="margin-top:24px;">
-        <input type="email" name="email" placeholder="Email" required>
+      <form method="POST" class="formstack auth-form">
+        <input type="email" name="email" placeholder="Email address" required>
         <input type="password" name="password" placeholder="Password" required>
         <button class="btn" type="submit">Log in</button>
       </form>
 
-      <div class="landing-note">
-        No account yet? <a href="/signup" style="font-weight:900;">Create one</a>
+      <div class="auth-switch">
+        New to Uni Helper?
+        <a href="/signup">Create an account</a>
+      </div>
+    </section>
+
+    <section class="auth-preview">
+      <div class="auth-preview-card">
+        <div class="auth-preview-label">Your school command center</div>
+        <div class="auth-preview-title">One dashboard for every deadline.</div>
+
+        <div class="auth-mini-list">
+          <div><span>🔄</span> Brightspace auto-sync</div>
+          <div><span>🗓️</span> Labs, quizzes, assignments, exams</div>
+          <div><span>⏱️</span> Built-in focus timer</div>
+        </div>
       </div>
     </section>
   </main>

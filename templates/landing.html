@@ -8,48 +8,344 @@
 </head>
 
 <body>
-  <main class="landing">
-    <section class="landing-hero">
-      <div class="landing-badge">Built for students</div>
+  <main class="cinematic-landing">
+    <div class="cine-cursor-glow" id="cineCursorGlow"></div>
 
-      <h1>Stop checking Brightspace 20 times a day.</h1>
+    <nav class="cine-nav">
+      <a class="cine-brand" href="/">
+        <div class="cine-brand-mark">U</div>
+        <span>Uni Helper</span>
+      </a>
 
-      <p>
-        Uni Helper automatically syncs your Brightspace deadlines and turns labs,
-        quizzes, assignments, midterms, finals, and study sessions into one clean
-        organized dashboard. One place to check. One place to plan. One less thing
-        to stress about.
-      </p>
-
-      <div class="landing-actions">
-        <a class="btn landing-btn" href="/signup">Get started free</a>
-        <a class="btn secondary landing-btn" href="/login">Log in</a>
+      <div class="cine-nav-links">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#about">About</a>
       </div>
 
-      <div class="landing-note">
-        Create an account, connect Brightspace, and manage your deadlines from one private dashboard.
+      <div class="cine-nav-actions">
+        <a class="cine-login" href="/login">Log in</a>
+        <a class="cine-signup" href="/signup">Sign up</a>
+      </div>
+    </nav>
+
+    <section class="cine-hero" id="cineHero">
+      <div class="cine-hero-copy reveal-up">
+        <div class="cine-pill">✦ Your all in one student OS</div>
+
+        <h1>
+          Stop checking
+          <span>Brightspace</span>
+          20 times a day.
+        </h1>
+
+        <p>
+          Uni Helper auto-syncs your Brightspace deadlines, organizes labs,
+          quizzes, assignments, midterms, finals, and turns school into one calm
+          private dashboard.
+        </p>
+
+        <div class="cine-hero-buttons">
+          <a class="cine-primary" href="/signup">Get Started <span>→</span></a>
+          <a class="cine-secondary" href="#features">See Demo <span>▷</span></a>
+        </div>
+
+        <div class="cine-trust">
+          <div>
+            <span>↻</span>
+            <p>Auto-sync<br>from Brightspace</p>
+          </div>
+
+          <div>
+            <span>✓</span>
+            <p>Smart reminders<br>that actually help</p>
+          </div>
+
+          <div>
+            <span>🔒</span>
+            <p>Private dashboard<br>for every student</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="cine-hero-stage reveal-up" id="cineHeroStage">
+        <div class="cine-depth-grid"></div>
+
+        <div class="cine-float-card cine-course-card cine-card-a">
+          <div class="cine-card-icon">Σ</div>
+          <div>
+            <strong>Calculus II</strong>
+            <p>Quiz 4 • May 17</p>
+          </div>
+          <b>68%</b>
+        </div>
+
+        <div class="cine-float-card cine-course-card cine-card-b">
+          <div class="cine-card-icon">⚗</div>
+          <div>
+            <strong>Chemistry 201</strong>
+            <p>Lab Report • May 16</p>
+          </div>
+          <b>72%</b>
+        </div>
+
+        <div class="cine-float-card cine-deadline-card cine-card-c">
+          <strong>⚠ Due Tomorrow</strong>
+          <h3>Lab Report 3</h3>
+          <p>Chemistry 201 • 11:59 PM</p>
+          <button type="button">Open Task</button>
+        </div>
+
+        <div class="cine-laptop" id="cineLaptop">
+          <div class="cine-laptop-bar">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+
+          <div class="cine-laptop-screen">
+            <aside class="cine-mini-side">
+              <div class="cine-mini-logo">U</div>
+              <div class="cine-mini-nav active"></div>
+              <div class="cine-mini-nav"></div>
+              <div class="cine-mini-nav"></div>
+              <div class="cine-mini-nav"></div>
+            </aside>
+
+            <section class="cine-mini-main">
+              <div class="cine-mini-top">
+                <div>
+                  <h3>Good evening, Alex 👋</h3>
+                  <p>You’ve got 3 tasks due this week.</p>
+                </div>
+
+                <div class="cine-mini-avatar"></div>
+              </div>
+
+              <div class="cine-mini-grid">
+                <div class="cine-mini-panel cine-deadlines-panel">
+                  <strong>Upcoming Deadlines</strong>
+                  <div class="cine-mini-task">
+                    <span>Lab Report 3</span>
+                    <b class="high">High</b>
+                  </div>
+                  <div class="cine-mini-task">
+                    <span>Quiz 4</span>
+                    <b class="medium">Medium</b>
+                  </div>
+                  <div class="cine-mini-task">
+                    <span>Discussion Post</span>
+                    <b class="low">Low</b>
+                  </div>
+                </div>
+
+                <div class="cine-mini-panel cine-calendar-panel">
+                  <strong>May 2025</strong>
+                  <div class="cine-calendar-dots">
+                    <span></span><span></span><span></span><span></span><span class="active"></span><span></span><span></span>
+                    <span></span><span></span><span class="glow"></span><span></span><span></span><span></span><span></span>
+                    <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                  </div>
+                </div>
+
+                <div class="cine-mini-panel cine-progress-panel">
+                  <strong>Weekly Progress</strong>
+                  <div class="cine-progress-bar"><span></span></div>
+                  <p>75% on track</p>
+                </div>
+
+                <div class="cine-mini-panel cine-streak-panel">
+                  <strong>Study Streak</strong>
+                  <p>🔥 7 days</p>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div class="cine-orb">U</div>
       </div>
     </section>
 
-    <section class="landing-features">
-      <div class="landing-card">
-        <div class="landing-icon">🔄</div>
-        <h2>Auto-sync deadlines</h2>
-        <p>Pull labs, quizzes, assignments, and course deadlines straight from Brightspace.</p>
+    <section class="cine-story" id="features">
+      <div class="cine-section-heading reveal-up">
+        <div class="cine-pill">Built to reduce school chaos</div>
+        <h2>From scattered deadlines to one organized command center.</h2>
+        <p>
+          Uni Helper takes the mess of Brightspace, calendars, reminders, and
+          study plans, then turns it into one dashboard that actually makes sense.
+        </p>
       </div>
 
-      <div class="landing-card">
-        <div class="landing-icon">🗓️</div>
-        <h2>One organized hub</h2>
-        <p>Add midterms, finals, and personal tasks so school is tracked in one place.</p>
+      <div class="cine-feature-grid">
+        <article class="cine-feature reveal-up">
+          <div class="cine-feature-number">01</div>
+          <h3>Immersive Reveal</h3>
+          <p>Watch scattered school tasks become one clean organized dashboard.</p>
+
+          <div class="cine-feature-visual chaos-visual">
+            <div class="paper paper-1"></div>
+            <div class="paper paper-2"></div>
+            <div class="paper paper-3"></div>
+            <div class="paper paper-4"></div>
+            <div class="organized-screen"></div>
+          </div>
+        </article>
+
+        <article class="cine-feature reveal-up">
+          <div class="cine-feature-number">02</div>
+          <h3>Interactive Course Hub</h3>
+          <p>Every course gets its own clean space for deadlines and progress.</p>
+
+          <div class="cine-course-hub">
+            <div>
+              <b>Σ</b>
+              <span>Calculus II</span>
+              <small>Quiz next</small>
+            </div>
+
+            <div>
+              <b>⚗</b>
+              <span>Chemistry</span>
+              <small>Lab report</small>
+            </div>
+
+            <div>
+              <b>⚙</b>
+              <span>SYSC</span>
+              <small>Project due</small>
+            </div>
+          </div>
+        </article>
+
+        <article class="cine-feature reveal-up">
+          <div class="cine-feature-number">03</div>
+          <h3>Deadline Orbit</h3>
+          <p>Labs, quizzes, assignments, midterms, and finals all orbit one plan.</p>
+
+          <div class="cine-orbit-visual">
+            <div class="orbit-core">Plan</div>
+            <div class="orbit-item orbit-1">Lab</div>
+            <div class="orbit-item orbit-2">Quiz</div>
+            <div class="orbit-item orbit-3">Exam</div>
+            <div class="orbit-item orbit-4">Final</div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="cine-study-room reveal-up">
+      <div class="cine-room-copy">
+        <div class="cine-pill">Coming next</div>
+        <h2>Your 3D Study Room.</h2>
+        <p>
+          A calm interactive desk where hovering over objects reveals your tasks,
+          calendar, focus timer, courses, and study plan. Normal dashboard stays
+          available, but the study room makes Uni Helper unforgettable.
+        </p>
+
+        <a class="cine-primary" href="/signup">Start organizing <span>→</span></a>
       </div>
 
-      <div class="landing-card">
-        <div class="landing-icon">⏱️</div>
-        <h2>Study with focus</h2>
-        <p>Use the built-in focus timer to turn deadlines into actual study sessions.</p>
+      <div class="cine-room-stage">
+        <div class="room-lamp"></div>
+        <div class="room-laptop">
+          <div>Today’s Plan</div>
+          <span>3 tasks due</span>
+        </div>
+        <div class="room-notebook">
+          <b>Focus</b>
+          <span>25:00</span>
+        </div>
+        <div class="room-card tasks-room">Tasks</div>
+        <div class="room-card calendar-room">Calendar</div>
+        <div class="room-card timer-room">Timer</div>
+      </div>
+    </section>
+
+    <section class="cine-final" id="pricing">
+      <div class="reveal-up">
+        <h2>One place for school. Finally organized.</h2>
+        <p>
+          Start free. Use the dashboard, calendar, and focus tools. Pro features
+          like advanced reminders, premium study room, and deeper automation can
+          come later.
+        </p>
+
+        <div class="cine-hero-buttons center">
+          <a class="cine-primary" href="/signup">Get Started <span>→</span></a>
+          <a class="cine-secondary" href="/login">Log in</a>
+        </div>
       </div>
     </section>
   </main>
+
+  <script>
+    const hero = document.getElementById("cineHero");
+    const laptop = document.getElementById("cineLaptop");
+    const stage = document.getElementById("cineHeroStage");
+    const glow = document.getElementById("cineCursorGlow");
+
+    const cardA = document.querySelector(".cine-card-a");
+    const cardB = document.querySelector(".cine-card-b");
+    const cardC = document.querySelector(".cine-card-c");
+
+    if(glow){
+      window.addEventListener("mousemove", function(event){
+        glow.style.left = event.clientX + "px";
+        glow.style.top = event.clientY + "px";
+      });
+    }
+
+    if(hero && laptop && stage){
+      stage.addEventListener("mousemove", function(event){
+        const rect = stage.getBoundingClientRect();
+        const x = (event.clientX - rect.left) / rect.width - 0.5;
+        const y = (event.clientY - rect.top) / rect.height - 0.5;
+
+        laptop.style.transform =
+          `translate3d(${x * 18}px, ${y * 12}px, 0) rotateY(${-10 + x * 10}deg) rotateX(${5 - y * 7}deg)`;
+
+        if(cardA){
+          cardA.style.transform =
+            `translate3d(${x * -22}px, ${y * -16}px, 0) rotate(7deg)`;
+        }
+
+        if(cardB){
+          cardB.style.transform =
+            `translate3d(${x * 22}px, ${y * -14}px, 0) rotate(-7deg)`;
+        }
+
+        if(cardC){
+          cardC.style.transform =
+            `translate3d(${x * -18}px, ${y * 18}px, 0) rotate(-6deg)`;
+        }
+      });
+
+      stage.addEventListener("mouseleave", function(){
+        laptop.style.transform = "rotateY(-10deg) rotateX(5deg)";
+        if(cardA) cardA.style.transform = "rotate(7deg)";
+        if(cardB) cardB.style.transform = "rotate(-7deg)";
+        if(cardC) cardC.style.transform = "rotate(-6deg)";
+      });
+    }
+
+    const revealItems = document.querySelectorAll(".reveal-up");
+
+    const observer = new IntersectionObserver(function(entries){
+      entries.forEach(function(entry){
+        if(entry.isIntersecting){
+          entry.target.classList.add("visible");
+        }
+      });
+    }, {
+      threshold: 0.18
+    });
+
+    revealItems.forEach(function(item){
+      observer.observe(item);
+    });
+  </script>
 </body>
 </html>
