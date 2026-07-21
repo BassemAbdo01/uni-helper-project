@@ -1,396 +1,246 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Uni Helper</title>
+  <title>Microsoft Uni Helper</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Microsoft Uni Helper brings Brightspace deadlines, courses, reminders, and study plans into one calm private dashboard.">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 
-<body>
-  <main class="cinematic-landing">
-    <div class="cine-cursor-glow" id="cineCursorGlow"></div>
-
-    <nav class="cine-nav">
-      <a class="cine-brand" href="/">
-        <div class="cine-brand-mark">U</div>
-        <span>Uni Helper</span>
+<body class="muh-page">
+  <main class="muh-landing">
+    <nav class="muh-nav" aria-label="Main navigation">
+      <a class="muh-brand" href="/" aria-label="Microsoft Uni Helper home">
+        <span class="muh-brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        <span>Microsoft Uni Helper</span>
       </a>
 
-      <div class="cine-nav-links">
+      <div class="muh-nav-links">
+        <a class="active" href="/">Home</a>
         <a href="#features">Features</a>
         <a href="#how">How it works</a>
         <a href="#pricing">Pricing</a>
         <a href="#about">About</a>
       </div>
 
-      <div class="cine-nav-actions">
-        <a class="cine-login" href="/login">Log in</a>
-        <a class="cine-signup" href="/signup">Sign up</a>
+      <div class="muh-nav-actions">
+        <a class="muh-login" href="/login">Log in</a>
+        <a class="muh-primary muh-primary-small" href="/signup">Sign up <span aria-hidden="true">↗</span></a>
       </div>
     </nav>
 
-    <section class="cine-hero" id="cineHero">
-      <div class="cine-hero-copy reveal-up">
-        <div class="cine-pill">✦ Your all in one student OS</div>
+    <section class="muh-hero" id="hero" aria-labelledby="hero-title">
+      <div class="muh-atmosphere" aria-hidden="true">
+        <div class="muh-beam muh-beam-one"></div>
+        <div class="muh-beam muh-beam-two"></div>
+        <div class="muh-starfield" id="muhParticles"></div>
+      </div>
 
-        <h1>
-          Stop checking
-          <span>Brightspace</span>
-          20 times a day.
-        </h1>
+      <div class="muh-scene-plate muh-depth" data-depth="0.08" aria-hidden="true"></div>
+      <img class="muh-hero-object muh-hero-books muh-depth" data-depth="0.16" src="{{ url_for('static', filename='images/hero-books-layer-v3.png') }}" alt="" aria-hidden="true">
+      <img class="muh-hero-object muh-hero-cap muh-depth" data-depth="0.24" src="{{ url_for('static', filename='images/hero-cap-layer-v3.png') }}" alt="" aria-hidden="true">
 
-        <p>
-          Uni Helper auto-syncs your Brightspace deadlines, organizes labs,
-          quizzes, assignments, midterms, finals, and turns school into one calm
-          private dashboard.
-        </p>
+      <div class="muh-hero-copy muh-reveal muh-depth" data-depth="0.18">
+        <div class="muh-pill"><span></span> Your all in one student OS</div>
+        <h1 id="hero-title">Your AI copilot <em>for university life.</em></h1>
+        <p>Microsoft Uni Helper auto-syncs your Brightspace deadlines, organizes labs, quizzes, assignments, midterms, finals, and turns school into one calm private dashboard.</p>
 
-        <div class="cine-hero-buttons">
-          <a class="cine-primary" href="/signup">Get Started <span>→</span></a>
-          <a class="cine-secondary" href="#features">See Demo <span>▷</span></a>
+        <div class="muh-hero-actions">
+          <a class="muh-primary" href="/signup">Get Started Free <span aria-hidden="true">→</span></a>
+          <a class="muh-secondary" href="#features"><span class="muh-play" aria-hidden="true">▶</span> See Demo</a>
         </div>
 
-        <div class="cine-trust">
-          <div>
-            <span>↻</span>
-            <p>Auto-sync<br>from Brightspace</p>
-          </div>
-
-          <div>
-            <span>✓</span>
-            <p>Smart reminders<br>that actually help</p>
-          </div>
-
-          <div>
-            <span>🔒</span>
-            <p>Private dashboard<br>for every student</p>
-          </div>
+        <div class="muh-trust" aria-label="Product benefits">
+          <div><span class="muh-trust-icon">AI</span><p><strong>AI powered</strong>Smart assistance</p></div>
+          <div><span class="muh-trust-icon">↻</span><p><strong>Auto-sync</strong>From Brightspace</p></div>
+          <div><span class="muh-trust-icon">✓</span><p><strong>Smart reminders</strong>That actually help</p></div>
+          <div><span class="muh-trust-icon">◇</span><p><strong>Private dashboard</strong>For every student</p></div>
         </div>
       </div>
 
-      <div class="cine-hero-stage reveal-up" id="cineHeroStage">
-        <div class="cine-depth-grid"></div>
-
-        <div class="cine-float-card cine-course-card cine-card-a">
-          <div class="cine-card-icon">Σ</div>
-          <div>
-            <strong>Calculus II</strong>
-            <p>Quiz 4 • May 17</p>
-          </div>
-          <b>68%</b>
+      <div class="muh-orb-stage muh-depth" data-depth="0.52" aria-hidden="true">
+        <div class="muh-orbit orbit-one"><i></i></div>
+        <div class="muh-orbit orbit-two"><i></i></div>
+        <div class="muh-orbit orbit-three"></div>
+        <div class="muh-ai-orb">
+          <div class="muh-orb-halo"></div>
+          <div class="muh-orb-core"><span>✦</span></div>
         </div>
+      </div>
 
-        <div class="cine-float-card cine-course-card cine-card-b">
-          <div class="cine-card-icon">⚗</div>
-          <div>
-            <strong>Chemistry 201</strong>
-            <p>Lab Report • May 16</p>
-          </div>
-          <b>72%</b>
-        </div>
+      <div class="muh-scroll-cue" aria-hidden="true"><span></span>Explore the system</div>
+    </section>
 
-        <div class="cine-float-card cine-deadline-card cine-card-c">
-          <strong>⚠ Due Tomorrow</strong>
-          <h3>Lab Report 3</h3>
-          <p>Chemistry 201 • 11:59 PM</p>
-          <button type="button">Open Task</button>
-        </div>
+    <div class="muh-portal" aria-hidden="true"><span></span></div>
 
-        <div class="cine-laptop" id="cineLaptop">
-          <div class="cine-laptop-bar">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
+    <section class="muh-features" id="features" aria-labelledby="features-title">
+      <div class="muh-section-atmosphere" aria-hidden="true">
+        <span class="muh-ambient-orbit ambient-orbit-left"></span>
+        <span class="muh-ambient-orbit ambient-orbit-right"></span>
+        <span class="muh-ambient-beam ambient-beam-left"></span>
+        <span class="muh-ambient-beam ambient-beam-right"></span>
+        <span class="muh-ambient-horizon"></span>
+      </div>
+      <div class="muh-features-intro muh-reveal">
+        <span class="muh-section-kicker">Built to reduce school chaos</span>
+        <h2 id="features-title">From scattered deadlines to one organized command center.</h2>
+        <p>Microsoft Uni Helper takes the mess of Brightspace, calendars, reminders, and study plans, then turns it into one dashboard that actually makes sense.</p>
+      </div>
 
-          <div class="cine-laptop-screen">
-            <aside class="cine-mini-side">
-              <div class="cine-mini-logo">U</div>
-              <div class="cine-mini-nav active"></div>
-              <div class="cine-mini-nav"></div>
-              <div class="cine-mini-nav"></div>
-              <div class="cine-mini-nav"></div>
-            </aside>
-
-            <section class="cine-mini-main">
-              <div class="cine-mini-top">
-                <div>
-                  <h3>Good evening, Alex 👋</h3>
-                  <p>You’ve got 3 tasks due this week.</p>
-                </div>
-
-                <div class="cine-mini-avatar"></div>
-              </div>
-
-              <div class="cine-mini-grid">
-                <div class="cine-mini-panel cine-deadlines-panel">
-                  <strong>Upcoming Deadlines</strong>
-                  <div class="cine-mini-task">
-                    <span>Lab Report 3</span>
-                    <b class="high">High</b>
-                  </div>
-                  <div class="cine-mini-task">
-                    <span>Quiz 4</span>
-                    <b class="medium">Medium</b>
-                  </div>
-                  <div class="cine-mini-task">
-                    <span>Discussion Post</span>
-                    <b class="low">Low</b>
-                  </div>
-                </div>
-
-                <div class="cine-mini-panel cine-calendar-panel">
-                  <strong>May 2025</strong>
-                  <div class="cine-calendar-dots">
-                    <span></span><span></span><span></span><span></span><span class="active"></span><span></span><span></span>
-                    <span></span><span></span><span class="glow"></span><span></span><span></span><span></span><span></span>
-                    <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-                  </div>
-                </div>
-
-                <div class="cine-mini-panel cine-progress-panel">
-                  <strong>Weekly Progress</strong>
-                  <div class="cine-progress-bar"><span></span></div>
-                  <p>75% on track</p>
-                </div>
-
-                <div class="cine-mini-panel cine-streak-panel">
-                  <strong>Study Streak</strong>
-                  <p>🔥 7 days</p>
-                </div>
-              </div>
-            </section>
+      <div class="muh-dashboard-wrap muh-reveal" id="how">
+        <div class="muh-dashboard-glow"></div>
+        <div class="muh-showcase-orbit orbit-a" aria-hidden="true"></div>
+        <div class="muh-showcase-orbit orbit-b" aria-hidden="true"></div>
+        <div class="muh-dashboard">
+          <aside class="muh-dash-sidebar">
+            <div class="muh-mini-brand"><span class="muh-brand-mark"><i></i><i></i><i></i><i></i></span><b>MUH</b></div>
+            <div class="muh-side-link selected"><i>⌂</i><span>Overview</span></div>
+            <div class="muh-side-link"><i>▦</i><span>Courses</span></div>
+            <div class="muh-side-link"><i>✓</i><span>Tasks</span></div>
+            <div class="muh-side-link"><i>□</i><span>Calendar</span></div>
+            <div class="muh-side-link"><i>✦</i><span>AI Copilot</span><b>3</b></div>
+            <div class="muh-side-link muh-side-bottom"><i>⚙</i><span>Settings</span></div>
+          </aside>
+          <div class="muh-dash-main">
+            <header>
+              <div><small>MONDAY, MAY 12</small><h3>Good evening, Alex.</h3><p>Here is what needs your attention today.</p></div>
+              <div class="muh-dash-tools"><button aria-label="Search">⌕</button><button aria-label="Notifications">◌<b></b></button><i></i></div>
+            </header>
+            <div class="muh-course-strip">
+              <div><span class="math">∑</span><p><b>Calculus II</b><small>Quiz 4 · May 17</small></p><em>68%</em></div>
+              <div><span class="chem">◈</span><p><b>Chemistry 201</b><small>Lab report · Tomorrow</small></p><em>72%</em></div>
+              <div><span class="code">&lt;/&gt;</span><p><b>SYSC 1006</b><small>Project · May 22</small></p><em>54%</em></div>
+            </div>
+            <div class="muh-stats"><div><span>◷</span><small>Tasks due</small><strong>03</strong><em>this week</em></div><div><span>↗</span><small>On track</small><strong>75%</strong><em>+12% from last week</em></div><div><span>◇</span><small>Study streak</small><strong>7</strong><em>days focused</em></div><div><span>✦</span><small>AI suggestions</small><strong>04</strong><em>ready to review</em></div></div>
+            <div class="muh-dash-grid">
+              <div class="muh-panel muh-deadline-panel"><div class="muh-panel-title"><b>Upcoming deadlines</b><a href="/signup">View all</a></div><p><i class="violet"></i><span>CHEM 201<small>Lab Report 3 · 11:59 PM</small></span><em class="high">Tomorrow</em></p><p><i></i><span>MATH 1104<small>Quiz 4 · Chapters 6–8</small></span><em>May 17</em></p><p><i class="pink"></i><span>SYSC 1006<small>Programming project</small></span><em>May 22</em></p><div class="muh-focus-line"><span><i></i></span><b>75% of this week planned</b><small>2h 40m focus time</small></div></div>
+              <div class="muh-panel muh-calendar"><div class="muh-panel-title"><b>May 2025</b><span>‹ &nbsp; ›</span></div><div class="muh-week"><small>M</small><small>T</small><small>W</small><small>T</small><small>F</small><small>S</small><small>S</small></div><div class="muh-calendar-days"><span>5</span><span>6</span><span>7</span><span>8</span><span class="event">9</span><span>10</span><span>11</span><span class="active">12</span><span>13</span><span class="hot">14</span><span>15</span><span>16</span><span class="event">17</span><span>18</span><span>19</span><span>20</span><span>21</span><span class="event">22</span><span>23</span><span>24</span><span>25</span></div><div class="muh-calendar-legend"><i></i> 4 deadlines this month</div></div>
+              <div class="muh-panel muh-ai-panel"><div class="muh-ai-mini-orb">✦</div><div><span>AI COPILOT</span><b>Your chemistry lab is due tomorrow.</b><p>I found a 90-minute focus block at 6:30 PM.</p><button>Build my plan <i>→</i></button></div></div>
+            </div>
           </div>
         </div>
+        <div class="muh-reminder-float"><span>!</span><div><small>SMART REMINDER</small><b>Lab Report 3</b><p>Due tomorrow · 11:59 PM</p></div><em>High</em></div>
+      </div>
 
-        <div class="cine-orb">U</div>
+      <div class="muh-feature-grid">
+        <article class="muh-feature-card muh-feature-wide muh-reveal" tabindex="0">
+          <span>01 · ORGANIZE</span><div class="muh-feature-copy"><div class="muh-card-icon">↻</div><h3>Immersive Reveal</h3><p>Watch scattered school tasks become one clean organized dashboard.</p><small>One calm command center</small></div>
+          <div class="muh-chaos-demo"><div class="muh-paper paper-one"><b>QUIZ</b><small>MAY 17</small></div><div class="muh-paper paper-two"><b>LAB 03</b><small>TOMORROW</small></div><div class="muh-paper paper-three"><b>FINAL</b><small>JUNE 20</small></div><div class="muh-demo-window"><header><i></i><i></i><i></i><b>Today's plan</b></header><p><span class="purple"></span><b>CHEM Lab Report<small>Due tomorrow</small></b><em>High</em></p><p><span></span><b>MATH Quiz<small>May 17</small></b><em>Next</em></p><div class="muh-demo-progress"><i></i></div></div></div>
+        </article>
+        <article class="muh-feature-card muh-reveal" tabindex="0">
+          <span>02 · COURSES</span><div class="muh-card-icon">▦</div><h3>Interactive Course Hub</h3><p>Every course gets its own clean space for deadlines, progress, and next steps.</p>
+          <div class="muh-course-demo"><div class="muh-demo-course behind-left"><i>◈</i><b>CHEM 201</b><small>4 tasks</small></div><div class="muh-demo-course main"><i>∑</i><b>MATH 1104</b><small>Linear Algebra</small><div><span></span></div><em>68% complete</em></div><div class="muh-demo-course behind-right"><i>&lt;/&gt;</i><b>SYSC 1006</b><small>2 tasks</small></div></div><small>Everything in context</small>
+        </article>
+        <article class="muh-feature-card muh-reveal" tabindex="0">
+          <span>03 · PRIORITIZE</span><div class="muh-card-icon">◎</div><h3>Deadline Orbit</h3><p>Labs, quizzes, assignments, midterms, and finals all orbit one plan.</p>
+          <div class="muh-orbit-demo"><div class="demo-ring ring-1"></div><div class="demo-ring ring-2"></div><div class="demo-ring ring-3"></div><div class="demo-core"><i>✦</i><b>Today</b><small>3 priorities</small></div><span class="orbit-chip chip-1">Lab</span><span class="orbit-chip chip-2">Quiz</span><span class="orbit-chip chip-3">Project</span><span class="orbit-chip chip-4">Final</span></div><small>Never hunt for work again</small>
+        </article>
       </div>
     </section>
 
-    <section class="features-clean-section" id="features">
-  <div class="features-clean-head reveal-up">
-    <span>Built to reduce school chaos</span>
-    <h2>From scattered deadlines to one organized command center.</h2>
-    <p>
-      Uni Helper takes the mess of Brightspace, calendars, reminders, and study plans,
-      then turns it into one dashboard that actually makes sense.
-    </p>
-  </div>
-
-  <div class="features-clean-grid">
-    <article class="features-clean-card reveal-up">
-      <div class="features-clean-number">01</div>
-
-      <h3>Immersive Reveal</h3>
-      <p>Watch scattered school tasks become one clean organized dashboard.</p>
-
-      <div class="clean-visual clean-chaos">
-        <div class="clean-paper paper-a">
-          <b>Quiz</b>
-          <span>May 17</span>
-        </div>
-
-        <div class="clean-paper paper-b">
-          <b>Midterm</b>
-          <span>Friday</span>
-        </div>
-
-        <div class="clean-paper paper-c">
-          <b>Final</b>
-          <span>June 20</span>
-        </div>
-
-        <div class="clean-dashboard-preview">
-          <div class="clean-dots">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-
-          <h4>Today’s Plan</h4>
-
-          <div class="clean-task-row">
-            <i></i>
-            <div>
-              <strong>CHEM Lab Report</strong>
-              <small>Due tomorrow</small>
-            </div>
-            <em>High</em>
-          </div>
-
-          <div class="clean-task-row">
-            <i class="blue"></i>
-            <div>
-              <strong>MATH Quiz</strong>
-              <small>Due in 3 days</small>
-            </div>
-            <em>Med</em>
-          </div>
-        </div>
-      </div>
-
-      <div class="features-clean-bottom">
-        We turn scattered deadlines, notes, reminders, and school stress into one calm command center.
-      </div>
-    </article>
-
-    <article class="features-clean-card reveal-up">
-      <div class="features-clean-number">02</div>
-
-      <h3>Interactive Course Hub</h3>
-      <p>Every course gets its own clean space for deadlines, progress, and next steps.</p>
-
-      <div class="clean-visual clean-courses">
-        <div class="clean-course-card course-main">
-          <div>Σ</div>
-          <h4>MATH 1104</h4>
-          <span>Linear Algebra</span>
-          <small><i style="width:68%;"></i></small>
-          <b>Quiz next • May 17</b>
-        </div>
-
-        <div class="clean-course-card course-left">
-          <div>⚗</div>
-          <h4>CHEM 1101</h4>
-          <span>Lab report</span>
-          <small><i style="width:72%;"></i></small>
-          <b>Due tomorrow</b>
-        </div>
-
-        <div class="clean-course-card course-right">
-          <div>⚙</div>
-          <h4>SYSC 1006</h4>
-          <span>Programming</span>
-          <small><i style="width:54%;"></i></small>
-          <b>Project due</b>
-        </div>
-      </div>
-
-      <div class="features-clean-bottom">
-        Click a course later and instantly see its tasks, calendar items, exams, and progress.
-      </div>
-    </article>
-
-    <article class="features-clean-card reveal-up">
-      <div class="features-clean-number">03</div>
-
-      <h3>Deadline Orbit</h3>
-      <p>Labs, quizzes, assignments, midterms, and finals all orbit one plan.</p>
-
-      <div class="clean-visual clean-orbit">
-        <div class="clean-orbit-ring ring-a"></div>
-        <div class="clean-orbit-ring ring-b"></div>
-
-        <div class="clean-orbit-core">
-          <span>Today</span>
-          <strong>Plan</strong>
-        </div>
-
-        <div class="clean-chip chip-a">Lab</div>
-        <div class="clean-chip chip-b">Quiz</div>
-        <div class="clean-chip chip-c">Midterm</div>
-        <div class="clean-chip chip-d">Assignment</div>
-
-        <div class="clean-tooltip">
-          <strong>Next up</strong>
-          <span>PHYS quiz • 2 days</span>
-        </div>
-      </div>
-
-      <div class="features-clean-bottom">
-        Instead of hunting through five places, every deadline shows up in one focused timeline.
-      </div>
-    </article>
-  </div>
-</section>
-
-<section class="study-room-photo-section reveal-up" id="study-room">
-  <div class="study-room-photo-copy">
-    <span class="study-room-badge">Coming next</span>
-    <h2>Your 3D Study Room.</h2>
-        <p>
-      A preview of the future 3D Study Room, where your dashboard will eventually
-      become a calm interactive desk inside Uni Helper.
-    </p>
-    <a href="/signup">Start organizing →</a>
-  </div>
-
-  <div class="study-room-photo-card">
-    <img src="{{ url_for('static', filename='images/study-room-preview.png') }}" alt="Uni Helper 3D Study Room">
-
-    
-
-    
-  </div>
-</section>
+    <section class="study-room-photo-section muh-reveal" id="about">
+      <div class="study-room-photo-copy"><span class="study-room-badge">Coming next</span><h2>Your 3D Study Room.</h2><p>A preview of the future 3D Study Room, where your dashboard will eventually become a calm interactive desk inside Microsoft Uni Helper.</p><a href="/signup">Start organizing →</a></div>
+      <div class="study-room-photo-card"><img src="{{ url_for('static', filename='images/study-room-preview.png') }}" alt="Microsoft Uni Helper 3D Study Room"></div>
+    </section>
+    <span id="pricing" class="muh-anchor"></span>
   </main>
 
   <script>
-    const hero = document.getElementById("cineHero");
-    const laptop = document.getElementById("cineLaptop");
-    const stage = document.getElementById("cineHeroStage");
-    const glow = document.getElementById("cineCursorGlow");
+    (() => {
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const hero = document.querySelector('.muh-hero');
+      const layers = [...document.querySelectorAll('.muh-depth')];
+      const cards = [...document.querySelectorAll('.muh-feature-card')];
+      const particleHost = document.getElementById('muhParticles');
 
-    const cardA = document.querySelector(".cine-card-a");
-    const cardB = document.querySelector(".cine-card-b");
-    const cardC = document.querySelector(".cine-card-c");
+      for (let i = 0; i < (reduced ? 12 : 38); i += 1) {
+        const particle = document.createElement('i');
+        particle.style.setProperty('--x', `${Math.random() * 100}%`);
+        particle.style.setProperty('--y', `${Math.random() * 100}%`);
+        particle.style.setProperty('--s', `${Math.random() * 3 + 1}px`);
+        particle.style.setProperty('--d', `${Math.random() * 8 + 6}s`);
+        particle.style.setProperty('--delay', `${Math.random() * -10}s`);
+        particleHost.appendChild(particle);
+      }
 
-    if(glow){
-      window.addEventListener("mousemove", function(event){
-        glow.style.left = event.clientX + "px";
-        glow.style.top = event.clientY + "px";
-      });
+      if (!reduced && hero) {
+        let targetX = 0, targetY = 0, currentX = 0, currentY = 0;
+        hero.addEventListener('pointermove', (event) => {
+          const rect = hero.getBoundingClientRect();
+          targetX = ((event.clientX - rect.left) / rect.width - .5) * 2;
+          targetY = ((event.clientY - rect.top) / rect.height - .5) * 2;
+          hero.style.setProperty('--light-x', `${event.clientX - rect.left}px`);
+          hero.style.setProperty('--light-y', `${event.clientY - rect.top}px`);
+        }, { passive: true });
+        hero.addEventListener('pointerleave', () => { targetX = 0; targetY = 0; });
+        const render = () => {
+          currentX += (targetX - currentX) * .055;
+          currentY += (targetY - currentY) * .055;
+          layers.forEach((layer) => {
+            const depth = Number(layer.dataset.depth || .2);
+            layer.style.setProperty('--px', `${currentX * depth * 30}px`);
+            layer.style.setProperty('--py', `${currentY * depth * 22}px`);
+          });
+          requestAnimationFrame(render);
+        };
+        render();
+
+        cards.forEach((card) => {
+          card.addEventListener('pointermove', (event) => {
+            const rect = card.getBoundingClientRect();
+            const x = (event.clientX - rect.left) / rect.width - .5;
+            const y = (event.clientY - rect.top) / rect.height - .5;
+            card.style.setProperty('--rx', `${-y * 9}deg`);
+            card.style.setProperty('--ry', `${x * 11}deg`);
+            card.style.setProperty('--gx', `${(x + .5) * 100}%`);
+            card.style.setProperty('--gy', `${(y + .5) * 100}%`);
+          });
+          card.addEventListener('pointerleave', () => { card.style.removeProperty('--rx'); card.style.removeProperty('--ry'); });
+        });
+
+        window.addEventListener('scroll', () => {
+          const progress = Math.min(1, Math.max(0, window.scrollY / (hero.offsetHeight * .9)));
+          document.documentElement.style.setProperty('--hero-scroll', progress);
+        }, { passive: true });
+      }
+
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => { if (entry.isIntersecting) { entry.target.classList.add('is-visible'); observer.unobserve(entry.target); } });
+      }, { threshold: .14, rootMargin: '0px 0px -6% 0px' });
+      document.querySelectorAll('.muh-reveal').forEach((item) => observer.observe(item));
+
+      const resolveHashTarget = () => {
+        if (window.location.hash !== '#features') return;
+        const features = document.getElementById('features');
+        if (!features) return;
+        const targetTop = features.getBoundingClientRect().top + window.scrollY;
+        window.scrollTo({ top: targetTop, left: 0, behavior: 'auto' });
+      };
+      if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+      resolveHashTarget();
+      window.addEventListener('load', () => {
+        requestAnimationFrame(resolveHashTarget);
+        setTimeout(resolveHashTarget, 120);
+        setTimeout(resolveHashTarget, 500);
+      }, { once: true });
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(resolveHashTarget);
+      window.addEventListener('hashchange', resolveHashTarget);
+    })();
+  </script>
+  <script>
+    if (window.location.hash === '#features') {
+      let featureJumpCount = 0;
+      const jumpToFeatures = () => {
+        const target = document.getElementById('features');
+        if (target) window.scrollTo(0, target.offsetTop);
+        featureJumpCount += 1;
+        if (featureJumpCount >= 12) window.clearInterval(featureJumpTimer);
+      };
+      const featureJumpTimer = window.setInterval(jumpToFeatures, 100);
+      window.addEventListener('load', jumpToFeatures, { once: true });
+      jumpToFeatures();
     }
-
-    if(hero && laptop && stage){
-      stage.addEventListener("mousemove", function(event){
-        const rect = stage.getBoundingClientRect();
-        const x = (event.clientX - rect.left) / rect.width - 0.5;
-        const y = (event.clientY - rect.top) / rect.height - 0.5;
-
-        laptop.style.transform =
-          `translate3d(${x * 18}px, ${y * 12}px, 0) rotateY(${-10 + x * 10}deg) rotateX(${5 - y * 7}deg)`;
-
-        if(cardA){
-          cardA.style.transform =
-            `translate3d(${x * -22}px, ${y * -16}px, 0) rotate(7deg)`;
-        }
-
-        if(cardB){
-          cardB.style.transform =
-            `translate3d(${x * 22}px, ${y * -14}px, 0) rotate(-7deg)`;
-        }
-
-        if(cardC){
-          cardC.style.transform =
-            `translate3d(${x * -18}px, ${y * 18}px, 0) rotate(-6deg)`;
-        }
-      });
-
-      stage.addEventListener("mouseleave", function(){
-        laptop.style.transform = "rotateY(-10deg) rotateX(5deg)";
-        if(cardA) cardA.style.transform = "rotate(7deg)";
-        if(cardB) cardB.style.transform = "rotate(-7deg)";
-        if(cardC) cardC.style.transform = "rotate(-6deg)";
-      });
-    }
-
-    const revealItems = document.querySelectorAll(".reveal-up");
-
-    const observer = new IntersectionObserver(function(entries){
-      entries.forEach(function(entry){
-        if(entry.isIntersecting){
-          entry.target.classList.add("visible");
-        }
-      });
-    }, {
-      threshold: 0.18
-    });
-
-    revealItems.forEach(function(item){
-      observer.observe(item);
-    });
   </script>
 </body>
 </html>
