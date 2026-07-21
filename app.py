@@ -831,6 +831,76 @@ def home():
 
     reminders = reminders[:5]
 
+    # Dashboard V2 helper data
+    dashboard_cards = sort_cards(view_filter(build_grouped_cards(raw_tasks), "all"))
+
+    course_map = {}
+
+    for c in dashboard_cards:
+        course = c.get("course_full") or "OTHER"
+
+        if course not in course_map:
+            course_map[course] = {
+                "course": course,
+                "total": 0,
+                "next_title": "",
+                "next_due": "",
+                "progress": 0,
+            }
+
+        course_map[course]["total"] += 1
+
+        if not course_map[course]["next_title"]:
+            course_map[course]["next_title"] = c.get("title", "Task")
+            course_map[course]["next_due"] = c.get("main_due_pretty", "")
+
+    course_cards = list(course_map.values())[:4]
+
+    for course_card in course_cards:
+        total = course_card["total"]
+        course_card["progress"] = min(95, max(25, 100 - (total * 8)))
+
+    task_preview = dashboard_cards[:6]
+
+    upcoming_cards = []
+
+    for c in dashboard_cards:
+        dleft = days_until(c.get("main_due_raw", ""))
+
+        if dleft is not None:
+            upcoming_cards.append({
+                "title": c.get("title", "Task"),
+                "course_full": c.get("course_full", "OTHER"),
+                "due_label": c.get("status_label", ""),
+                "due_pretty": c.get("main_due_pretty", ""),
+                "status": c.get("status", ""),
+            })
+
+    upcoming_cards = upcoming_cards[:4]
+
+    today = date.today()
+    month_title = today.strftime("%B %Y")
+    month_days = []
+
+    first_day = date(today.year, today.month, 1)
+    last_day_num = calendar_module.monthrange(today.year, today.month)[1]
+
+    deadline_days = set()
+
+    for c in dashboard_cards:
+        d = parse_iso_date(c.get("main_due_raw", ""))
+
+        if d and d.year == today.year and d.month == today.month:
+            deadline_days.add(d.day)
+
+    for day_num in range(1, last_day_num + 1):
+        month_days.append({
+            "day": day_num,
+            "is_today": day_num == today.day,
+            "has_deadline": day_num in deadline_days,
+        })
+
+
     summary = {
         "urgent": urgent,
         "week": week,
@@ -846,7 +916,7 @@ def home():
     else:
         last_sync_text = "Never"
 
-    return render_template(
+        return render_template(
         "index.html",
         groups=groups,
         view=view,
@@ -858,6 +928,11 @@ def home():
         feed_url=feed_url,
         last_sync_text=last_sync_text,
         user=current_user,
+        course_cards=course_cards,
+        task_preview=task_preview,
+        upcoming_cards=upcoming_cards,
+        month_title=month_title,
+        month_days=month_days,
     )
 
 

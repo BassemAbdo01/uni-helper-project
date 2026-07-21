@@ -7,291 +7,318 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 
-<body>
-  <div class="app">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-dot"></div>
+<body class="dash-v3-page dark-mode">
+  <div class="dash-v3-shell">
+    <aside class="dash-v3-sidebar">
+      <a class="dash-v3-brand" href="/">
+        <div class="dash-v3-brand-mark">U</div>
         <div>
-          <div class="brand-title">Uni Helper</div>
-          <div class="brand-sub">Dashboard</div>
+          <strong>Uni Helper</strong>
+          <span>Student OS</span>
         </div>
-      </div>
+      </a>
 
-      <nav class="nav">
-        <a class="nav-item active" href="/dashboard?view={{ view }}&course={{ course_filter }}&deadlines={{ deadlines_only }}">
-          <span class="nav-ic">🏠</span> Dashboard
+      <nav class="dash-v3-nav">
+        <a class="dash-v3-nav-item active" href="/dashboard?view={{ view }}&course={{ course_filter }}&deadlines={{ deadlines_only }}">
+          <span>⌂</span> Dashboard
         </a>
-
-        <a class="nav-item" href="/calendar">
-          <span class="nav-ic">🗓️</span> Calendar
+        <a class="dash-v3-nav-item" href="/calendar">
+          <span>◷</span> Calendar
         </a>
-
-        <a class="nav-item" href="/connect-brightspace">
-          <span class="nav-ic">🔄</span> Connect Brightspace
+        <a class="dash-v3-nav-item" href="/connect-brightspace">
+          <span>▣</span> Courses
+        </a>
+        <a class="dash-v3-nav-item" href="#tasks">
+          <span>☷</span> Tasks
+        </a>
+        <a class="dash-v3-nav-item" href="/connect-brightspace">
+          <span>↻</span> Brightspace
+        </a>
+        <a class="dash-v3-nav-item" href="/settings">
+          <span>⚙</span> Settings
         </a>
       </nav>
 
-      <div class="sidebar-footer">
-  <div class="account-menu">
-    <button class="account-button" id="accountButton" type="button">
-      <div class="account-avatar">
-        {{ user.name[0]|upper if user and user.name else "U" }}
+      <div class="dash-v3-sidebar-bottom">
+        <div class="account-menu">
+          <button class="account-button dash-v3-account-button" id="accountButton" type="button">
+            <div class="account-avatar dash-v3-account-avatar">
+              {{ user.name[0]|upper if user and user.name else "U" }}
+            </div>
+
+            <div class="account-text">
+              <div class="account-name">{{ user.name if user else "Student" }}</div>
+              <div class="account-email">{{ user.email if user else "" }}</div>
+            </div>
+
+            <div class="account-caret">⌄</div>
+          </button>
+
+          <div class="account-dropdown" id="accountDropdown">
+            <a href="/profile">Profile</a>
+            {% if user and user.email == "bassemtamer2016@gmail.com" %}
+              <a href="/admin/feedback">Feedback</a>
+            {% else %}
+              <a href="/feedback">Feedback</a>
+            {% endif %}
+            <a href="/settings">Settings</a>
+            <a class="logout-link" href="/logout">Log out</a>
+          </div>
+        </div>
+
+        <button class="theme-toggle dash-v3-theme-toggle" id="themeToggle" type="button">
+          ☀️ Light mode
+        </button>
       </div>
-
-      <div class="account-text">
-        <div class="account-name">{{ user.name if user else "Student" }}</div>
-        <div class="account-email">{{ user.email if user else "" }}</div>
-      </div>
-
-      <div class="account-caret">⌄</div>
-    </button>
-
-    <div class="account-dropdown" id="accountDropdown">
-      <a href="/profile">Profile</a>
-      {% if user and user.email == "bassemtamer2016@gmail.com" %}
-      <a href="/admin/feedback">Feedback</a>
-    {% else %}
-      <a href="/feedback">Feedback</a>
-    {% endif %}
-      <a href="/settings">Settings</a>
-      <a class="logout-link" href="/logout">Log out</a>
-    </div>
-  </div>
-
-  <button class="theme-toggle" id="themeToggle" type="button">
-    🌙 Dark mode
-  </button>
-</div>
     </aside>
 
-    <main class="main">
-      <div class="topbar">
-        <div>
-          <div class="page-title">Dashboard</div>
-          <div class="page-sub">
-            <span id="clock">--:--</span>
-            <span class="dot">•</span>
-            <span id="dateLabel">---</span>
-          </div>
+    <main class="dash-v3-main">
+      <header class="dash-v3-topbar">
+        <div class="dash-v3-search">
+          <span>⌕</span>
+          <input type="text" placeholder="Search for anything...">
+          <kbd>⌘ K</kbd>
         </div>
 
-        <div class="tabs">
-          <a class="pilltab {% if view=='today' %}active{% endif %}" href="/dashboard?view=today&course={{ course_filter }}&deadlines={{ deadlines_only }}">Today</a>
-          <a class="pilltab {% if view=='week' %}active{% endif %}" href="/dashboard?view=week&course={{ course_filter }}&deadlines={{ deadlines_only }}">Week</a>
-          <a class="pilltab {% if view=='all' %}active{% endif %}" href="/dashboard?view=all&course={{ course_filter }}&deadlines={{ deadlines_only }}">All</a>
-          <a class="pilltab {% if view=='archive' %}active{% endif %}" href="/dashboard?view=archive&course={{ course_filter }}&deadlines={{ deadlines_only }}">Archive</a>
+        <div class="dash-v3-tabs">
+          <a class="dash-v3-tab {% if view=='today' %}active{% endif %}" href="/dashboard?view=today&course={{ course_filter }}&deadlines={{ deadlines_only }}">Today</a>
+          <a class="dash-v3-tab {% if view=='week' %}active{% endif %}" href="/dashboard?view=week&course={{ course_filter }}&deadlines={{ deadlines_only }}">Week</a>
+          <a class="dash-v3-tab {% if view=='all' %}active{% endif %}" href="/dashboard?view=all&course={{ course_filter }}&deadlines={{ deadlines_only }}">All</a>
+          <a class="dash-v3-tab {% if view=='archive' %}active{% endif %}" href="/dashboard?view=archive&course={{ course_filter }}&deadlines={{ deadlines_only }}">Archive</a>
         </div>
-      </div>
+      </header>
 
-      <div class="grid">
-        <section class="col">
-
-          <div class="card hero">
-            <div class="hero-left">
-              <div class="hero-small">
-                {% if summary.urgent == 0 %}
-                  0 urgent tasks right now.
-                {% else %}
-                  {{ summary.urgent }} urgent task{% if summary.urgent != 1 %}s{% endif %} right now.
-                {% endif %}
-              </div>
-
-              <div class="hero-title hero-quote" id="quoteText">Stay focused.</div>
-
-              <div class="hero-sub">
-                {% if summary.urgent == 0 %}
-                  You’re chilling today ✅
-                {% else %}
-                  You’ve got things to handle 🔥
-                {% endif %}
-                <span class="dot">•</span>
-                <span class="hero-muted">{{ summary.week }} due within a week</span>
-              </div>
-            </div>
-
-            <div class="hero-info-card">
-              <div class="hero-info-label">Today’s plan</div>
-              <div class="hero-info-title">
-                {% if summary.urgent == 0 %}
-                  Clear dashboard
-                {% else %}
-                  Handle urgent work first
-                {% endif %}
-              </div>
-              <div class="hero-info-sub">
-                Stay organized. Check deadlines, then start a focus session.
-              </div>
-            </div>
-
-            <div class="hero-right">
-              <div class="focus-card">
-                <div class="focus-title">Focus</div>
-
-                <div class="timer-controls">
-                  <input id="focusMinutes" type="number" min="1" max="180" value="25">
-                  <span class="muted tiny">min</span>
-                </div>
-
-                <div class="focus-time" id="focusTime">25:00</div>
-
-                <div class="timer-buttons">
-                  <button class="btn small" id="startTimer" type="button">Start</button>
-                  <button class="btn small secondary" id="resetTimer" type="button">Reset</button>
-                </div>
-              </div>
-            </div>
+      <section class="dash-v3-grid">
+        <section class="dash-v3-welcome dash-v3-card">
+          <div class="dash-v3-welcome-copy">
+            <h1>Welcome back, {{ user.name if user else "Student" }} 👋</h1>
+            <p>
+              Here’s what’s happening with your studies today.
+              <span id="clock">--:--</span>
+              <span>•</span>
+              <span id="dateLabel">---</span>
+            </p>
           </div>
 
-          <div class="stats">
-            <div class="stat">
-              <div class="stat-icon stat-blue">📋</div>
-              <div>
-                <div class="stat-title">Pending</div>
-                <div class="stat-value">{{ summary.week }}</div>
-                <div class="stat-sub muted">Within 7 days</div>
-              </div>
-            </div>
+          <div class="dash-v3-desk-art">
+            <div class="dash-v3-art-lamp"></div>
+            <div class="dash-v3-art-laptop">U</div>
+            <div class="dash-v3-art-plant"></div>
+          </div>
+        </section>
 
-            <div class="stat">
-              <div class="stat-icon stat-red">⏰</div>
-              <div>
-                <div class="stat-title">Overdue</div>
-                <div class="stat-value">{{ groups["overdue"]|length if groups["overdue"] else 0 }}</div>
-                <div class="stat-sub muted">Needs attention</div>
-              </div>
+        <section class="dash-v3-calendar dash-v3-card">
+          <div class="dash-v3-card-head">
+            <div>
+              <h2>{{ month_title }}</h2>
+              <p>Calendar preview</p>
             </div>
-
-            <div class="stat">
-              <div class="stat-icon stat-orange">🗂️</div>
-              <div>
-                <div class="stat-title">Due today</div>
-                <div class="stat-value">{{ groups["today"]|length if groups["today"] else 0 }}</div>
-                <div class="stat-sub muted">Today only</div>
-              </div>
-            </div>
-
-            <div class="stat">
-              <div class="stat-icon stat-purple">⚡</div>
-              <div>
-                <div class="stat-title">Panic zone</div>
-                <div class="stat-value">{{ groups["panic"]|length if groups["panic"] else 0 }}</div>
-                <div class="stat-sub muted">Next 3 days</div>
-              </div>
-            </div>
+            <a href="/calendar">Open</a>
           </div>
 
-          <div class="card" id="tasks">
-            <div class="card-head">
-              <div>
-                <div class="h2">Upcoming deadlines</div>
-                <div class="muted">Only showing what matters. No confusing opens/closes spam.</div>
+          <div class="dash-v3-calendar-grid">
+            <span>Sun</span>
+            <span>Mon</span>
+            <span>Tue</span>
+            <span>Wed</span>
+            <span>Thu</span>
+            <span>Fri</span>
+            <span>Sat</span>
+
+            {% for d in month_days %}
+              <div class="{% if d.is_today %}today{% endif %} {% if d.has_deadline %}deadline{% endif %}">
+                {{ d.day }}
               </div>
-              <div class="muted tiny">{{ view|upper }} view</div>
-            </div>
-
-            {% set order = ["overdue","today","panic","soon","later","nodate"] %}
-            {% set titles = {
-              "overdue":"Overdue",
-              "today":"Due today",
-              "panic":"Due soon",
-              "soon":"Coming up",
-              "later":"Later",
-              "nodate":"No date"
-            } %}
-
-            {% set ns = namespace(any_tasks=false) %}
-            {% for k in order %}
-              {% if groups[k] and groups[k]|length > 0 %}
-                {% set ns.any_tasks = true %}
-              {% endif %}
             {% endfor %}
+          </div>
+        </section>
 
-            {% if not ns.any_tasks %}
-              <div class="empty muted">Nothing here with these filters.</div>
-            {% else %}
-              {% for k in order %}
-                {% if groups[k] and groups[k]|length > 0 %}
-                  <div class="section">
-                    <div class="section-title">{{ titles[k] }}</div>
+        <section class="dash-v3-stats-row">
+          <div class="dash-v3-stat dash-v3-card">
+            <div class="dash-v3-stat-icon purple">☷</div>
+            <div>
+              <strong>{{ summary.week }}</strong>
+              <span>Deadlines</span>
+              <p>This week</p>
+            </div>
+          </div>
 
-                    <div class="tasklist">
-                      {% for t in groups[k] %}
-                        <div class="taskcard">
-                          <div class="task-left">
-                            <div class="task-title-row">
-                              <span class="task-dot"></span>
-                              <div class="task-title">{{ t.title }}</div>
-                            </div>
+          <div class="dash-v3-stat dash-v3-card">
+            <div class="dash-v3-stat-icon blue">◷</div>
+            <div>
+              <strong>{{ groups["today"]|length if groups["today"] else 0 }}</strong>
+              <span>Due today</span>
+              <p>Today only</p>
+            </div>
+          </div>
 
-                            <div class="chips">
-                              {% if t.course_full %}<span class="chip">{{ t.course_full }}</span>{% endif %}
-                              {% if t.main_due_pretty %}<span class="chip chip-strong">Deadline: {{ t.main_due_pretty }}</span>{% endif %}
-                              <span class="chip chip-status {{ t.status }}">{{ t.status_label }}</span>
-                            </div>
-                          </div>
+          <div class="dash-v3-stat dash-v3-card">
+            <div class="dash-v3-stat-icon orange">☑</div>
+            <div>
+              <strong>{{ groups["overdue"]|length if groups["overdue"] else 0 }}</strong>
+              <span>Overdue</span>
+              <p>Needs attention</p>
+            </div>
+          </div>
 
-                          <div class="task-actions">
-                            <form method="POST" action="/delete/{{ t.group_id }}?view={{ view }}&course={{ course_filter }}&deadlines={{ deadlines_only }}">
-                              <button class="btn danger" type="submit">Delete</button>
-                            </form>
-                            <span class="task-arrow">›</span>
-                          </div>
-                        </div>
-                      {% endfor %}
+          <div class="dash-v3-stat dash-v3-card">
+            <div class="dash-v3-stat-icon green">✓</div>
+            <div>
+              <strong>
+                {% if summary.week == 0 %}
+                  100%
+                {% else %}
+                  {{ 100 - (summary.urgent * 10) if 100 - (summary.urgent * 10) > 0 else 10 }}%
+                {% endif %}
+              </strong>
+              <span>Progress</span>
+              <p>Keep it up</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="dash-v3-courses dash-v3-card">
+          <div class="dash-v3-card-head">
+            <div>
+              <h2>Your Courses</h2>
+              <p>Active courses and next deadlines.</p>
+            </div>
+          </div>
+
+          <div class="dash-v3-course-list">
+            {% if course_cards and course_cards|length > 0 %}
+              {% for c in course_cards %}
+                <div class="dash-v3-course-item">
+                  <div class="dash-v3-course-icon">{{ c.course[:1] }}</div>
+
+                  <div class="dash-v3-course-main">
+                    <strong>{{ c.course }}</strong>
+                    <div class="dash-v3-course-bar">
+                      <span style="width: {{ c.progress }}%;"></span>
                     </div>
                   </div>
-                {% endif %}
+
+                  <div class="dash-v3-course-next">
+                    <span>Next: {{ c.next_title }}</span>
+                    <small>{{ c.next_due if c.next_due else "No date" }}</small>
+                  </div>
+                </div>
               {% endfor %}
+            {% else %}
+              <div class="dash-v3-empty">
+                No courses yet. Connect Brightspace or add a task.
+              </div>
             {% endif %}
           </div>
         </section>
 
-        <aside class="right">
-          <div class="card sync-mini-card">
-            <div class="sync-mini-header">
-              <div>
-                <div class="h2">Brightspace Sync</div>
-                <div class="muted tiny">
-                  {% if feed_url %}
-                    Auto-sync active
-                  {% else %}
-                    Not connected
-                  {% endif %}
+        <section class="dash-v3-tasks dash-v3-card" id="tasks">
+          <div class="dash-v3-card-head">
+            <div>
+              <h2>Tasks</h2>
+              <p>Priority task preview.</p>
+            </div>
+            <a href="/dashboard?view=all&course={{ course_filter }}&deadlines={{ deadlines_only }}">View all</a>
+          </div>
+
+          <div class="dash-v3-task-list">
+            {% if task_preview and task_preview|length > 0 %}
+              {% for t in task_preview %}
+                <div class="dash-v3-task-item">
+                  <span class="dash-v3-check"></span>
+
+                  <div>
+                    <strong>{{ t.title }}</strong>
+                    <small>{{ t.course_full }}{% if t.main_due_pretty %} • {{ t.main_due_pretty }}{% endif %}</small>
+                  </div>
+
+                  <em class="{{ t.status }}">{{ t.status_label }}</em>
                 </div>
+              {% endfor %}
+            {% else %}
+              <div class="dash-v3-empty">
+                No tasks with this filter.
               </div>
+            {% endif %}
+          </div>
+        </section>
 
-              {% if feed_url %}
-                <span class="sync-pill connected">Synced</span>
-              {% else %}
-                <span class="sync-pill off">Off</span>
-              {% endif %}
-            </div>
-
-            <div class="sync-mini-body">
-              {% if feed_url %}
-                <div class="sync-last">Last sync: {{ last_sync_text }}</div>
-                <a class="btn sync-mini-btn" href="/sync">Sync now</a>
-              {% else %}
-                <div class="sync-last">Connect your Brightspace feed to start syncing.</div>
-                <a class="btn sync-mini-btn" href="/connect-brightspace">Connect Brightspace</a>
-              {% endif %}
+        <section class="dash-v3-focus dash-v3-card">
+          <div class="dash-v3-card-head">
+            <div>
+              <h2>Focus Timer</h2>
+              <p>Study session</p>
             </div>
           </div>
 
-          <div class="card">
-            <div class="h2">Quick add</div>
-            <div class="muted">Manual task (optional)</div>
+          <div class="dash-v3-focus-time" id="focusTime">25:00</div>
 
-            <form method="POST" class="formstack" style="margin-top:12px;">
-              <input type="text" name="title" placeholder="Task title" required>
-              <input type="text" name="course" placeholder="Course (optional)">
-              <input type="date" name="due">
-              <button class="btn" type="submit">Add task</button>
-            </form>
+          <div class="timer-controls dash-v3-timer-controls">
+            <input id="focusMinutes" type="number" min="1" max="180" value="25">
+            <span>min</span>
           </div>
-        </aside>
-      </div>
+
+          <div class="timer-buttons dash-v3-timer-buttons">
+            <button class="btn small" id="startTimer" type="button">Start</button>
+            <button class="btn small secondary" id="resetTimer" type="button">Reset</button>
+          </div>
+        </section>
+
+        <section class="dash-v3-upcoming dash-v3-card">
+          <div class="dash-v3-card-head">
+            <div>
+              <h2>Upcoming Deadlines</h2>
+              <p>Important deadlines at a glance.</p>
+            </div>
+          </div>
+
+          <div class="dash-v3-upcoming-row">
+            {% if upcoming_cards and upcoming_cards|length > 0 %}
+              {% for u in upcoming_cards %}
+                <div class="dash-v3-upcoming-item {{ u.status }}">
+                  <span>{{ u.due_label }}</span>
+                  <strong>{{ u.title }}</strong>
+                  <p>{{ u.course_full }}</p>
+                  <small>{{ u.due_pretty }}</small>
+                </div>
+              {% endfor %}
+            {% else %}
+              <div class="dash-v3-empty">
+                No upcoming deadlines yet.
+              </div>
+            {% endif %}
+          </div>
+        </section>
+
+        <section class="dash-v3-quick dash-v3-card">
+          <div class="dash-v3-card-head">
+            <div>
+              <h2>Quick Add</h2>
+              <p>Add anything not in Brightspace.</p>
+            </div>
+          </div>
+
+          <form method="POST" class="dash-v3-form">
+            <input type="text" name="title" placeholder="Task title" required>
+            <input type="text" name="course" placeholder="Course optional">
+            <input type="date" name="due">
+            <button type="submit">Add task</button>
+          </form>
+
+          <div class="dash-v3-sync-box">
+            <div>
+              <span>Brightspace Sync</span>
+              <strong>{% if feed_url %}Connected{% else %}Not connected{% endif %}</strong>
+            </div>
+
+            {% if feed_url %}
+              <a href="/sync">Sync now</a>
+            {% else %}
+              <a href="/connect-brightspace">Connect</a>
+            {% endif %}
+          </div>
+        </section>
+      </section>
     </main>
   </div>
 
@@ -322,29 +349,6 @@
 
     setHeader();
     setInterval(setHeader, 15000);
-
-    const quotes = [
-      "The secret of getting ahead is getting started. — Mark Twain",
-      "It always seems impossible until it is done. — Nelson Mandela",
-      "Well done is better than well said. — Benjamin Franklin",
-      "Action is the foundational key to all success. — Pablo Picasso",
-      "The way to get started is to quit talking and begin doing. — Walt Disney",
-      "Do what you can, with what you have, where you are. — Theodore Roosevelt",
-      "The future depends on what you do today. — Mahatma Gandhi",
-      "Lost time is never found again. — Benjamin Franklin",
-      "You miss 100% of the shots you don’t take. — Wayne Gretzky",
-      "Whether you think you can or you think you can’t, you’re right. — Henry Ford",
-      "Energy and persistence conquer all things. — Benjamin Franklin",
-      "Quality is not an act, it is a habit. — Aristotle",
-      "The journey of a thousand miles begins with one step. — Lao Tzu"
-    ];
-
-    const quoteText = document.getElementById("quoteText");
-
-    if(quoteText){
-      const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
-      quoteText.textContent = randomQuote;
-    }
 
     let timerSeconds = 25 * 60;
     let timerInterval = null;
@@ -463,7 +467,7 @@
       }
     }
 
-    const savedTheme = localStorage.getItem("theme") || "light";
+    const savedTheme = localStorage.getItem("theme") || "dark";
     applyTheme(savedTheme);
 
     if(themeToggle){
@@ -476,22 +480,20 @@
       });
     }
 
-const accountButton = document.getElementById("accountButton");
-const accountDropdown = document.getElementById("accountDropdown");
+    const accountButton = document.getElementById("accountButton");
+    const accountDropdown = document.getElementById("accountDropdown");
 
-if(accountButton && accountDropdown){
-  accountButton.addEventListener("click", function(){
-    accountDropdown.classList.toggle("show");
-  });
+    if(accountButton && accountDropdown){
+      accountButton.addEventListener("click", function(){
+        accountDropdown.classList.toggle("show");
+      });
 
-  document.addEventListener("click", function(event){
-    if(!accountButton.contains(event.target) && !accountDropdown.contains(event.target)){
-      accountDropdown.classList.remove("show");
+      document.addEventListener("click", function(event){
+        if(!accountButton.contains(event.target) && !accountDropdown.contains(event.target)){
+          accountDropdown.classList.remove("show");
+        }
+      });
     }
-  });
-}
-
-
   </script>
 </body>
 </html>
