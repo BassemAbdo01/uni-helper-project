@@ -67,6 +67,7 @@
           <div class="muh-orb-halo"></div>
           <div class="muh-orb-core"><span>✦</span></div>
         </div>
+        <div class="muh-orb-status"><span><i></i> AI STUDY COPILOT</span><strong>Ready when you are</strong><small>Ask · Plan · Practice</small></div>
       </div>
 
       <div class="muh-scroll-cue" aria-hidden="true"><span></span>Explore the system</div>
@@ -75,13 +76,6 @@
     <div class="muh-portal" aria-hidden="true"><span></span></div>
 
     <section class="muh-features" id="features" aria-labelledby="features-title">
-      <div class="muh-section-atmosphere" aria-hidden="true">
-        <span class="muh-ambient-orbit ambient-orbit-left"></span>
-        <span class="muh-ambient-orbit ambient-orbit-right"></span>
-        <span class="muh-ambient-beam ambient-beam-left"></span>
-        <span class="muh-ambient-beam ambient-beam-right"></span>
-        <span class="muh-ambient-horizon"></span>
-      </div>
       <div class="muh-features-intro muh-reveal">
         <span class="muh-section-kicker">Built to reduce school chaos</span>
         <h2 id="features-title">From scattered deadlines to one organized command center.</h2>
@@ -227,20 +221,6 @@
       if (document.fonts && document.fonts.ready) document.fonts.ready.then(resolveHashTarget);
       window.addEventListener('hashchange', resolveHashTarget);
     })();
-  </script>
-  <script>
-    if (window.location.hash === '#features') {
-      let featureJumpCount = 0;
-      const jumpToFeatures = () => {
-        const target = document.getElementById('features');
-        if (target) window.scrollTo(0, target.offsetTop);
-        featureJumpCount += 1;
-        if (featureJumpCount >= 12) window.clearInterval(featureJumpTimer);
-      };
-      const featureJumpTimer = window.setInterval(jumpToFeatures, 100);
-      window.addEventListener('load', jumpToFeatures, { once: true });
-      jumpToFeatures();
-    }
   </script>
 </body>
 </html>
