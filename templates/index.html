@@ -8,6 +8,10 @@
 </head>
 
 <body class="dash-v3-page dark-mode">
+  <div class="cosmos" aria-hidden="true">
+    <i class="shooting-star star-a"></i><i class="shooting-star star-b"></i><i class="shooting-star star-c"></i>
+    <i class="space-dust dust-a"></i><i class="space-dust dust-b"></i><i class="space-dust dust-c"></i>
+  </div>
   <div class="dash-v3-shell">
     <aside class="dash-v3-sidebar">
       <a class="dash-v3-brand" href="/">
@@ -88,22 +92,46 @@
         </div>
       </header>
 
+      <section class="command-strip">
+        <div class="command-strip-copy">
+          <span class="command-kicker"><i></i> NEXORA INTELLIGENCE</span>
+          <strong>What do you want to accomplish?</strong>
+          <p>Plan the day, understand a topic, or turn your deadlines into a study plan.</p>
+        </div>
+        <div class="command-input">
+          <span>✦</span>
+          <input id="copilotPrompt" type="text" placeholder="Ask Copilot about your semester...">
+          <button id="copilotSend" type="button">Ask <kbd>↵</kbd></button>
+        </div>
+        <div class="ai-suggestions" aria-label="Copilot suggestions">
+          <button type="button" data-prompt="Plan my study day">Plan my day</button>
+          <button type="button" data-prompt="What is due next?">Next deadlines</button>
+          <button type="button" data-prompt="Show my overdue work">Rescue overdue work</button>
+        </div>
+      </section>
+
       <section class="dash-v3-grid">
         <section class="dash-v3-welcome dash-v3-card">
           <div class="dash-v3-welcome-copy">
-            <h1>Welcome back, {{ user.name if user else "Student" }} 👋</h1>
+            <span class="briefing-label">YOUR DAILY BRIEFING</span>
+            <h1>Good to have you back,<br>{{ user.name if user else "Student" }}.</h1>
             <p>
-              Here’s what’s happening with your studies today.
+              Your semester is under control. Here is what deserves your attention today.
               <span id="clock">--:--</span>
               <span>•</span>
               <span id="dateLabel">---</span>
             </p>
+            <div class="briefing-actions">
+              <a href="#tasks">Review priorities</a>
+              <a class="quiet" href="/calendar">Open calendar</a>
+            </div>
           </div>
 
-          <div class="dash-v3-desk-art">
-            <div class="dash-v3-art-lamp"></div>
-            <div class="dash-v3-art-laptop">U</div>
-            <div class="dash-v3-art-plant"></div>
+          <div class="intelligence-core" aria-hidden="true">
+            <div class="core-orbit orbit-one"></div>
+            <div class="core-orbit orbit-two"></div>
+            <div class="core-sphere"><span>✦</span></div>
+            <small>AI READY</small>
           </div>
         </section>
 
@@ -138,8 +166,8 @@
             <div class="dash-v3-stat-icon purple">☷</div>
             <div>
               <strong>{{ summary.week }}</strong>
-              <span>Deadlines</span>
-              <p>This week</p>
+              <span>This week</span>
+              <p>Active deadlines</p>
             </div>
           </div>
 
@@ -148,7 +176,7 @@
             <div>
               <strong>{{ groups["today"]|length if groups["today"] else 0 }}</strong>
               <span>Due today</span>
-              <p>Today only</p>
+              <p>Priority queue</p>
             </div>
           </div>
 
@@ -156,8 +184,8 @@
             <div class="dash-v3-stat-icon orange">☑</div>
             <div>
               <strong>{{ groups["overdue"]|length if groups["overdue"] else 0 }}</strong>
-              <span>Overdue</span>
-              <p>Needs attention</p>
+              <span>Needs attention</span>
+              <p>Overdue work</p>
             </div>
           </div>
 
@@ -171,8 +199,8 @@
                   {{ 100 - (summary.urgent * 10) if 100 - (summary.urgent * 10) > 0 else 10 }}%
                 {% endif %}
               </strong>
-              <span>Progress</span>
-              <p>Keep it up</p>
+              <span>Readiness</span>
+              <p>Weekly health</p>
             </div>
           </div>
         </section>
@@ -321,6 +349,24 @@
       </section>
     </main>
   </div>
+
+  <div class="copilot-backdrop" id="copilotBackdrop" hidden></div>
+  <aside class="copilot-workspace" id="copilotWorkspace" aria-label="Nexora AI Copilot" aria-hidden="true">
+    <header>
+      <div class="copilot-avatar"><span>✦</span><i></i></div>
+      <div><small>NEXORA INTELLIGENCE</small><strong>AI Copilot</strong><p>Connected to your live semester</p></div>
+      <button id="copilotClose" type="button" aria-label="Close Copilot">×</button>
+    </header>
+    <div class="copilot-status"><span>LIVE CONTEXT</span><b id="copilotMeta">Reading your tasks and deadlines</b></div>
+    <div class="copilot-messages" id="copilotMessages">
+      <article class="assistant-message"><i>✦</i><div><strong>Ready when you are.</strong><p>I can turn your real deadlines into a plan, find what is urgent, and organize your courses.</p></div></article>
+    </div>
+    <div class="copilot-composer">
+      <textarea id="copilotChatInput" rows="1" placeholder="Ask about your semester..."></textarea>
+      <button id="copilotChatSend" type="button">Send <span>↗</span></button>
+    </div>
+    <small class="copilot-note">Uses your current Uni Helper tasks. Double-check important course details.</small>
+  </aside>
 
   <script>
     function pad(n){
@@ -494,6 +540,75 @@
         }
       });
     }
+
+    const copilotPrompt = document.getElementById("copilotPrompt");
+    const copilotSend = document.getElementById("copilotSend");
+
+    const copilotWorkspace = document.getElementById("copilotWorkspace");
+    const copilotBackdrop = document.getElementById("copilotBackdrop");
+    const copilotClose = document.getElementById("copilotClose");
+    const copilotMessages = document.getElementById("copilotMessages");
+    const copilotChatInput = document.getElementById("copilotChatInput");
+    const copilotChatSend = document.getElementById("copilotChatSend");
+    const copilotMeta = document.getElementById("copilotMeta");
+
+    function openCopilot(){
+      copilotWorkspace.classList.add("open");
+      copilotWorkspace.setAttribute("aria-hidden", "false");
+      copilotBackdrop.hidden = false;
+      requestAnimationFrame(() => copilotBackdrop.classList.add("open"));
+    }
+    function closeCopilot(){
+      copilotWorkspace.classList.remove("open");
+      copilotWorkspace.setAttribute("aria-hidden", "true");
+      copilotBackdrop.classList.remove("open");
+      setTimeout(() => copilotBackdrop.hidden = true, 220);
+    }
+    function addMessage(role, text, loading=false){
+      const article = document.createElement("article");
+      article.className = role === "user" ? "user-message" : "assistant-message";
+      if(loading) article.classList.add("loading-message");
+      const safe = document.createElement("p");
+      safe.textContent = text;
+      if(role === "assistant"){
+        const icon = document.createElement("i"); icon.textContent = "✦";
+        const wrap = document.createElement("div"); wrap.appendChild(safe);
+        article.append(icon, wrap);
+      } else article.appendChild(safe);
+      copilotMessages.appendChild(article);
+      copilotMessages.scrollTop = copilotMessages.scrollHeight;
+      return article;
+    }
+    async function askCopilot(query){
+      if(!query) return;
+      openCopilot(); addMessage("user", query);
+      const loading = addMessage("assistant", "Thinking through your semester…", true);
+      try{
+        const response = await fetch("/api/copilot", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:query})});
+        const data = await response.json();
+        loading.remove();
+        if(!response.ok) throw new Error(data.error || "Copilot could not respond.");
+        addMessage("assistant", data.answer);
+        copilotMeta.textContent = `${data.meta.tasks} tasks • ${data.meta.upcoming} upcoming • ${data.meta.overdue} overdue`;
+      }catch(error){ loading.remove(); addMessage("assistant", error.message || "Something went wrong. Please try again."); }
+    }
+    function runCopilotPrompt(){
+      if(!copilotPrompt || !copilotPrompt.value.trim()) return;
+      const query = copilotPrompt.value.trim(); copilotPrompt.value = ""; askCopilot(query);
+    }
+
+    if(copilotSend) copilotSend.addEventListener("click", runCopilotPrompt);
+    if(copilotPrompt){
+      copilotPrompt.addEventListener("keydown", function(event){
+        if(event.key === "Enter") runCopilotPrompt();
+      });
+    }
+    document.querySelectorAll("[data-prompt]").forEach(button => button.addEventListener("click", () => askCopilot(button.dataset.prompt)));
+    if(copilotClose) copilotClose.addEventListener("click", closeCopilot);
+    if(copilotBackdrop) copilotBackdrop.addEventListener("click", closeCopilot);
+    if(copilotChatSend) copilotChatSend.addEventListener("click", () => { const q=copilotChatInput.value.trim(); if(q){copilotChatInput.value="";askCopilot(q);} });
+    if(copilotChatInput) copilotChatInput.addEventListener("keydown", event => { if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();copilotChatSend.click();} });
+    document.addEventListener("keydown", event => { if(event.key==="Escape") closeCopilot(); if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();copilotPrompt.focus();} });
   </script>
 </body>
 </html>

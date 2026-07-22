@@ -6,7 +6,7 @@ from datetime import datetime, date, timedelta
 import calendar as calendar_module
 from uuid import uuid4
 
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (
     LoginManager,
@@ -655,6 +655,73 @@ def landing():
     return render_template("landing.html")
 
 
+@app.route("/api/copilot", methods=["POST"])
+@login_required
+def copilot():
+    """A private, task-aware study copilot that works without a third-party key."""
+    payload = request.get_json(silent=True) or {}
+    prompt = (payload.get("message") or "").strip()
+    if not prompt:
+        return jsonify({"error": "Ask me something first."}), 400
+
+    tasks = build_grouped_cards(load_tasks())
+    tasks = sort_cards(tasks)
+    upcoming = []
+    overdue = []
+    for task in tasks:
+        left = days_until(task.get("main_due_raw", ""))
+        if left is not None and left < 0:
+            overdue.append(task)
+        elif left is not None and left <= 14:
+            upcoming.append(task)
+
+    lower = prompt.lower()
+    first_name = (current_user.name or "Student").split()[0]
+
+    def task_line(task):
+        due = pretty_date(task.get("main_due_raw", "")) or "no date"
+        return f"{task.get('title', 'Task')} ({task.get('course_full', 'OTHER')}) — {due}"
+
+    if any(word in lower for word in ("deadline", "due", "upcoming", "next")):
+        selected = (overdue + upcoming)[:5]
+        if selected:
+            answer = "Here are the deadlines that need attention first:\n" + "\n".join(
+                f"{i + 1}. {task_line(task)}" for i, task in enumerate(selected)
+            )
+        else:
+            answer = "You have no deadlines in the next 14 days. Add tasks or sync Brightspace and I’ll track them here."
+    elif any(word in lower for word in ("plan", "today", "study", "schedule", "priorit")):
+        selected = (overdue + upcoming)[:3]
+        if selected:
+            blocks = []
+            for i, task in enumerate(selected):
+                minutes = 50 if i == 0 else 35
+                blocks.append(f"{i + 1}. {minutes} min — {task.get('title', 'Task')} ({task.get('course_full', 'OTHER')})")
+            answer = f"Here’s a focused plan for you, {first_name}:\n" + "\n".join(blocks) + "\nFinish with a 10-minute review and update anything you completed."
+        else:
+            answer = f"You’re clear right now, {first_name}. Try one 45-minute review block for your hardest course, then use 10 minutes to plan tomorrow."
+    elif any(word in lower for word in ("overdue", "urgent", "behind")):
+        if overdue:
+            answer = "These are overdue, in recovery order:\n" + "\n".join(
+                f"{i + 1}. {task_line(task)}" for i, task in enumerate(overdue[:5])
+            ) + "\nStart with the quickest high-impact item, then contact the instructor if submission is closed."
+        else:
+            answer = "Nothing is overdue. Your dashboard is currently clear."
+    elif any(word in lower for word in ("course", "class")):
+        courses = sorted({t.get("course_full") for t in tasks if t.get("course_full") and t.get("course_full") != "OTHER"})
+        answer = ("Your active courses are: " + ", ".join(courses) + ". Ask me to plan one of them by name.") if courses else "I don’t see course data yet. Connect Brightspace or add a task with a course code."
+    else:
+        answer = (
+            "I can use your live dashboard data to build today’s plan, list deadlines, find overdue work, "
+            "or summarize your active courses. Try: “Plan my study day” or “What is due next?”"
+        )
+
+    return jsonify({
+        "answer": answer,
+        "meta": {"upcoming": len(upcoming), "overdue": len(overdue), "tasks": len(tasks)},
+    })
+
+
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if current_user.is_authenticated:
@@ -916,7 +983,7 @@ def home():
     else:
         last_sync_text = "Never"
 
-        return render_template(
+    return render_template(
         "index.html",
         groups=groups,
         view=view,

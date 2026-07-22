@@ -62,3 +62,45 @@
 .neural-ring{position:absolute;z-index:4;inset:17% 5%;border:1px solid rgba(111,206,255,.75);border-radius:50%;transform:rotate(35deg);box-shadow:0 0 6px #514fff}.neural-ring.ring-b{inset:5% 22%;transform:rotate(-28deg);border-color:#b279ff}
 .node{position:absolute;z-index:7;width:5px;height:5px;border-radius:50%;background:#eaffff;box-shadow:0 0 5px 2px #4cd8ff}.n1{left:21%;top:31%}.n2{left:37%;top:18%}.n3{right:23%;top:27%}.n4{right:17%;top:51%}.n5{right:30%;bottom:18%}.n6{left:42%;bottom:13%}.n7{left:18%;bottom:29%}.n8{left:48%;top:47%;background:#fff;box-shadow:0 0 8px 4px #b46dff}
 @keyframes filamentDrift{to{transform:rotate(360deg) scale(1.015)}}@keyframes sparkOrbit{to{transform:rotate(-360deg)}}@keyframes cometRun{to{transform:rotate(360deg)}}@keyframes neuralSpin{to{transform:rotate(360deg)}}@keyframes particleTurn{to{transform:rotate(360deg)}}@keyframes coreStar{50%{transform:scale(1.28) rotate(45deg);filter:drop-shadow(0 0 9px white) drop-shadow(0 0 22px #65cfff)}}
+
+/* ===== ASYMMETRIC ENERGY VORTEX — NO FERRIS-WHEEL SPOKES ===== */
+.nova-portal{
+  width:850px;height:720px;right:-4%;top:8px;
+  border:0;border-radius:48% 52% 46% 54% / 56% 45% 55% 44%;
+  transform:rotate(-9deg) skewX(-3deg);
+  background:
+    radial-gradient(ellipse at 56% 48%,#020515 0 25%,rgba(5,12,55,.98) 34%,rgba(27,32,129,.62) 43%,rgba(98,46,229,.25) 52%,transparent 68%);
+  box-shadow:none;filter:drop-shadow(0 0 54px rgba(80,62,255,.56));
+  animation:vortexBreathe 6.5s ease-in-out infinite;
+}
+.nova-portal:before,.nova-portal:after,.nova-portal>i{
+  border-radius:47% 53% 45% 55% / 54% 46% 57% 43%;
+  mask:linear-gradient(#000 0 0) padding-box,linear-gradient(#000 0 0);
+  mask-composite:exclude;
+  background:conic-gradient(from 19deg,transparent 0 8%,rgba(84,54,255,.9) 11%,#ebe5ff 12%,transparent 14% 31%,#268dff 34%,transparent 38% 56%,rgba(174,107,255,.92) 59%,#fff 60%,transparent 62% 82%,#387cff 86%,transparent 90%) border-box;
+  border:4px solid transparent;filter:drop-shadow(0 0 13px rgba(119,96,255,.95));
+}
+.nova-portal:before{inset:3% 1% 5% 4%;animation:vortexArcA 15s linear infinite}
+.nova-portal:after{inset:8% 7% 10% 10%;animation:vortexArcB 11s linear infinite reverse;opacity:.82}
+.nova-portal>i:nth-child(1){inset:14% 12% 16% 17%;animation:vortexArcC 19s linear infinite;opacity:.7}
+.nova-portal>i:nth-child(2){inset:21% 19% 23% 24%;animation:vortexArcB 23s linear infinite reverse;opacity:.55}
+.nova-portal>i:nth-child(3){inset:27% 25% 28% 30%;border:0;mask:none;background:radial-gradient(ellipse at 57% 47%,#01030d 0 48%,rgba(19,36,120,.78) 70%,transparent 74%);filter:blur(5px);animation:vortexCore 7s ease-in-out infinite}
+.portal-filaments{
+  inset:-2% -1% -3% 1%;border-radius:46% 54% 48% 52% / 58% 43% 57% 42%;
+  background:conic-gradient(from 7deg,transparent 0 5%,rgba(88,124,255,.27) 7%,transparent 9% 18%,rgba(151,96,255,.33) 20%,transparent 22% 41%,rgba(47,151,255,.3) 43%,transparent 46% 69%,rgba(124,71,255,.3) 72%,transparent 75%);
+  border:1px solid rgba(119,105,255,.2);filter:blur(.5px) drop-shadow(0 0 15px #5a4cff);animation:vortexArcA 27s linear infinite;
+}
+.portal-sparks{inset:-10% -6%;mask-image:radial-gradient(ellipse,transparent 0 47%,#000 54% 70%,transparent 77%);animation:sparkOrbit 31s linear infinite}
+.portal-comet{border-radius:46% 54% 44% 56% / 57% 43% 54% 46%;clip-path:polygon(45% 0,100% 0,100% 28%,76% 17%);animation:vortexArcC 9s linear infinite}
+.portal-comet.comet-b{animation:vortexArcB 13s linear infinite reverse}
+.portal-depth{position:absolute;z-index:1;inset:18% 14% 17% 20%;border-radius:48% 52% 45% 55% / 56% 44% 54% 46%;background:radial-gradient(ellipse at 58% 48%,#00020a 0 36%,#071034 59%,rgba(38,43,140,.45) 72%,transparent 75%);box-shadow:inset 26px 0 45px rgba(8,152,255,.22),inset -30px 8px 54px rgba(137,54,255,.25);animation:vortexCore 7s ease-in-out infinite}
+.portal-ribbon{position:absolute;z-index:4;left:8%;right:2%;height:36%;border-radius:50%;border:0;border-top:2px solid rgba(221,211,255,.85);filter:drop-shadow(0 0 7px #8465ff) drop-shadow(0 0 18px #386dff);opacity:.72}
+.ribbon-a{top:8%;transform:rotate(13deg) skewX(-12deg);animation:ribbonFlow 8s ease-in-out infinite}
+.ribbon-b{bottom:5%;left:3%;right:10%;transform:rotate(-11deg) skewX(8deg);border-color:rgba(76,180,255,.78);animation:ribbonFlow 10s ease-in-out -3s infinite reverse}
+.ribbon-c{top:30%;left:15%;right:-3%;transform:rotate(25deg);border-color:rgba(173,107,255,.65);opacity:.5;animation:ribbonFlow 12s ease-in-out -6s infinite}
+@keyframes vortexBreathe{0%,100%{transform:rotate(-9deg) skewX(-3deg) scale(.985);filter:brightness(.92) drop-shadow(0 0 42px rgba(76,55,255,.48))}50%{transform:rotate(-8deg) skewX(-2deg) scale(1.025);filter:brightness(1.18) drop-shadow(0 0 68px rgba(94,76,255,.72))}}
+@keyframes vortexArcA{to{transform:rotate(360deg) scaleX(1.025)}}
+@keyframes vortexArcB{to{transform:rotate(-360deg) scaleY(.98)}}
+@keyframes vortexArcC{to{transform:rotate(360deg) skewX(3deg)}}
+@keyframes vortexCore{50%{transform:scale(.94);filter:brightness(1.25) blur(3px)}}
+@keyframes ribbonFlow{0%,100%{opacity:.28;scale:.96 1}50%{opacity:.9;scale:1.04 1;filter:drop-shadow(0 0 11px #fff) drop-shadow(0 0 26px #6151ff)}}
