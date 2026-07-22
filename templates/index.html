@@ -127,11 +127,9 @@
             </div>
           </div>
 
-          <div class="intelligence-core" aria-hidden="true">
-            <div class="core-orbit orbit-one"></div>
-            <div class="core-orbit orbit-two"></div>
-            <div class="core-sphere"><span>✦</span></div>
-            <small>AI READY</small>
+          <div class="intelligence-core ai-status-card" aria-hidden="true">
+            <div class="ai-status-mark">✦</div>
+            <div><small>GEMINI COPILOT</small><strong>Ready to help</strong><span><i></i> Live semester context</span></div>
           </div>
         </section>
 
@@ -555,6 +553,14 @@
       copilotWorkspace.classList.add("open");
       copilotWorkspace.setAttribute("aria-hidden", "false");
       document.body.classList.add("copilot-open");
+      fetch("/api/copilot/status")
+        .then(response => response.json())
+        .then(status => {
+          copilotMeta.textContent = status.connected
+            ? `${status.provider} connected • ${status.model}`
+            : "Gemini key is not reaching this Render service";
+        })
+        .catch(() => { copilotMeta.textContent = "Unable to check Gemini connection"; });
     }
     function closeCopilot(){
       copilotWorkspace.classList.remove("open");
@@ -588,7 +594,7 @@
         addMessage("assistant", data.answer);
         copilotHistory.push({role:"user",content:query},{role:"assistant",content:data.answer});
         if(copilotHistory.length > 20) copilotHistory.splice(0, copilotHistory.length - 20);
-        copilotMeta.textContent = `${data.meta.tasks} tasks • ${data.meta.upcoming} upcoming • ${data.meta.overdue} overdue`;
+        copilotMeta.textContent = `Gemini • ${data.meta.tasks} tasks • ${data.meta.upcoming} upcoming • ${data.meta.overdue} overdue`;
       }catch(error){ loading.remove(); addMessage("assistant", error.message || "Something went wrong. Please try again."); }
     }
     function runCopilotPrompt(){

@@ -1,16 +1,15 @@
-NEXORA AI COPILOT — ONE-TIME RENDER SETUP
+NEXORA GEMINI COPILOT — ONE-TIME RENDER SETUP
 
 The dashboard works immediately, but genuine free-form AI replies require a model API key.
 
 In Render:
 1. Open your web service.
 2. Go to Environment.
-3. Add OPENAI_API_KEY with your OpenAI API key as the value.
-4. Optional: add OPENAI_MODEL. If omitted, Nexora uses gpt-4.1-mini.
+3. Add GEMINI_API_KEY with your Google AI Studio API key as the value.
+4. Optional: add GEMINI_MODEL. If omitted, Nexora uses gemini-2.5-flash.
 5. Save changes and redeploy.
 
 Never put the API key directly inside app.py or commit it to GitHub.
 
-Without OPENAI_API_KEY, Copilot automatically uses the built-in semester planner for
-deadlines, overdue work, courses, and basic study plans. With the key, it becomes a
-real conversational assistant and keeps recent conversation context.
+Without GEMINI_API_KEY, Copilot shows a clear setup error. It never silently pretends
+that a canned fallback is real AI.
