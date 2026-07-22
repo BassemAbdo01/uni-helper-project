@@ -34,7 +34,10 @@
       </div>
 
       <div class="nova-world" id="novaWorld" aria-label="Animated semester command centre preview">
-        <div class="nova-portal" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="nova-portal" aria-hidden="true">
+          <i></i><i></i><i></i>
+          <span class="portal-filaments"></span><span class="portal-sparks"></span><span class="portal-comet comet-a"></span><span class="portal-comet comet-b"></span>
+        </div>
         <img class="nova-cap nova-float" src="{{ url_for('static', filename='images/hero-cap-layer-v3.png') }}" alt="" aria-hidden="true">
         <img class="nova-books nova-float" src="{{ url_for('static', filename='images/hero-books-layer-v3.png') }}" alt="" aria-hidden="true">
         <div class="nova-orbit orbit-one" aria-hidden="true"><span>CS</span></div>
@@ -49,7 +52,13 @@
             <div class="dash-stats"><article><b>2</b><span>Classes today</span><i>□</i></article><article><b>3</b><span>Assignments due</span><i>▦</i></article><article class="progress"><b>82%</b><span>Course progress</span><svg viewBox="0 0 100 34"><path d="M2 29 C18 27 19 18 34 20 S53 12 62 16 S79 2 98 4"/></svg></article></div>
             <div class="dash-grid">
               <article class="schedule"><h3>Timetable <small>Today⌄</small></h3><p><time>09:00</time><span><b>Data Structures</b><small>CS101 Lecture</small></span><em>Join</em></p><p><time>11:00</time><span><b>Design Thinking</b><small>IN204 Tutorial</small></span><em>Join</em></p><p><time>14:00</time><span><b>Linear Algebra</b><small>MA203 Lecture</small></span><em>Join</em></p></article>
-              <article class="core"><div class="core-orb">✦</div><b>AI Copilot</b><span>Ask anything. Get clarity.</span><button>Open Copilot</button></article>
+              <article class="core">
+                <div class="core-orb" aria-hidden="true">
+                  <span class="neural-web"></span><span class="neural-ring ring-a"></span><span class="neural-ring ring-b"></span>
+                  <i class="node n1"></i><i class="node n2"></i><i class="node n3"></i><i class="node n4"></i><i class="node n5"></i><i class="node n6"></i><i class="node n7"></i><i class="node n8"></i><strong>✦</strong>
+                </div>
+                <b>AI Copilot</b><span>Ask anything. Get clarity.</span><button>Open Copilot</button>
+              </article>
               <article class="assign"><h3>Assignments <small>View all</small></h3><p><i class="red"></i><span><b>Data Structures</b><small>Binary Trees</small></span><em>1 day</em></p><p><i class="orange"></i><span><b>Design Thinking</b><small>Empathy Report</small></span><em>3 days</em></p><p><i></i><span><b>Linear Algebra</b><small>Problem Set 4</small></span><em>5 days</em></p></article>
             </div>
             <div class="course-row"><h3>Courses</h3><div><b>Data Structures</b><span><i style="--w:75%"></i></span><small>75%</small></div><div><b>Design Thinking</b><span><i style="--w:60%"></i></span><small>60%</small></div><div><b>Linear Algebra</b><span><i style="--w:85%"></i></span><small>85%</small></div></div>
