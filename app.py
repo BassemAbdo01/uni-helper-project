@@ -1,6 +1,7 @@
 import os
 import re
 import urllib.request
+import json
 import hashlib
 from datetime import datetime, date, timedelta
 import calendar as calendar_module
@@ -658,7 +659,7 @@ def landing():
 @app.route("/api/copilot", methods=["POST"])
 @login_required
 def copilot():
-    """A private, task-aware study copilot that works without a third-party key."""
+    """Conversational, semester-aware AI with a useful local fallback."""
     payload = request.get_json(silent=True) or {}
     prompt = (payload.get("message") or "").strip()
     if not prompt:
@@ -675,12 +676,73 @@ def copilot():
         elif left is not None and left <= 14:
             upcoming.append(task)
 
+    history = payload.get("history") or []
+    if not isinstance(history, list):
+        history = []
+    history = history[-10:]
     lower = prompt.lower()
     first_name = (current_user.name or "Student").split()[0]
 
     def task_line(task):
         due = pretty_date(task.get("main_due_raw", "")) or "no date"
         return f"{task.get('title', 'Task')} ({task.get('course_full', 'OTHER')}) — {due}"
+
+    # Use a real language model when OPENAI_API_KEY is configured on Render.
+    # Only the student's task titles/course codes/due dates and recent chat are sent.
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if api_key:
+        semester_context = {
+            "student_first_name": first_name,
+            "today": date.today().isoformat(),
+            "tasks": [
+                {
+                    "title": task.get("title", "Task"),
+                    "course": task.get("course_full", "OTHER"),
+                    "due": task.get("main_due_raw", ""),
+                }
+                for task in tasks[:40]
+            ],
+        }
+        messages = [{
+            "role": "system",
+            "content": (
+                "You are Nexora Copilot, a capable conversational AI for university students. "
+                "Respond naturally like ChatGPT: directly answer any general or academic question, "
+                "and use the supplied semester context when relevant. Be concise by default, warm but "
+                "not fake, never repeat a canned introduction, and ask one useful follow-up only when "
+                "needed. Do not claim a deadline or course fact that is absent from context.\n\n"
+                f"SEMESTER CONTEXT:\n{json.dumps(semester_context, ensure_ascii=False)}"
+            ),
+        }]
+        for item in history:
+            role = item.get("role") if isinstance(item, dict) else None
+            content = item.get("content") if isinstance(item, dict) else None
+            if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+                messages.append({"role": role, "content": content[:4000]})
+        messages.append({"role": "user", "content": prompt[:6000]})
+        body = json.dumps({
+            "model": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 700,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=body,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=35) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            answer = result["choices"][0]["message"]["content"].strip()
+            return jsonify({
+                "answer": answer,
+                "mode": "ai",
+                "meta": {"upcoming": len(upcoming), "overdue": len(overdue), "tasks": len(tasks)},
+            })
+        except Exception as exc:
+            app.logger.warning("Copilot API fallback: %s", exc)
 
     if any(word in lower for word in ("deadline", "due", "upcoming", "next")):
         selected = (overdue + upcoming)[:5]
@@ -718,6 +780,7 @@ def copilot():
 
     return jsonify({
         "answer": answer,
+        "mode": "local",
         "meta": {"upcoming": len(upcoming), "overdue": len(overdue), "tasks": len(tasks)},
     })
 
