@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Your intelligent command centre for university life.">
+  <title>Nexora — Own your semester</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='landing-v6.css') }}">
+</head>
+<body>
+  <main class="nova-page">
+    <nav class="nova-nav">
+      <a class="nova-logo" href="/" aria-label="Nexora home">
+        <span class="nova-logo-orbit"><i></i></span><b>NEXORA</b>
+      </a>
+      <div class="nova-links">
+        <a href="#product">Product</a><a href="#features">Use cases</a><a href="#features">Resources</a><a href="#features">Pricing</a><a href="#features">About</a>
+      </div>
+      <div class="nova-actions"><a class="nova-login" href="/login">Log in</a><a class="nova-cta small" href="/signup">Start for free</a></div>
+    </nav>
+
+    <section class="nova-hero" id="product">
+      <div class="nova-space" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="nova-copy">
+        <p class="nova-kicker"><i></i> THE INTELLIGENT STUDENT OS</p>
+        <h1>Own your<br><em>semester.</em></h1>
+        <p class="nova-lead">One intelligent command centre<br>for everything university.</p>
+        <div class="nova-buttons"><a class="nova-cta" href="/signup">Start for free <span>→</span></a><a class="nova-outline" href="#features">Explore the system</a></div>
+        <div class="nova-benefits">
+          <div><i>✦</i><p><b>AI Copilot</b><span>Plan, write, and solve smarter.</span></p></div>
+          <div><i>□</i><p><b>All-in-one</b><span>Timetable, assignments, courses.</span></p></div>
+          <div><i>↗</i><p><b>Stay on track</b><span>Progress and smart nudges.</span></p></div>
+        </div>
+      </div>
+
+      <div class="nova-world" id="novaWorld" aria-label="Animated semester command centre preview">
+        <div class="nova-portal" aria-hidden="true"><i></i><i></i><i></i></div>
+        <img class="nova-cap nova-float" src="{{ url_for('static', filename='images/hero-cap-layer-v3.png') }}" alt="" aria-hidden="true">
+        <img class="nova-books nova-float" src="{{ url_for('static', filename='images/hero-books-layer-v3.png') }}" alt="" aria-hidden="true">
+        <div class="nova-dashboard">
+          <aside><div class="mini-logo">◒</div><button class="on">⌂</button><button>□</button><button>▦</button><button>✦</button><button>⚙</button></aside>
+          <section class="dash-content">
+            <header><div><h2>Welcome back, Alex <span>👋</span></h2><p>Here’s what’s happening this week.</p></div><label>⌕&nbsp; Search anything...</label><i></i></header>
+            <div class="dash-stats"><article><b>2</b><span>Classes today</span><i>□</i></article><article><b>3</b><span>Assignments due</span><i>▦</i></article><article class="progress"><b>82%</b><span>Course progress</span><svg viewBox="0 0 100 34"><path d="M2 29 C18 27 19 18 34 20 S53 12 62 16 S79 2 98 4"/></svg></article></div>
+            <div class="dash-grid">
+              <article class="schedule"><h3>Timetable <small>Today⌄</small></h3><p><time>09:00</time><span><b>Data Structures</b><small>CS101 Lecture</small></span><em>Join</em></p><p><time>11:00</time><span><b>Design Thinking</b><small>IN204 Tutorial</small></span><em>Join</em></p><p><time>14:00</time><span><b>Linear Algebra</b><small>MA203 Lecture</small></span><em>Join</em></p></article>
+              <article class="core"><div class="core-orb">✦</div><b>AI Copilot</b><span>Ask anything. Get clarity.</span><button>Open Copilot</button></article>
+              <article class="assign"><h3>Assignments <small>View all</small></h3><p><i class="red"></i><span><b>Data Structures</b><small>Binary Trees</small></span><em>1 day</em></p><p><i class="orange"></i><span><b>Design Thinking</b><small>Empathy Report</small></span><em>3 days</em></p><p><i></i><span><b>Linear Algebra</b><small>Problem Set 4</small></span><em>5 days</em></p></article>
+            </div>
+            <div class="course-row"><h3>Courses</h3><div><b>Data Structures</b><span><i style="--w:75%"></i></span><small>75%</small></div><div><b>Design Thinking</b><span><i style="--w:60%"></i></span><small>60%</small></div><div><b>Linear Algebra</b><span><i style="--w:85%"></i></span><small>85%</small></div></div>
+          </section>
+        </div>
+        <div class="nova-platform" aria-hidden="true"></div>
+      </div>
+    </section>
+
+    <section class="nova-feature-strip" id="features">
+      <div><h2>Everything you need.<br><em>Powered by AI.</em></h2></div>
+      <article><i>✦</i><p><b>AI Copilot</b><span>Your 24/7 academic partner.</span></p></article>
+      <article><i>□</i><p><b>Smart Planner</b><span>Optimize your time automatically.</span></p></article>
+      <article><i>▦</i><p><b>Resources</b><span>Notes, readings, videos—organized.</span></p></article>
+      <article><i>↗</i><p><b>Analytics</b><span>Insight that drives results.</span></p></article>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const world = document.getElementById('novaWorld');
+      if (!world || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      let tx=0,ty=0,x=0,y=0;
+      addEventListener('pointermove',e=>{tx=(e.clientX/innerWidth-.5)*2;ty=(e.clientY/innerHeight-.5)*2},{passive:true});
+      const tick=()=>{x+=(tx-x)*.045;y+=(ty-y)*.045;world.style.setProperty('--mx',`${x*13}px`);world.style.setProperty('--my',`${y*9}px`);requestAnimationFrame(tick)};tick();
+    })();
+  </script>
+</body>
+</html>
