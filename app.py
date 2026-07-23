@@ -2,6 +2,7 @@ import os
 import re
 import urllib.request
 import urllib.error
+import urllib.parse
 import json
 import hashlib
 from datetime import datetime, date, timedelta
@@ -661,14 +662,11 @@ def landing():
 @login_required
 def copilot_status():
     """Report AI configuration without exposing any secret value."""
-    connected = bool((
-        os.environ.get("GEMINI_API_KEY", "")
-        or os.environ.get("GOOGLE_API_KEY", "")
-    ).strip())
+    connected = bool(os.environ.get("GROQ_API_KEY", "").strip())
     return jsonify({
         "connected": connected,
-        "provider": "Gemini",
-        "model": os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        "provider": "Groq",
+        "model": os.environ.get("GROQ_MODEL", "groq/compound-mini"),
     })
 
 
@@ -699,14 +697,12 @@ def copilot():
     lower = prompt.lower()
     first_name = (current_user.name or "Student").split()[0]
 
-    # Real Gemini conversation. Only recent chat and task metadata are sent.
-    api_key = (
-        os.environ.get("GEMINI_API_KEY", "")
-        or os.environ.get("GOOGLE_API_KEY", "")
-    ).strip()
+    # Real Groq conversation. Compound Mini decides whether live web search is
+    # needed, so greetings and ordinary study questions do not force a search.
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
     if not api_key:
         return jsonify({
-            "error": "Gemini is not connected to this running service. Link the environment group containing GEMINI_API_KEY, then rebuild and deploy."
+            "error": "Groq is not connected to this running service. Add GROQ_API_KEY to this Render web service, then rebuild and deploy."
         }), 503
 
     semester_context = {
@@ -718,71 +714,74 @@ def copilot():
             "due": task.get("main_due_raw", ""),
         } for task in tasks[:40]],
     }
-    contents = []
+    messages = []
     for item in history:
         role = item.get("role") if isinstance(item, dict) else None
         content = item.get("content") if isinstance(item, dict) else None
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
-            contents.append({
-                "role": "model" if role == "assistant" else "user",
-                "parts": [{"text": content[:4000]}],
-            })
-    contents.append({"role": "user", "parts": [{"text": prompt[:6000]}]})
+            messages.append({"role": role, "content": content[:4000]})
+    messages.append({"role": "user", "content": prompt[:6000]})
 
-    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+    model = os.environ.get("GROQ_MODEL", "groq/compound-mini").strip()
     body = json.dumps({
-        "systemInstruction": {"parts": [{"text": (
+        "model": model,
+        "messages": [{"role": "system", "content": (
             "You are Nexora Copilot, a smart conversational AI for university students. "
             "Answer naturally and directly like a high-quality general assistant. Explain academic "
             "topics, brainstorm, write, reason, and help plan the semester. Use the supplied student "
             "context only when relevant. Never invent course dates or deadlines. Be concise by default "
             "but give detail when requested, and never repeat a canned introduction.\n\n"
+            "Use live web search only when the request needs current, changing, or source-backed "
+            "information. Do not search for greetings, casual conversation, writing, brainstorming, "
+            "or questions answerable from the supplied semester context.\n\n"
             f"CURRENT STUDENT CONTEXT:\n{json.dumps(semester_context, ensure_ascii=False)}"
-        )}]},
-        "contents": contents,
-        "tools": [{"google_search": {}}],
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1200},
+        )}] + messages,
+        "temperature": 0.7,
+        "max_completion_tokens": 1200,
+        "citation_options": "enabled",
     }).encode("utf-8")
     req = urllib.request.Request(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        "https://api.groq.com/openai/v1/chat/completions",
         data=body,
-        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=45) as response:
             result = json.loads(response.read().decode("utf-8"))
-        answer = "".join(
-            part.get("text", "")
-            for part in result.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-        ).strip()
+        choice = (result.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        answer = (message.get("content") or "").strip()
         if not answer:
-            raise ValueError("Gemini returned no text")
-        grounding = result.get("candidates", [{}])[0].get("groundingMetadata", {})
+            raise ValueError("Groq returned no text")
         sources, seen_urls = [], set()
-        for chunk in grounding.get("groundingChunks", []):
-            web = chunk.get("web", {}) if isinstance(chunk, dict) else {}
-            url = (web.get("uri") or "").strip()
-            if url and url not in seen_urls:
+        for match in re.finditer(r"https?://[^\s\]\)<>]+", answer):
+            url = match.group(0).rstrip(".,;:!?")
+            if url not in seen_urls:
                 seen_urls.add(url)
-                sources.append({"title": (web.get("title") or "Web source")[:120], "url": url})
+                sources.append({"title": urllib.parse.urlparse(url).netloc or "Web source", "url": url})
+        executed_tools = message.get("executed_tools") or []
+        web_used = any(
+            isinstance(tool, dict) and "search" in str(tool.get("type", tool.get("name", ""))).lower()
+            for tool in executed_tools
+        )
         return jsonify({
             "answer": answer,
-            "mode": "gemini",
+            "mode": "groq",
             "sources": sources[:6],
-            "grounded": bool(sources),
+            "grounded": web_used or bool(sources),
             "meta": {"upcoming": len(upcoming), "overdue": len(overdue), "tasks": len(tasks)},
         })
     except urllib.error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="replace")[:1200]
-        app.logger.error("Gemini API HTTP %s: %s", exc.code, details)
-        message = "Gemini rejected the request. Check that the key is valid and the free quota is available."
+        app.logger.error("Groq API HTTP %s: %s", exc.code, details)
+        message = "Groq rejected the request. Check that the key is valid and the free quota is available."
         if exc.code == 429:
-            message = "Gemini's free quota is temporarily exhausted. Wait a moment and try again."
+            message = "Groq's free rate limit is temporarily exhausted. Wait a moment and try again."
         return jsonify({"error": message}), 502
     except Exception as exc:
-        app.logger.exception("Gemini Copilot error: %s", exc)
-        return jsonify({"error": "Gemini could not respond right now. Please try again."}), 502
+        app.logger.exception("Groq Copilot error: %s", exc)
+        return jsonify({"error": "Groq could not respond right now. Please try again."}), 502
 
     def task_line(task):
         due = pretty_date(task.get("main_due_raw", "")) or "no date"

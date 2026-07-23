@@ -1,15 +1,15 @@
-NEXORA GEMINI COPILOT — ONE-TIME RENDER SETUP
+NEXORA GROQ COPILOT — ONE-TIME RENDER SETUP
 
 The dashboard works immediately, but genuine free-form AI replies require a model API key.
 
 In Render:
 1. Open your web service.
 2. Go to Environment.
-3. Add GEMINI_API_KEY with your Google AI Studio API key as the value.
-4. Optional: add GEMINI_MODEL. If omitted, Nexora uses gemini-2.5-flash.
+3. Add GROQ_API_KEY with your GroqCloud API key as the value.
+4. Optional: add GROQ_MODEL. If omitted, Nexora uses groq/compound-mini.
 5. Save changes and redeploy.
 
 Never put the API key directly inside app.py or commit it to GitHub.
 
-Without GEMINI_API_KEY, Copilot shows a clear setup error. It never silently pretends
+Without GROQ_API_KEY, Copilot shows a clear setup error. It never silently pretends
 that a canned fallback is real AI.
