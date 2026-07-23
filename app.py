@@ -746,7 +746,6 @@ def copilot():
             messages=groq_messages,
             temperature=0.7,
             max_completion_tokens=1200,
-            citation_options="enabled",
         )
         message = completion.choices[0].message
         answer = (message.content or "").strip()
