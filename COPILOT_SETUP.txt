@@ -7,6 +7,7 @@ In Render:
 2. Go to Environment.
 3. Add GROQ_API_KEY with your GroqCloud API key as the value.
 4. Optional: add GROQ_MODEL. If omitted, Nexora uses groq/compound-mini.
+5. The official Groq Python SDK is included. Do not remove it from requirements.txt.
 5. Save changes and redeploy.
 
 Never put the API key directly inside app.py or commit it to GitHub.

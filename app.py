@@ -21,6 +21,7 @@ from flask_login import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from ics import Calendar
+from groq import Groq, APIConnectionError, APIStatusError, RateLimitError
 
 app = Flask(__name__)
 
@@ -723,9 +724,7 @@ def copilot():
     messages.append({"role": "user", "content": prompt[:6000]})
 
     model = os.environ.get("GROQ_MODEL", "groq/compound-mini").strip()
-    body = json.dumps({
-        "model": model,
-        "messages": [{"role": "system", "content": (
+    groq_messages = [{"role": "system", "content": (
             "You are Nexora Copilot, a smart conversational AI for university students. "
             "Answer naturally and directly like a high-quality general assistant. Explain academic "
             "topics, brainstorm, write, reason, and help plan the semester. Use the supplied student "
@@ -735,23 +734,22 @@ def copilot():
             "information. Do not search for greetings, casual conversation, writing, brainstorming, "
             "or questions answerable from the supplied semester context.\n\n"
             f"CURRENT STUDENT CONTEXT:\n{json.dumps(semester_context, ensure_ascii=False)}"
-        )}] + messages,
-        "temperature": 0.7,
-        "max_completion_tokens": 1200,
-        "citation_options": "enabled",
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.groq.com/openai/v1/chat/completions",
-        data=body,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
+        )}] + messages
     try:
-        with urllib.request.urlopen(req, timeout=45) as response:
-            result = json.loads(response.read().decode("utf-8"))
-        choice = (result.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        answer = (message.get("content") or "").strip()
+        # Use Groq's official SDK instead of a hand-built urllib request. Apart
+        # from keeping the request format current, the SDK supplies Groq's
+        # expected client signature so Render traffic is not rejected by
+        # Cloudflare error 1010 before it reaches the API.
+        client = Groq(api_key=api_key, timeout=45.0, max_retries=1)
+        completion = client.chat.completions.create(
+            model=model,
+            messages=groq_messages,
+            temperature=0.7,
+            max_completion_tokens=1200,
+            citation_options="enabled",
+        )
+        message = completion.choices[0].message
+        answer = (message.content or "").strip()
         if not answer:
             raise ValueError("Groq returned no text")
         sources, seen_urls = [], set()
@@ -760,9 +758,13 @@ def copilot():
             if url not in seen_urls:
                 seen_urls.add(url)
                 sources.append({"title": urllib.parse.urlparse(url).netloc or "Web source", "url": url})
-        executed_tools = message.get("executed_tools") or []
+        executed_tools = getattr(message, "executed_tools", None) or []
         web_used = any(
-            isinstance(tool, dict) and "search" in str(tool.get("type", tool.get("name", ""))).lower()
+            "search" in str(
+                tool.get("type", tool.get("name", ""))
+                if isinstance(tool, dict)
+                else getattr(tool, "type", getattr(tool, "name", ""))
+            ).lower()
             for tool in executed_tools
         )
         return jsonify({
@@ -772,13 +774,19 @@ def copilot():
             "grounded": web_used or bool(sources),
             "meta": {"upcoming": len(upcoming), "overdue": len(overdue), "tasks": len(tasks)},
         })
-    except urllib.error.HTTPError as exc:
-        details = exc.read().decode("utf-8", errors="replace")[:1200]
-        app.logger.error("Groq API HTTP %s: %s", exc.code, details)
-        message = "Groq rejected the request. Check that the key is valid and the free quota is available."
-        if exc.code == 429:
-            message = "Groq's free rate limit is temporarily exhausted. Wait a moment and try again."
+    except RateLimitError as exc:
+        app.logger.warning("Groq rate limit: %s", str(exc)[:1200])
+        return jsonify({"error": "Groq's free rate limit is temporarily exhausted. Wait a moment and try again."}), 429
+    except APIStatusError as exc:
+        app.logger.error("Groq API HTTP %s: %s", exc.status_code, str(exc)[:1200])
+        if exc.status_code in (401, 403):
+            message = "Groq rejected this API key or request. Check the Render log for the exact provider message."
+        else:
+            message = f"Groq returned an API error ({exc.status_code}). Please try again."
         return jsonify({"error": message}), 502
+    except APIConnectionError as exc:
+        app.logger.error("Groq connection error: %s", str(exc)[:1200])
+        return jsonify({"error": "Nexora could not reach Groq right now. Please try again."}), 502
     except Exception as exc:
         app.logger.exception("Groq Copilot error: %s", exc)
         return jsonify({"error": "Groq could not respond right now. Please try again."}), 502
