@@ -729,7 +729,7 @@ def copilot():
             })
     contents.append({"role": "user", "parts": [{"text": prompt[:6000]}]})
 
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
     body = json.dumps({
         "systemInstruction": {"parts": [{"text": (
             "You are Nexora Copilot, a smart conversational AI for university students. "
