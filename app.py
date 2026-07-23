@@ -668,7 +668,7 @@ def copilot_status():
     return jsonify({
         "connected": connected,
         "provider": "Gemini",
-        "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+        "model": os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"),
     })
 
 
