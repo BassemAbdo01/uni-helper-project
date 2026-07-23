@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 
-<body class="dash-v3-page dark-mode">
+<body class="dash-v3-page">
   <div class="cosmos" aria-hidden="true">
     {% for n in range(1, 29) %}<i class="ambient-star star-{{ n }}"></i>{% endfor %}
     <i class="space-dust dust-a"></i><i class="space-dust dust-b"></i><i class="space-dust dust-c"></i>
@@ -29,19 +29,24 @@
         <a class="dash-v3-nav-item" href="/calendar">
           <span>◷</span> Calendar
         </a>
-        <a class="dash-v3-nav-item" href="/connect-brightspace">
+        <a class="dash-v3-nav-item" href="#courses">
           <span>▣</span> Courses
         </a>
         <a class="dash-v3-nav-item" href="#tasks">
           <span>☷</span> Tasks
         </a>
-        <a class="dash-v3-nav-item" href="/connect-brightspace">
+        <a class="dash-v3-nav-item" href="#brightspace">
           <span>↻</span> Brightspace
         </a>
-        <a class="dash-v3-nav-item" href="/settings">
-          <span>⚙</span> Settings
-        </a>
       </nav>
+
+      <div class="sidebar-tools">
+        <button class="gemini-launcher" id="geminiLauncher" type="button">
+          <span class="gemini-logo" aria-hidden="true">✦</span>
+          <span><strong>Gemini</strong><small>Ask anything · Live web</small></span><em>↗</em>
+        </button>
+        <a class="dash-v3-nav-item" href="/settings"><span>⚙</span> Settings</a>
+      </div>
 
       <div class="dash-v3-sidebar-bottom">
         <div class="account-menu">
@@ -77,13 +82,8 @@
     </aside>
 
     <main class="dash-v3-main">
-      <header class="dash-v3-topbar">
-        <div class="dash-v3-search">
-          <span>⌕</span>
-          <input type="text" placeholder="Search for anything...">
-          <kbd>⌘ K</kbd>
-        </div>
-
+      <header class="dash-v3-topbar clean-topbar">
+        <div class="topbar-context"><span></span><div><strong>Command Center</strong><small>Your semester, beautifully organized.</small></div></div>
         <div class="dash-v3-tabs">
           <a class="dash-v3-tab {% if view=='today' %}active{% endif %}" href="/dashboard?view=today&course={{ course_filter }}&deadlines={{ deadlines_only }}">Today</a>
           <a class="dash-v3-tab {% if view=='week' %}active{% endif %}" href="/dashboard?view=week&course={{ course_filter }}&deadlines={{ deadlines_only }}">Week</a>
@@ -92,7 +92,7 @@
         </div>
       </header>
 
-      <section class="command-strip">
+      <section class="command-strip ai-command-strip">
         <div class="command-strip-copy">
           <span class="command-kicker"><i></i> NEXORA INTELLIGENCE</span>
           <strong>What do you want to accomplish?</strong>
@@ -203,7 +203,7 @@
           </div>
         </section>
 
-        <section class="dash-v3-courses dash-v3-card">
+        <section class="dash-v3-courses dash-v3-card" id="courses">
           <div class="dash-v3-card-head">
             <div>
               <h2>Your Courses</h2>
@@ -316,7 +316,7 @@
           </div>
         </section>
 
-        <section class="dash-v3-quick dash-v3-card">
+        <section class="dash-v3-quick dash-v3-card" id="brightspace">
           <div class="dash-v3-card-head">
             <div>
               <h2>Quick Add</h2>
@@ -351,18 +351,18 @@
   <aside class="copilot-workspace" id="copilotWorkspace" aria-label="Nexora AI Copilot" aria-hidden="true">
     <header>
       <div class="copilot-avatar"><span>✦</span><i></i></div>
-      <div><small>NEXORA INTELLIGENCE</small><strong>AI Copilot</strong><p>Real conversation + live semester context</p></div>
+      <div><small>GEMINI · LIVE WEB</small><strong>Gemini Assistant</strong><p>Conversation, semester context & Google Search</p></div>
       <button id="copilotClose" type="button" aria-label="Close Copilot">×</button>
     </header>
     <div class="copilot-status"><span>LIVE CONTEXT</span><b id="copilotMeta">Reading your tasks and deadlines</b></div>
     <div class="copilot-messages" id="copilotMessages">
-      <article class="assistant-message"><i>✦</i><div><strong>Ready when you are.</strong><p>Ask me anything—your courses, an explanation, a study plan, or just a normal question.</p></div></article>
+      <article class="assistant-message"><i>✦</i><div><strong>Ready when you are.</strong><p>Ask about your courses, get a study plan, or ask a current question—I can search the live web when needed.</p></div></article>
     </div>
     <div class="copilot-composer">
-      <textarea id="copilotChatInput" rows="1" placeholder="Ask about your semester..."></textarea>
+      <textarea id="copilotChatInput" rows="1" placeholder="Message Gemini..."></textarea>
       <button id="copilotChatSend" type="button">Send <span>↗</span></button>
     </div>
-    <small class="copilot-note">Uses your current Uni Helper tasks. Double-check important course details.</small>
+    <small class="copilot-note">Uses semester context and Google Search. Sources appear whenever the web is used.</small>
   </aside>
 
   <script>
@@ -510,7 +510,7 @@
       }
     }
 
-    const savedTheme = localStorage.getItem("theme") || "dark";
+    const savedTheme = localStorage.getItem("nexora-theme") || localStorage.getItem("theme") || "dark";
     applyTheme(savedTheme);
 
     if(themeToggle){
@@ -518,6 +518,7 @@
         const isDark = document.body.classList.contains("dark-mode");
         const nextTheme = isDark ? "light" : "dark";
 
+        localStorage.setItem("nexora-theme", nextTheme);
         localStorage.setItem("theme", nextTheme);
         applyTheme(nextTheme);
       });
@@ -547,6 +548,7 @@
     const copilotChatInput = document.getElementById("copilotChatInput");
     const copilotChatSend = document.getElementById("copilotChatSend");
     const copilotMeta = document.getElementById("copilotMeta");
+    const geminiLauncher = document.getElementById("geminiLauncher");
     const copilotHistory = [];
 
     function openCopilot(){
@@ -567,7 +569,7 @@
       copilotWorkspace.setAttribute("aria-hidden", "true");
       document.body.classList.remove("copilot-open");
     }
-    function addMessage(role, text, loading=false){
+    function addMessage(role, text, loading=false, sources=[]){
       const article = document.createElement("article");
       article.className = role === "user" ? "user-message" : "assistant-message";
       if(loading) article.classList.add("loading-message");
@@ -576,6 +578,14 @@
       if(role === "assistant"){
         const icon = document.createElement("i"); icon.textContent = "✦";
         const wrap = document.createElement("div"); wrap.appendChild(safe);
+        if(sources.length){
+          const sourceList = document.createElement("div"); sourceList.className = "copilot-sources";
+          sources.forEach((source, index) => {
+            const link = document.createElement("a"); link.href = source.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+            link.textContent = `${index + 1}. ${source.title}`; sourceList.appendChild(link);
+          });
+          wrap.appendChild(sourceList);
+        }
         article.append(icon, wrap);
       } else article.appendChild(safe);
       copilotMessages.appendChild(article);
@@ -585,13 +595,13 @@
     async function askCopilot(query){
       if(!query) return;
       openCopilot(); addMessage("user", query);
-      const loading = addMessage("assistant", "Thinking through your semester…", true);
+      const loading = addMessage("assistant", "Searching and thinking…", true);
       try{
         const response = await fetch("/api/copilot", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:query,history:copilotHistory})});
         const data = await response.json();
         loading.remove();
         if(!response.ok) throw new Error(data.error || "Copilot could not respond.");
-        addMessage("assistant", data.answer);
+        addMessage("assistant", data.answer, false, data.sources || []);
         copilotHistory.push({role:"user",content:query},{role:"assistant",content:data.answer});
         if(copilotHistory.length > 20) copilotHistory.splice(0, copilotHistory.length - 20);
         copilotMeta.textContent = `Gemini • ${data.meta.tasks} tasks • ${data.meta.upcoming} upcoming • ${data.meta.overdue} overdue`;
@@ -610,9 +620,10 @@
     }
     document.querySelectorAll("[data-prompt]").forEach(button => button.addEventListener("click", () => askCopilot(button.dataset.prompt)));
     if(copilotClose) copilotClose.addEventListener("click", closeCopilot);
+    if(geminiLauncher) geminiLauncher.addEventListener("click", openCopilot);
     if(copilotChatSend) copilotChatSend.addEventListener("click", () => { const q=copilotChatInput.value.trim(); if(q){copilotChatInput.value="";askCopilot(q);} });
     if(copilotChatInput) copilotChatInput.addEventListener("keydown", event => { if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();copilotChatSend.click();} });
-    document.addEventListener("keydown", event => { if(event.key==="Escape") closeCopilot(); if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();copilotPrompt.focus();} });
+    document.addEventListener("keydown", event => { if(event.key==="Escape") closeCopilot(); if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();openCopilot();} });
   </script>
 </body>
 </html>

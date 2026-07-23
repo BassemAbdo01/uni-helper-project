@@ -740,6 +740,7 @@ def copilot():
             f"CURRENT STUDENT CONTEXT:\n{json.dumps(semester_context, ensure_ascii=False)}"
         )}]},
         "contents": contents,
+        "tools": [{"google_search": {}}],
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1200},
     }).encode("utf-8")
     req = urllib.request.Request(
@@ -757,9 +758,19 @@ def copilot():
         ).strip()
         if not answer:
             raise ValueError("Gemini returned no text")
+        grounding = result.get("candidates", [{}])[0].get("groundingMetadata", {})
+        sources, seen_urls = [], set()
+        for chunk in grounding.get("groundingChunks", []):
+            web = chunk.get("web", {}) if isinstance(chunk, dict) else {}
+            url = (web.get("uri") or "").strip()
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                sources.append({"title": (web.get("title") or "Web source")[:120], "url": url})
         return jsonify({
             "answer": answer,
             "mode": "gemini",
+            "sources": sources[:6],
+            "grounded": bool(sources),
             "meta": {"upcoming": len(upcoming), "overdue": len(overdue), "tasks": len(tasks)},
         })
     except urllib.error.HTTPError as exc:
