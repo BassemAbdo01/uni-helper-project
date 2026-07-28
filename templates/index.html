@@ -35,7 +35,7 @@
         <a class="dash-v3-nav-item" href="#tasks">
           <span>☷</span> Tasks
         </a>
-        <a class="dash-v3-nav-item" href="#brightspace">
+        <a class="dash-v3-nav-item" href="{{ url_for('connect_brightspace') }}">
           <span>↻</span> Brightspace
         </a>
       </nav>
@@ -331,16 +331,22 @@
             <button type="submit">Add task</button>
           </form>
 
-          <div class="dash-v3-sync-box">
-            <div>
+          <div class="dash-v3-sync-box" id="brightspace">
+            <div class="dash-v3-sync-copy">
               <span>Brightspace Sync</span>
-              <strong>{% if feed_url %}Connected{% else %}Not connected{% endif %}</strong>
+              <strong>{% if feed_url %}Connected · Auto-sync on{% else %}Not connected{% endif %}</strong>
+              {% if feed_url %}
+                <small>Checks automatically every 30 minutes while you use Nexora.</small>
+                <small>Last successful sync: {{ last_sync_text }}</small>
+              {% else %}
+                <small>Connect your calendar feed to enable automatic deadline syncing.</small>
+              {% endif %}
             </div>
 
             {% if feed_url %}
-              <a href="/sync">Sync now</a>
+              <a href="{{ url_for('sync_now') }}">Sync now</a>
             {% else %}
-              <a href="/connect-brightspace">Connect</a>
+              <a href="{{ url_for('connect_brightspace') }}">Connect</a>
             {% endif %}
           </div>
         </section>

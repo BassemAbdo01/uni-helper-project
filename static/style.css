@@ -9025,3 +9025,61 @@ body:not(.dark-mode).dash-v3-page{--nx-text:#17203b;--nx-muted:#65708b;--nx-line
 body:not(.dark-mode) .cosmos{opacity:.18}.dash-v3-page:not(.dark-mode) .dash-v3-sidebar{background:rgba(250,251,255,.9)!important;border-right-color:rgba(39,48,91,.1)!important;box-shadow:18px 0 60px rgba(54,61,103,.08)!important}.dash-v3-page:not(.dark-mode) .dash-v3-brand,.dash-v3-page:not(.dark-mode) .dash-v3-card{background:rgba(255,255,255,.78)!important;border-color:rgba(45,54,93,.1)!important;box-shadow:0 18px 50px rgba(64,73,119,.09),inset 0 1px #fff!important}.dash-v3-page:not(.dark-mode) .dash-v3-nav-item,.dash-v3-page:not(.dark-mode) .topbar-context strong,.dash-v3-page:not(.dark-mode) .dash-v3-card h1,.dash-v3-page:not(.dark-mode) .dash-v3-card h2,.dash-v3-page:not(.dark-mode) .dash-v3-card strong{color:#17203b!important}.dash-v3-page:not(.dark-mode) .dash-v3-nav-item.active{color:#5e36c9!important;background:#eee8ff!important}.dash-v3-page:not(.dark-mode) .command-strip{background:radial-gradient(circle at 90% 10%,rgba(99,118,255,.24),transparent 28%),linear-gradient(120deg,#f3edff,#e7edff)!important;border-color:rgba(101,75,197,.2)!important;box-shadow:0 22px 60px rgba(70,58,140,.12)!important}.dash-v3-page:not(.dark-mode) .command-strip strong,.dash-v3-page:not(.dark-mode) .command-strip p{color:#202744!important}.dash-v3-page:not(.dark-mode) .command-input{background:#fff!important}.dash-v3-page:not(.dark-mode) .command-input input{color:#1c2340!important}.dash-v3-page:not(.dark-mode) .dash-v3-welcome{background:radial-gradient(circle at 80% 50%,rgba(126,96,239,.2),transparent 25%),linear-gradient(125deg,#fff,#f0edff)!important}.dash-v3-page:not(.dark-mode) .dash-v3-welcome p,.dash-v3-page:not(.dark-mode) .dash-v3-card p,.dash-v3-page:not(.dark-mode) .dash-v3-card small{color:#68718b!important}.dash-v3-page:not(.dark-mode) .dash-v3-course-item,.dash-v3-page:not(.dark-mode) .dash-v3-task-item,.dash-v3-page:not(.dark-mode) .dash-v3-upcoming-item,.dash-v3-page:not(.dark-mode) .dash-v3-sync-box{background:rgba(246,247,255,.88)!important;border-color:rgba(45,54,93,.08)!important}.dash-v3-page:not(.dark-mode) .gemini-launcher{color:#243053;background:linear-gradient(135deg,#eee8ff,#e7efff)}.dash-v3-page:not(.dark-mode) .gemini-launcher small{color:#68718b}
 @media(max-width:1280px){.sidebar-tools{padding-inline:12px}.gemini-launcher{display:flex;justify-content:center;padding:8px}.gemini-launcher>span:nth-child(2),.gemini-launcher em{display:none}.sidebar-tools .dash-v3-nav-item{font-size:0!important;justify-content:center!important}.sidebar-tools .dash-v3-nav-item span{font-size:18px!important}}
 @media(max-width:720px){.dash-v3-sidebar{display:none!important}.clean-topbar{align-items:flex-start!important}.topbar-context small{display:none}.dash-v3-tabs{width:100%;justify-content:flex-start}.ai-command-strip{margin-top:4px!important}}
+
+
+/* ===== V9 SIDEBAR + BRIGHTSPACE UX FIXES ===== */
+.dash-v3-sidebar{
+  overflow-y:auto!important;
+  overflow-x:hidden!important;
+  min-height:100vh!important;
+  height:100vh!important;
+  gap:0!important;
+}
+.dash-v3-sidebar-bottom{
+  position:static!important;
+  left:auto!important;
+  right:auto!important;
+  bottom:auto!important;
+  margin-top:12px!important;
+  flex:0 0 auto!important;
+}
+.sidebar-tools{
+  flex:0 0 auto!important;
+  margin-top:auto!important;
+}
+.account-menu,.dash-v3-account-button,.dash-v3-theme-toggle{
+  width:100%!important;
+  box-sizing:border-box!important;
+}
+.account-dropdown{
+  bottom:calc(100% + 8px)!important;
+  top:auto!important;
+  z-index:100!important;
+}
+.dash-v3-sync-box{
+  align-items:center!important;
+  gap:14px!important;
+}
+.dash-v3-sync-copy{
+  min-width:0;
+  display:grid;
+  gap:3px;
+}
+.dash-v3-sync-copy small{
+  display:block;
+  color:#8f96ae;
+  font-size:9px;
+  line-height:1.45;
+}
+.dash-v3-sync-box>a{
+  flex:0 0 auto;
+  white-space:nowrap;
+}
+@media(max-height:760px) and (min-width:721px){
+  .dash-v3-sidebar{padding-top:14px!important;padding-bottom:14px!important}
+  .dash-v3-nav{margin-top:14px!important;gap:5px!important}
+  .dash-v3-nav-item{padding-top:9px!important;padding-bottom:9px!important}
+  .sidebar-tools{padding-top:8px!important;gap:6px!important}
+  .gemini-launcher{padding:8px!important}
+  .dash-v3-sidebar-bottom{margin-top:8px!important}
+}
