@@ -669,7 +669,7 @@ def copilot_status():
     return jsonify({
         "connected": connected,
         "provider": "Gemini",
-        "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+        "model": os.environ.get("GEMINI_MODEL", "gemini-3.6-flash"),
     })
 
 
@@ -728,7 +728,7 @@ def copilot():
             })
     contents.append({"role": "user", "parts": [{"text": prompt[:6000]}]})
 
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    model = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash").strip()
     system_instruction = (
         "You are Nexora AI, a high-quality conversational and academic assistant for university students. "
         "Answer naturally, directly, and intelligently. Explain academic topics, brainstorm, write, reason, "
