@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
 from flask_login import (
     LoginManager,
     UserMixin,
@@ -52,6 +53,8 @@ class User(db.Model, UserMixin):
     password_hash = db.Column(db.String(255), nullable=False)
     feed_url = db.Column(db.Text, default="")
     last_sync = db.Column(db.DateTime, nullable=True)
+    sync_status = db.Column(db.String(30), default="never")
+    sync_message = db.Column(db.Text, default="Not synchronized yet.")
 
     tasks = db.relationship("Task", backref="user", lazy=True, cascade="all, delete-orphan")
 
@@ -76,6 +79,11 @@ class Task(db.Model):
     is_deadline = db.Column(db.Boolean, default=True)
     source = db.Column(db.String(30), default="manual")
     created_at = db.Column(db.String(40), default="")
+    source_uid = db.Column(db.String(255), default="")
+    source_hash = db.Column(db.String(64), default="")
+    source_updated = db.Column(db.String(80), default="")
+    sync_state = db.Column(db.String(30), default="active")
+    last_seen_sync = db.Column(db.String(40), default="")
 
 
 @login_manager.user_loader
@@ -83,8 +91,36 @@ def load_user(user_id):
     return User.query.get(int(user_id))
 
 
+def ensure_schema_columns():
+    """Add synchronization columns to existing SQLite/Postgres databases safely."""
+    migrations = {
+        "user": {
+            "sync_status": "VARCHAR(30) DEFAULT 'never'",
+            "sync_message": "TEXT DEFAULT 'Not synchronized yet.'",
+        },
+        "task": {
+            "source_uid": "VARCHAR(255) DEFAULT ''",
+            "source_hash": "VARCHAR(64) DEFAULT ''",
+            "source_updated": "VARCHAR(80) DEFAULT ''",
+            "sync_state": "VARCHAR(30) DEFAULT 'active'",
+            "last_seen_sync": "VARCHAR(40) DEFAULT ''",
+        },
+    }
+
+    inspector = db.inspect(db.engine)
+    for table_name, columns in migrations.items():
+        existing = {column["name"] for column in inspector.get_columns(table_name)}
+        for column_name, definition in columns.items():
+            if column_name not in existing:
+                db.session.execute(text(
+                    f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {definition}'
+                ))
+    db.session.commit()
+
+
 with app.app_context():
     db.create_all()
+    ensure_schema_columns()
 
 
 # ============================
@@ -103,6 +139,11 @@ def task_to_dict(t):
         "is_deadline": t.is_deadline,
         "source": t.source,
         "created_at": t.created_at,
+        "source_uid": t.source_uid or "",
+        "source_hash": t.source_hash or "",
+        "source_updated": t.source_updated or "",
+        "sync_state": t.sync_state or "active",
+        "last_seen_sync": t.last_seen_sync or "",
     }
 
 
@@ -128,6 +169,11 @@ def add_task(task_data):
         is_deadline=task_data.get("is_deadline", True),
         source=task_data.get("source", "manual"),
         created_at=task_data.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        source_uid=task_data.get("source_uid", ""),
+        source_hash=task_data.get("source_hash", ""),
+        source_updated=task_data.get("source_updated", ""),
+        sync_state=task_data.get("sync_state", "active"),
+        last_seen_sync=task_data.get("last_seen_sync", ""),
     )
 
     db.session.add(task)
@@ -151,8 +197,11 @@ def load_last_sync():
     return current_user.last_sync
 
 
-def save_last_sync():
-    current_user.last_sync = datetime.now()
+def save_sync_result(status, message, successful=False):
+    current_user.sync_status = status
+    current_user.sync_message = message
+    if successful:
+        current_user.last_sync = datetime.now()
     db.session.commit()
 
 
@@ -201,7 +250,7 @@ def status_for(iso):
 # Course extraction
 # ============================
 COURSE_REGEX = re.compile(
-    r"\b(ECOR|SYSC|MATH|PHYS|CHEM|STAT|ELEC|COMP)\s*[-]?\s*(\d{4})([A-Z]?)\b",
+    r"\b(ECOR|SYSC|MATH|PHYS|CHEM|STAT|ELEC|COMP|BIOL|PHIL|PSCI|CCDP|ARCC|ARCS|ARCU|ARTH|BUSI|CGSC|CLCV|CRCJ|ENGL|GEOG|HIST|LING|PHIL|PSYC|SOCI)\s*[-]?\s*(\d{4})([A-Z]?)\b",
     re.IGNORECASE,
 )
 
@@ -537,117 +586,171 @@ def get_course_options(raw_tasks):
 # ============================
 # ICS ingestion
 # ============================
-def import_calendar_string(ics_text):
-    tasks = load_tasks()
+def _event_updated_text(event):
+    for attr in ("last_modified", "created"): 
+        try:
+            value = getattr(event, attr, None)
+            if value:
+                return str(value)
+        except Exception:
+            pass
+    return ""
 
-    existing_keys = {
-        (
-            (t.get("title", "") or "").lower(),
-            t.get("due_raw", ""),
-            (t.get("course_full", "") or "").upper(),
-            t.get("kind", ""),
-            t.get("source", ""),
-        )
-        for t in tasks
-    }
 
+def _event_uid(event, course_full, title, kind):
+    uid = (getattr(event, "uid", "") or "").strip()
+    if uid:
+        return uid[:255]
+    raw = f"{course_full}|{base_title(title)}|{kind}".lower().encode("utf-8")
+    return "fallback-" + hashlib.sha1(raw).hexdigest()
+
+
+def _event_hash(event, title, due_raw, course_full, kind):
+    description = (getattr(event, "description", "") or "").strip()
+    location = (getattr(event, "location", "") or "").strip()
+    updated = _event_updated_text(event)
+    raw = json.dumps({
+        "title": title,
+        "description": description,
+        "location": location,
+        "due": due_raw,
+        "course": course_full,
+        "kind": kind,
+        "updated": updated,
+    }, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def import_calendar_string(ics_text, mark_missing=True):
+    """Upsert a full Brightspace feed and return detailed synchronization counts."""
     cal = Calendar(ics_text)
-    imported = 0
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = date.today() - timedelta(days=7)
+
+    existing = Task.query.filter_by(user_id=current_user.id, source="ics").all()
+    existing_by_uid = {t.source_uid: t for t in existing if t.source_uid}
+    seen_uids = set()
+    counts = {"added": 0, "updated": 0, "unchanged": 0, "removed": 0, "ignored": 0}
 
     for event in cal.events:
         title = (getattr(event, "name", "") or "").strip()
-
         if not title:
+            counts["ignored"] += 1
             continue
 
         desc = (getattr(event, "description", "") or "")
         kind = detect_kind(title + " " + desc)
-
         if kind == "junk":
+            counts["ignored"] += 1
             continue
 
         due_raw = get_event_date_iso(event)
-
-        if not due_raw:
-            continue
-
-        d = parse_iso_date(due_raw)
-
-        if d and d < date.today():
+        due_date = parse_iso_date(due_raw)
+        if not due_raw or (due_date and due_date < cutoff):
+            counts["ignored"] += 1
             continue
 
         course_full = extract_course_from_event(event) or "OTHER"
         cprefix = "OTHER" if course_full == "OTHER" else course_prefix(course_full)
-
         base = base_title(title)
         gid = make_group_id(course_full, base)
+        source_uid = _event_uid(event, course_full, title, kind)
+        source_hash = _event_hash(event, title, due_raw, course_full, kind)
+        source_updated = _event_updated_text(event)
+        seen_uids.add(source_uid)
 
-        key = (title.lower(), due_raw, course_full.upper(), kind, "ics")
+        task = existing_by_uid.get(source_uid)
+        if task:
+            changed = task.source_hash != source_hash or task.sync_state != "active"
+            task.group_id = gid
+            task.title = title
+            task.base_title = base
+            task.course_full = course_full
+            task.course_prefix = cprefix
+            task.due_raw = due_raw
+            task.kind = kind
+            task.is_deadline = True
+            task.source_hash = source_hash
+            task.source_updated = source_updated
+            task.sync_state = "active"
+            task.last_seen_sync = now_text
+            counts["updated" if changed else "unchanged"] += 1
+        else:
+            task = Task(
+                id=uuid4().hex, user_id=current_user.id, group_id=gid, title=title,
+                base_title=base, course_full=course_full, course_prefix=cprefix,
+                due_raw=due_raw, kind=kind, is_deadline=True, source="ics",
+                created_at=now_text, source_uid=source_uid, source_hash=source_hash,
+                source_updated=source_updated, sync_state="active", last_seen_sync=now_text,
+            )
+            db.session.add(task)
+            existing_by_uid[source_uid] = task
+            counts["added"] += 1
 
-        if key in existing_keys:
-            continue
+    if mark_missing:
+        for task in existing:
+            task_date = parse_iso_date(task.due_raw)
+            if task.source_uid and task.source_uid not in seen_uids and (not task_date or task_date >= cutoff):
+                db.session.delete(task)
+                counts["removed"] += 1
 
-        add_task({
-            "id": uuid4().hex,
-            "group_id": gid,
-            "title": title,
-            "base_title": base,
-            "course_full": course_full,
-            "course_prefix": cprefix,
-            "due_raw": due_raw,
-            "kind": kind,
-            "is_deadline": True,
-            "source": "ics",
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        })
+    db.session.commit()
+    return counts
 
-        existing_keys.add(key)
-        imported += 1
 
-    return imported
+def validate_feed_url(feed_url):
+    try:
+        parsed = urllib.parse.urlparse(feed_url.strip())
+    except Exception:
+        return False
+    return parsed.scheme == "https" and parsed.hostname == "brightspace.carleton.ca"
 
 
 def fetch_feed_ics(feed_url):
-    if not feed_url.startswith("https://brightspace.carleton.ca/"):
-        return ""
+    if not validate_feed_url(feed_url):
+        raise ValueError("Use the HTTPS calendar subscription link from Carleton Brightspace.")
 
-    req = urllib.request.Request(feed_url, headers={"User-Agent": "UniHelper/1.0"})
-
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    req = urllib.request.Request(feed_url, headers={"User-Agent": "NexoraSync/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        content_type = (resp.headers.get("Content-Type") or "").lower()
         data = resp.read()
 
-    return data.decode("utf-8", errors="ignore")
+    text_data = data.decode("utf-8", errors="ignore")
+    if "BEGIN:VCALENDAR" not in text_data:
+        raise ValueError("Brightspace did not return a valid calendar feed.")
+    return text_data
 
 
 def should_auto_sync():
     last = load_last_sync()
+    return last is None or datetime.now() - last >= timedelta(minutes=AUTO_SYNC_MINUTES)
 
-    if last is None:
-        return True
 
-    return datetime.now() - last >= timedelta(minutes=AUTO_SYNC_MINUTES)
+def perform_feed_sync():
+    feed_url = load_feed_url()
+    if not feed_url:
+        raise ValueError("Connect your Brightspace calendar feed first.")
+
+    ics_text = fetch_feed_ics(feed_url)
+    counts = import_calendar_string(ics_text, mark_missing=True)
+    summary = (
+        f"Sync complete: {counts['added']} added, {counts['updated']} updated, "
+        f"{counts['removed']} removed, {counts['unchanged']} unchanged."
+    )
+    save_sync_result("success", summary, successful=True)
+    return counts, summary
 
 
 def auto_sync_if_needed():
-    feed_url = load_feed_url()
-
-    if not feed_url:
-        return 0
-
-    if not should_auto_sync():
-        return 0
-
+    if not load_feed_url() or not should_auto_sync():
+        return None
     try:
-        ics_text = fetch_feed_ics(feed_url)
-
-        if ics_text:
-            imported = import_calendar_string(ics_text)
-            save_last_sync()
-            return imported
-    except Exception:
-        return 0
-
-    return 0
+        counts, _ = perform_feed_sync()
+        return counts
+    except Exception as exc:
+        app.logger.warning("Automatic Brightspace sync failed: %s", exc)
+        save_sync_result("error", f"Automatic sync failed: {exc}", successful=False)
+        return None
 
 
 # ============================
@@ -1202,6 +1305,8 @@ def connect_brightspace():
         "connect_brightspace.html",
         feed_url=feed_url,
         last_sync_text=last_sync_text,
+        sync_status=current_user.sync_status or "never",
+        sync_message=current_user.sync_message or "Not synchronized yet.",
         user=current_user,
     )
 
@@ -1231,35 +1336,47 @@ def import_ics_file():
         return redirect(url_for("home"))
 
     raw = file.read().decode("utf-8", errors="ignore")
-    import_calendar_string(raw)
-
-    return redirect(url_for("home", view="all"))
+    try:
+        counts = import_calendar_string(raw, mark_missing=False)
+        save_sync_result(
+            "success",
+            f"Backup import complete: {counts['added']} added and {counts['updated']} updated.",
+            successful=True,
+        )
+    except Exception as exc:
+        save_sync_result("error", f"Backup import failed: {exc}")
+    return redirect(url_for("connect_brightspace"))
 
 
 @app.post("/save_feed")
 @login_required
 def save_feed():
     feed_url = (request.form.get("feed_url") or "").strip()
+    if not feed_url:
+        save_sync_result("error", "Paste your Brightspace calendar feed link first.")
+        return redirect(url_for("connect_brightspace"))
+    if not validate_feed_url(feed_url):
+        save_sync_result("error", "That is not a valid Carleton Brightspace HTTPS calendar feed link.")
+        return redirect(url_for("connect_brightspace"))
 
-    if feed_url:
-        save_feed_url(feed_url)
-
+    save_feed_url(feed_url)
+    try:
+        perform_feed_sync()
+    except Exception as exc:
+        app.logger.warning("Initial Brightspace sync failed: %s", exc)
+        save_sync_result("error", f"Link saved, but synchronization failed: {exc}")
     return redirect(url_for("connect_brightspace"))
 
 
 @app.get("/sync")
 @login_required
 def sync_now():
-    feed_url = load_feed_url()
-
-    if feed_url:
-        ics_text = fetch_feed_ics(feed_url)
-
-        if ics_text:
-            import_calendar_string(ics_text)
-            save_last_sync()
-
-    return redirect(url_for("home", view="all"))
+    try:
+        perform_feed_sync()
+    except Exception as exc:
+        app.logger.warning("Manual Brightspace sync failed: %s", exc)
+        save_sync_result("error", f"Synchronization failed: {exc}")
+    return redirect(url_for("connect_brightspace"))
 
 
 if __name__ == "__main__":

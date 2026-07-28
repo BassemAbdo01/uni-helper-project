@@ -83,8 +83,18 @@
         </form>
 
         <div style="margin-top:16px;">
-          <div class="muted">Last sync: {{ last_sync_text }}</div>
-          <a class="btn" href="/sync" style="display:inline-block; margin-top:10px;">Sync now</a>
+          <div class="muted">Last successful sync: {{ last_sync_text }}</div>
+
+          <div class="sync-result sync-{{ sync_status }}" style="margin-top:12px; padding:12px 14px; border-radius:12px; border:1px solid rgba(125, 100, 255, .25); background:rgba(125, 100, 255, .08);">
+            <strong style="display:block; margin-bottom:4px;">
+              {% if sync_status == 'success' %}✓ Connected and synchronized
+              {% elif sync_status == 'error' %}⚠ Synchronization needs attention
+              {% else %}Brightspace is not synchronized yet{% endif %}
+            </strong>
+            <span class="muted">{{ sync_message }}</span>
+          </div>
+
+          <a class="btn" href="/sync" style="display:inline-block; margin-top:12px;">Sync now</a>
         </div>
       </div>
 
