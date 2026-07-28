@@ -4,4 +4,3 @@ gunicorn
 Flask-SQLAlchemy
 Flask-Login
 psycopg2-binary
-groq>=0.31.1,<1

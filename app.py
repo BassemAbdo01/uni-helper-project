@@ -21,7 +21,6 @@ from flask_login import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from ics import Calendar
-from groq import Groq, APIConnectionError, APIStatusError, RateLimitError
 
 app = Flask(__name__)
 
@@ -662,26 +661,28 @@ def landing():
 @app.route("/api/copilot/status", methods=["GET"])
 @login_required
 def copilot_status():
-    """Report AI configuration without exposing any secret value."""
-    connected = bool(os.environ.get("GROQ_API_KEY", "").strip())
+    """Report Gemini configuration without exposing any secret value."""
+    connected = bool(
+        os.environ.get("GEMINI_API_KEY", "").strip()
+        or os.environ.get("GOOGLE_API_KEY", "").strip()
+    )
     return jsonify({
         "connected": connected,
-        "provider": "Groq",
-        "model": os.environ.get("GROQ_MODEL", "groq/compound-mini"),
+        "provider": "Gemini",
+        "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
     })
 
 
 @app.route("/api/copilot", methods=["POST"])
 @login_required
 def copilot():
-    """Conversational, semester-aware AI with a useful local fallback."""
+    """Conversational, semester-aware Nexora AI powered by Gemini."""
     payload = request.get_json(silent=True) or {}
     prompt = (payload.get("message") or "").strip()
     if not prompt:
         return jsonify({"error": "Ask me something first."}), 400
 
-    tasks = build_grouped_cards(load_tasks())
-    tasks = sort_cards(tasks)
+    tasks = sort_cards(build_grouped_cards(load_tasks()))
     upcoming = []
     overdue = []
     for task in tasks:
@@ -695,15 +696,15 @@ def copilot():
     if not isinstance(history, list):
         history = []
     history = history[-10:]
-    lower = prompt.lower()
     first_name = (current_user.name or "Student").split()[0]
 
-    # Real Groq conversation. Compound Mini decides whether live web search is
-    # needed, so greetings and ordinary study questions do not force a search.
-    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    api_key = (
+        os.environ.get("GEMINI_API_KEY", "").strip()
+        or os.environ.get("GOOGLE_API_KEY", "").strip()
+    )
     if not api_key:
         return jsonify({
-            "error": "Groq is not connected to this running service. Add GROQ_API_KEY to this Render web service, then rebuild and deploy."
+            "error": "Gemini is not connected to this service. Add GEMINI_API_KEY to the Render web service, then redeploy."
         }), 503
 
     semester_context = {
@@ -715,181 +716,103 @@ def copilot():
             "due": task.get("main_due_raw", ""),
         } for task in tasks[:40]],
     }
-    messages = []
+
+    contents = []
     for item in history:
         role = item.get("role") if isinstance(item, dict) else None
         content = item.get("content") if isinstance(item, dict) else None
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
-            messages.append({"role": role, "content": content[:4000]})
-    messages.append({"role": "user", "content": prompt[:6000]})
+            contents.append({
+                "role": "model" if role == "assistant" else "user",
+                "parts": [{"text": content[:4000]}],
+            })
+    contents.append({"role": "user", "parts": [{"text": prompt[:6000]}]})
 
-    model = os.environ.get("GROQ_MODEL", "groq/compound-mini").strip()
-    groq_messages = [{"role": "system", "content": (
-            "You are Nexora Copilot, a smart conversational AI for university students. "
-            "Answer naturally and directly like a high-quality general assistant. Explain academic "
-            "topics, brainstorm, write, reason, and help plan the semester. Use the supplied student "
-            "context only when relevant. Never invent course dates or deadlines. Be concise by default "
-            "but give detail when requested, and never repeat a canned introduction.\n\n"
-            "Use live web search only when the request needs current, changing, or source-backed "
-            "information. Do not search for greetings, casual conversation, writing, brainstorming, "
-            "or questions answerable from the supplied semester context.\n\n"
-            f"CURRENT STUDENT CONTEXT:\n{json.dumps(semester_context, ensure_ascii=False)}"
-        )}] + messages
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    system_instruction = (
+        "You are Nexora AI, a high-quality conversational and academic assistant for university students. "
+        "Answer naturally, directly, and intelligently. Explain academic topics, brainstorm, write, reason, "
+        "and help plan the student's semester. Use the supplied semester context only when relevant. Never "
+        "invent course dates, deadlines, grades, or facts that are absent from the context. Be concise by "
+        "default but provide detail when requested. Do not repeat a canned introduction. The current version "
+        "does not have live web search, so clearly say when a question requires current information rather "
+        "than pretending it is up to date.\n\n"
+        f"CURRENT STUDENT CONTEXT:\n{json.dumps(semester_context, ensure_ascii=False)}"
+    )
+
+    body = json.dumps({
+        "system_instruction": {"parts": [{"text": system_instruction}]},
+        "contents": contents,
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 1200,
+        },
+    }).encode("utf-8")
+    endpoint = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{urllib.parse.quote(model, safe='')}:generateContent?key="
+        f"{urllib.parse.quote(api_key, safe='')}"
+    )
+    req = urllib.request.Request(
+        endpoint,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
     try:
-        # Use Groq's official SDK instead of a hand-built urllib request. Apart
-        # from keeping the request format current, the SDK supplies Groq's
-        # expected client signature so Render traffic is not rejected by
-        # Cloudflare error 1010 before it reaches the API.
-        client = Groq(api_key=api_key, timeout=45.0, max_retries=1)
-        completion = client.chat.completions.create(
-            model=model,
-            messages=groq_messages,
-            temperature=0.7,
-            max_completion_tokens=1200,
-        )
-        message = completion.choices[0].message
-        answer = (message.content or "").strip()
+        with urllib.request.urlopen(req, timeout=45) as response:
+            result = json.loads(response.read().decode("utf-8"))
+
+        candidates = result.get("candidates") or []
+        if not candidates:
+            block_reason = ((result.get("promptFeedback") or {}).get("blockReason") or "").strip()
+            if block_reason:
+                return jsonify({"error": f"Gemini could not answer this request ({block_reason})."}), 400
+            raise ValueError("Gemini returned no candidates")
+
+        parts = (((candidates[0].get("content") or {}).get("parts")) or [])
+        answer = "\n".join(
+            part.get("text", "").strip()
+            for part in parts
+            if isinstance(part, dict) and part.get("text", "").strip()
+        ).strip()
         if not answer:
-            raise ValueError("Groq returned no text")
-        sources, seen_urls = [], set()
-        for match in re.finditer(r"https?://[^\s\]\)<>]+", answer):
-            url = match.group(0).rstrip(".,;:!?")
-            if url not in seen_urls:
-                seen_urls.add(url)
-                sources.append({"title": urllib.parse.urlparse(url).netloc or "Web source", "url": url})
-        executed_tools = getattr(message, "executed_tools", None) or []
-        web_used = any(
-            "search" in str(
-                tool.get("type", tool.get("name", ""))
-                if isinstance(tool, dict)
-                else getattr(tool, "type", getattr(tool, "name", ""))
-            ).lower()
-            for tool in executed_tools
-        )
+            raise ValueError("Gemini returned no text")
+
         return jsonify({
             "answer": answer,
-            "mode": "groq",
-            "sources": sources[:6],
-            "grounded": web_used or bool(sources),
+            "mode": "gemini",
+            "grounded": False,
+            "sources": [],
             "meta": {"upcoming": len(upcoming), "overdue": len(overdue), "tasks": len(tasks)},
         })
-    except RateLimitError as exc:
-        app.logger.warning("Groq rate limit: %s", str(exc)[:1200])
-        return jsonify({"error": "Groq's free rate limit is temporarily exhausted. Wait a moment and try again."}), 429
-    except APIStatusError as exc:
-        app.logger.error("Groq API HTTP %s: %s", exc.status_code, str(exc)[:1200])
-        if exc.status_code in (401, 403):
-            message = "Groq rejected this API key or request. Check the Render log for the exact provider message."
-        else:
-            message = f"Groq returned an API error ({exc.status_code}). Please try again."
-        return jsonify({"error": message}), 502
-    except APIConnectionError as exc:
-        app.logger.error("Groq connection error: %s", str(exc)[:1200])
-        return jsonify({"error": "Nexora could not reach Groq right now. Please try again."}), 502
-    except Exception as exc:
-        app.logger.exception("Groq Copilot error: %s", exc)
-        return jsonify({"error": "Groq could not respond right now. Please try again."}), 502
-
-    def task_line(task):
-        due = pretty_date(task.get("main_due_raw", "")) or "no date"
-        return f"{task.get('title', 'Task')} ({task.get('course_full', 'OTHER')}) — {due}"
-
-    # Use a real language model when OPENAI_API_KEY is configured on Render.
-    # Only the student's task titles/course codes/due dates and recent chat are sent.
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if api_key:
-        semester_context = {
-            "student_first_name": first_name,
-            "today": date.today().isoformat(),
-            "tasks": [
-                {
-                    "title": task.get("title", "Task"),
-                    "course": task.get("course_full", "OTHER"),
-                    "due": task.get("main_due_raw", ""),
-                }
-                for task in tasks[:40]
-            ],
-        }
-        messages = [{
-            "role": "system",
-            "content": (
-                "You are Nexora Copilot, a capable conversational AI for university students. "
-                "Respond naturally like ChatGPT: directly answer any general or academic question, "
-                "and use the supplied semester context when relevant. Be concise by default, warm but "
-                "not fake, never repeat a canned introduction, and ask one useful follow-up only when "
-                "needed. Do not claim a deadline or course fact that is absent from context.\n\n"
-                f"SEMESTER CONTEXT:\n{json.dumps(semester_context, ensure_ascii=False)}"
-            ),
-        }]
-        for item in history:
-            role = item.get("role") if isinstance(item, dict) else None
-            content = item.get("content") if isinstance(item, dict) else None
-            if role in ("user", "assistant") and isinstance(content, str) and content.strip():
-                messages.append({"role": role, "content": content[:4000]})
-        messages.append({"role": "user", "content": prompt[:6000]})
-        body = json.dumps({
-            "model": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 700,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/chat/completions",
-            data=body,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            method="POST",
-        )
+    except urllib.error.HTTPError as exc:
+        detail = ""
         try:
-            with urllib.request.urlopen(req, timeout=35) as response:
-                result = json.loads(response.read().decode("utf-8"))
-            answer = result["choices"][0]["message"]["content"].strip()
-            return jsonify({
-                "answer": answer,
-                "mode": "ai",
-                "meta": {"upcoming": len(upcoming), "overdue": len(overdue), "tasks": len(tasks)},
-            })
-        except Exception as exc:
-            app.logger.warning("Copilot API fallback: %s", exc)
-
-    if any(word in lower for word in ("deadline", "due", "upcoming", "next")):
-        selected = (overdue + upcoming)[:5]
-        if selected:
-            answer = "Here are the deadlines that need attention first:\n" + "\n".join(
-                f"{i + 1}. {task_line(task)}" for i, task in enumerate(selected)
-            )
+            detail = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        app.logger.error("Gemini API HTTP %s: %s", exc.code, detail[:1600])
+        if exc.code == 429:
+            message = "Gemini's rate limit is temporarily exhausted. Wait a moment and try again."
+            status = 429
+        elif exc.code in (401, 403):
+            message = "Gemini rejected the API key. Check GEMINI_API_KEY in Render."
+            status = 502
+        elif exc.code == 400:
+            message = "Gemini rejected this request or model. Check GEMINI_MODEL in Render."
+            status = 502
         else:
-            answer = "You have no deadlines in the next 14 days. Add tasks or sync Brightspace and I’ll track them here."
-    elif any(word in lower for word in ("plan", "today", "study", "schedule", "priorit")):
-        selected = (overdue + upcoming)[:3]
-        if selected:
-            blocks = []
-            for i, task in enumerate(selected):
-                minutes = 50 if i == 0 else 35
-                blocks.append(f"{i + 1}. {minutes} min — {task.get('title', 'Task')} ({task.get('course_full', 'OTHER')})")
-            answer = f"Here’s a focused plan for you, {first_name}:\n" + "\n".join(blocks) + "\nFinish with a 10-minute review and update anything you completed."
-        else:
-            answer = f"You’re clear right now, {first_name}. Try one 45-minute review block for your hardest course, then use 10 minutes to plan tomorrow."
-    elif any(word in lower for word in ("overdue", "urgent", "behind")):
-        if overdue:
-            answer = "These are overdue, in recovery order:\n" + "\n".join(
-                f"{i + 1}. {task_line(task)}" for i, task in enumerate(overdue[:5])
-            ) + "\nStart with the quickest high-impact item, then contact the instructor if submission is closed."
-        else:
-            answer = "Nothing is overdue. Your dashboard is currently clear."
-    elif any(word in lower for word in ("course", "class")):
-        courses = sorted({t.get("course_full") for t in tasks if t.get("course_full") and t.get("course_full") != "OTHER"})
-        answer = ("Your active courses are: " + ", ".join(courses) + ". Ask me to plan one of them by name.") if courses else "I don’t see course data yet. Connect Brightspace or add a task with a course code."
-    else:
-        answer = (
-            "I can use your live dashboard data to build today’s plan, list deadlines, find overdue work, "
-            "or summarize your active courses. Try: “Plan my study day” or “What is due next?”"
-        )
-
-    return jsonify({
-        "answer": answer,
-        "mode": "local",
-        "meta": {"upcoming": len(upcoming), "overdue": len(overdue), "tasks": len(tasks)},
-    })
+            message = f"Gemini returned an API error ({exc.code}). Please try again."
+            status = 502
+        return jsonify({"error": message}), status
+    except urllib.error.URLError as exc:
+        app.logger.error("Gemini connection error: %s", str(exc)[:1200])
+        return jsonify({"error": "Nexora could not reach Gemini right now. Please try again."}), 502
+    except Exception as exc:
+        app.logger.exception("Gemini Copilot error: %s", exc)
+        return jsonify({"error": "Gemini could not respond right now. Please try again."}), 502
 
 
 @app.route("/signup", methods=["GET", "POST"])

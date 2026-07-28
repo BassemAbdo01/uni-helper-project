@@ -43,7 +43,7 @@
       <div class="sidebar-tools">
         <button class="gemini-launcher" id="geminiLauncher" type="button">
           <span class="gemini-logo" aria-hidden="true">✦</span>
-          <span><strong>Nexora AI</strong><small>Groq · Live web when needed</small></span><em>↗</em>
+          <span><strong>Nexora AI</strong><small>Gemini · Academic AI</small></span><em>↗</em>
         </button>
         <a class="dash-v3-nav-item" href="/settings"><span>⚙</span> Settings</a>
       </div>
@@ -351,18 +351,18 @@
   <aside class="copilot-workspace" id="copilotWorkspace" aria-label="Nexora AI Copilot" aria-hidden="true">
     <header>
       <div class="copilot-avatar"><span>✦</span><i></i></div>
-      <div><small>GROQ · SMART WEB</small><strong>Nexora Assistant</strong><p>Conversation, semester context & live search when needed</p></div>
+      <div><small>GEMINI · NEXORA AI</small><strong>Nexora Assistant</strong><p>Conversation, academic help & semester context</p></div>
       <button id="copilotClose" type="button" aria-label="Close Copilot">×</button>
     </header>
     <div class="copilot-status"><span>LIVE CONTEXT</span><b id="copilotMeta">Reading your tasks and deadlines</b></div>
     <div class="copilot-messages" id="copilotMessages">
-      <article class="assistant-message"><i>✦</i><div><strong>Ready when you are.</strong><p>Ask about your courses, get a study plan, or ask a current question—I can search the live web when needed.</p></div></article>
+      <article class="assistant-message"><i>✦</i><div><strong>Ready when you are.</strong><p>Ask about your courses, get a study plan, or get help understanding difficult concepts.</p></div></article>
     </div>
     <div class="copilot-composer">
       <textarea id="copilotChatInput" rows="1" placeholder="Message Nexora AI..."></textarea>
       <button id="copilotChatSend" type="button">Send <span>↗</span></button>
     </div>
-    <small class="copilot-note">Uses semester context. Live search activates only when needed.</small>
+    <small class="copilot-note">Powered by Gemini and your semester context.</small>
   </aside>
 
   <script>
@@ -560,9 +560,9 @@
         .then(status => {
           copilotMeta.textContent = status.connected
             ? `${status.provider} connected • ${status.model}`
-            : "Groq key is not reaching this Render service";
+            : "Gemini key is not reaching this Render service";
         })
-        .catch(() => { copilotMeta.textContent = "Unable to check Groq connection"; });
+        .catch(() => { copilotMeta.textContent = "Unable to check Gemini connection"; });
     }
     function closeCopilot(){
       copilotWorkspace.classList.remove("open");
@@ -604,7 +604,7 @@
         addMessage("assistant", data.answer, false, data.sources || []);
         copilotHistory.push({role:"user",content:query},{role:"assistant",content:data.answer});
         if(copilotHistory.length > 20) copilotHistory.splice(0, copilotHistory.length - 20);
-        copilotMeta.textContent = `Groq${data.grounded ? " • Live web used" : " • No web needed"} • ${data.meta.tasks} tasks • ${data.meta.upcoming} upcoming`;
+        copilotMeta.textContent = `Gemini • ${data.meta.tasks} tasks • ${data.meta.upcoming} upcoming`;
       }catch(error){ loading.remove(); addMessage("assistant", error.message || "Something went wrong. Please try again."); }
     }
     function runCopilotPrompt(){
