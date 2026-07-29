@@ -15,7 +15,7 @@ async function refresh() {
     result.lastSync ? `Last activity: ${new Date(result.lastSync).toLocaleString()}` : 'No activity yet',
     s.running ? `Working: ${s.phase || 'syncing'} ${s.currentCourse || ''} ${s.progress || ''}` : '',
     c.found !== undefined ? `Courses: ${c.found} detected · +${c.added || 0} · ${c.updated || 0} cleaned/updated · ${c.unchanged || 0} unchanged` : '',
-    x.courses !== undefined ? `Content scan: ${x.scanned}/${x.courses} courses · ${x.itemsFound} items found` : '',
+    x.courses !== undefined ? `Smart Sync: ${x.scanned}/${x.courses} courses · ${x.itemsFound} items mapped${x.preserved ? ` · ${x.preserved} safely preserved` : ''}` : '',
     x.courses !== undefined ? `Nexora content: +${x.added || 0} · ${x.updated || 0} updated · ${x.unchanged || 0} unchanged · ${x.failed || 0} failed` : '',
     s.error ? `Error: ${s.error}` : '',
     x.details?.length ? '\n' + x.details.slice(-8).map(d => `${d.course}: ${d.items ?? 0} items${d.error ? ` — ${d.error}` : ''}`).join('\n') : ''
@@ -37,5 +37,5 @@ async function save() {
 $('save').onclick = save;
 $('import').onclick = async () => { await save(); await chrome.runtime.sendMessage({type: 'NEXORA_START_IMPORT'}); window.close(); };
 $('scan').onclick = async () => { await save(); $('status').textContent = 'Scanning open Brightspace homepage…'; await chrome.runtime.sendMessage({type: 'NEXORA_SCAN_OPEN_TABS'}); await refresh(); };
-$('sync').onclick = async () => { await save(); $('status').textContent = 'Scanning every imported course. Keep Chrome open…'; chrome.runtime.sendMessage({type: 'NEXORA_SYNC_ALL_COURSES'}).then(refresh); setTimeout(refresh, 1500); };
+$('sync').onclick = async () => { await save(); $('status').textContent = 'Smart Sync is mapping lectures, assignments, quizzes and announcements…'; chrome.runtime.sendMessage({type: 'NEXORA_SYNC_ALL_COURSES'}).then(refresh); setTimeout(refresh, 1500); };
 refresh();

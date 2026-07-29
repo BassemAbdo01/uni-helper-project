@@ -1,24 +1,458 @@
 (() => {
- const clean=v=>String(v||'').replace(/\s+/g,' ').trim();
- const absolute=h=>{try{return new URL(h,location.href).href}catch{return''}};
- function roots(){const out=[document],q=[document.documentElement],seen=new Set(q);while(q.length){const n=q.shift();if(!n?.querySelectorAll)continue;for(const e of n.querySelectorAll('*'))if(e.shadowRoot&&!seen.has(e.shadowRoot)){seen.add(e.shadowRoot);out.push(e.shadowRoot);q.push(e.shadowRoot)}}return out}
- function qa(sel){const out=[],seen=new Set();for(const r of roots())try{for(const e of r.querySelectorAll(sel))if(!seen.has(e)){seen.add(e);out.push(e)}}catch{}return out}
- function closestShadow(el,sel){let n=el;while(n){if(n.matches?.(sel))return n;n=n.parentElement||n.getRootNode?.()?.host||null}return null}
- function ou(url){for(const p of [/\/d2l\/home\/(\d+)/i,/[?&]ou=(\d+)/i,/\/content\/(\d+)/i,/\/lessons\/(\d+)/i]){const m=String(url||'').match(p);if(m)return m[1]}return''}
- function parseCourse(raw,id){let original=clean(raw).replace(/\b(Open|Closed)\b/ig,'').trim();const term=(original.match(/\b(Fall|Winter|Summer|Spring)\s+20\d{2}\b/i)||[])[0]||'';const matches=[...original.matchAll(/\b([A-Z]{3,6})\s*[-:]?\s*(\d{4}[A-Z]?)\b/ig)];const code=matches.length?`${matches[0][1]}${matches[0][2]}`.toUpperCase():`COURSE${id}`;let name=original.replace(/^\s*(Merge|Crosslist)\s+/i,'').replace(/\[[\d:\s,]+\]/g,' ').replace(/\bXLS[A-Z0-9_-]+\b/ig,' ').replace(/\bSP[_-]?\d+\b/ig,' ').replace(/\b(Fall|Winter|Summer|Spring)\s+20\d{2}\b/ig,' ').replace(/\((LEC|LAB|TUT|SEM|DIS|PRA)(?:\s+[^)]*)?\)/ig,' ').replace(new RegExp(`^${code}\\s*[-:]?\\s*`,'i'),'').replace(/^\s*[,._-]+|[,._-]+\s*$/g,'').replace(/\s+/g,' ').trim();if(!name||name.length<3)name=code;return{code,name,term,original}}
- function img(container){for(const i of container?.querySelectorAll?.('img')||[]){const s=absolute(i.currentSrc||i.src||i.getAttribute('data-src'));if(s&&!/avatar|icon|logo/i.test(s))return s}for(const n of container?.querySelectorAll?[container,...container.querySelectorAll('*')]:[])try{const m=getComputedStyle(n).backgroundImage?.match(/url\(["']?(.*?)["']?\)/);if(m)return absolute(m[1])}catch{}return''}
- function discover(){const map=new Map();for(const a of qa('a[href*="/d2l/home/"],[href*="/d2l/home/"]')){const url=absolute(a.getAttribute?.('href')||a.href||'');const id=ou(url);if(!id)continue;const card=closestShadow(a,'d2l-enrollment-card,d2l-card,article,li,[role="listitem"],[class*="enrollment"],[class*="course"],[class*="tile"],[class*="card"]')||a;const raw=clean(`${card.getAttribute?.('aria-label')||''} ${card.textContent||''} ${card.shadowRoot?.textContent||''}`);if(!raw)continue;const p=parseCourse(raw,id);const rec={source_uid:id,course_code:p.code,course_name:p.name,raw_course_name:p.original,term:p.term,instructor:'',image_url:img(card),brightspace_url:`${location.origin}/d2l/home/${id}`};const old=map.get(id);map.set(id,{...old,...rec,image_url:rec.image_url||old?.image_url||''})}return[...map.values()]}
- function kind(){const u=location.href.toLowerCase();if(/dropbox|assignment/.test(u))return'assignments';if(/quizzing|quiz/.test(u))return'quizzes';if(/\/news\/|news\/main/.test(u))return'announcements';if(/lessons|\/content\//.test(u))return'content';return'course-home'}
- async function expandAll(){let clicks=0,stable=0,last=-1;for(let round=0;round<35;round++){const candidates=qa('button,a,[role="button"]');const btn=candidates.find(e=>{const t=clean(e.textContent||e.getAttribute?.('aria-label')||'').toLowerCase();const visible=!!(e.offsetWidth||e.offsetHeight||e.getClientRects?.().length);return visible&&!e.disabled&&(/load more|show more|view more|more results|next/.test(t))});if(btn){btn.click();clicks++;await new Promise(r=>setTimeout(r,900));}else{window.scrollTo(0,document.body.scrollHeight);await new Promise(r=>setTimeout(r,700));}
- const count=qa('a[href],article,li,[role="listitem"]').length;if(count===last)stable++;else stable=0;last=count;if(!btn&&stable>=3)break;}return clicks}
- function classify(title,url,pageKind){const s=`${title} ${url}`.toLowerCase();const ext=(url.match(/\.([a-z0-9]{1,6})(?:$|[?#])/i)||[])[1]?.toLowerCase()||'';if(pageKind==='assignments'||/dropbox|assignment/.test(s))return'assignment';if(pageKind==='quizzes'||/quizzing|quiz/.test(s))return'quiz';if(pageKind==='announcements'||/announcement|\/news\//.test(s))return'announcement';if(/practice|sample question|review question|worksheet/.test(s))return'practice';if(['py','c','cpp','java','js','ipynb','zip','rar','csv','xlsx','xls','doc','docx'].includes(ext))return'resource';if(['pdf','ppt','pptx'].includes(ext)&&/lecture|slides?|week\s*\d+|module\s*\d+|chapter\s*\d+|lesson\s*\d+/i.test(title))return'lecture';if(['pdf','ppt','pptx'].includes(ext))return'resource';if(/lecture|slides?|week\s*\d+|lesson\s*\d+/i.test(title))return'lecture';if(/\/lessons\/|\/content\//.test(url))return'page';return'resource'}
- function uid(url,title,course){try{const u=new URL(url);const ids=['topicId','moduleId','folderId','qi','ou'].map(k=>u.searchParams.get(k)).filter(Boolean);return clean(`${course}|${ids.join('|')}|${u.pathname}`)||`${course}|${title}|${url}`}catch{return`${course}|${title}|${url}`}}
- function moduleName(el){const row=closestShadow(el,'li,article,[role="listitem"],[class*="topic"],[class*="module"],[class*="lesson"],[class*="content"]');const h=row?.querySelector?.('h1,h2,h3,h4,h5,[class*="module-title"],[class*="heading"]');return clean(h?.textContent||'')}
- function fileMeta(el,url,title){const ext=(title.match(/\.([a-z0-9]{1,6})\b/i)||url.match(/\.([a-z0-9]{1,6})(?:$|[?#])/i)||[])[1]?.toLowerCase()||'';const direct=/\.(pdf|pptx?|docx?|xlsx?|csv|zip|py|java|c|cpp)(?:$|[?#])/i.test(url)||/download|file\/view|content\/enforced/i.test(url);return{file_name:clean(title).replace(/^['"]|['"]$/g,''),file_ext:ext,download_url:direct?url:''}}
- async function scan(course){const pk=kind();const expanded=pk==='content'?await expandAll():0;const map=new Map();for(const el of qa('a[href],button[data-href],[role="link"][href],d2l-link[href]')){const url=absolute(el.getAttribute?.('href')||el.getAttribute?.('data-href')||'');if(!url||!url.startsWith(location.origin))continue;let title=clean(el.getAttribute?.('aria-label')||el.getAttribute?.('title')||el.textContent||'');if(!title||title.length<2||title.length>500)continue;if(/^(home|content|course home|grades|classlist|calendar|help|logout|notifications?|back|next|previous|settings|edit|search)$/i.test(title))continue;const type=classify(title,url,pk);if(type==='resource'&&!/\.(pdf|pptx?|docx?|xlsx?|csv|zip|py|java|c|cpp)(?:$|[?#])/i.test(url)&&!/resource|file|document|code/i.test(title))continue;const id=uid(url,title,course.source_uid);map.set(id,{course:course.course_code,source_uid:id,title:title.replace(/^['"]|['"]$/g,''),content_type:type,source_url:url,module_name:moduleName(el),content_text:'',published_at:'',...fileMeta(el,url,title)});}
- if(pk!=='content')for(const el of qa('article,li,[role="listitem"],[class*="announcement"],[class*="assignment"],[class*="quiz"]')){const title=clean(el.querySelector?.('h1,h2,h3,h4,a,[class*="title"]')?.textContent||'');if(!title||title.length<3||title.length>300)continue;const link=el.querySelector?.('a[href]');const url=absolute(link?.getAttribute('href')||location.href);const type=classify(title,url,pk);const id=uid(url,title,course.source_uid);const body=clean(el.textContent||'').slice(0,5000);if(!map.has(id))map.set(id,{course:course.course_code,source_uid:id,title,content_type:type,source_url:url,module_name:'',content_text:body,published_at:''});}
- return{ok:true,page:location.href,pageKind:pk,roots:roots().length,expanded,items:[...map.values()]}}
- async function scanHome(){const courses=discover();if(!courses.length)return{ok:false,courses:[],error:'No course cards found on this page.'};const response=await chrome.runtime.sendMessage({type:'NEXORA_COURSES',courses});return{ok:!!response?.ok,courses,response}}
- chrome.runtime.onMessage.addListener((m,s,send)=>{if(m?.type==='NEXORA_SCAN_HOME'||m?.type==='NEXORA_SCAN_FULL'){scanHome().then(send);return true}if(m?.type==='NEXORA_SCAN_COURSE_PAGE'){scan(m.course||{}).then(send);return true}});
- if(/\/d2l\/home\/?(?:$|[?#])/.test(location.href))setTimeout(()=>scanHome().catch(()=>{}),4200);
+  const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const absolute = href => { try { return new URL(href, location.href).href; } catch (_) { return ''; } };
+  const orgUnitIdFrom = value => {
+    const text = String(value || '');
+    for (const pattern of [/\/d2l\/home\/(\d+)/i, /[?&]ou=(\d+)/i, /\/lessons\/(\d+)/i, /\/content\/(\d+)/i]) {
+      const match = text.match(pattern);
+      if (match) return match[1];
+    }
+    return '';
+  };
+
+  function allRoots() {
+    const result = [document];
+    const queue = [document.documentElement];
+    const seen = new Set(queue);
+    while (queue.length) {
+      const node = queue.shift();
+      if (!node?.querySelectorAll) continue;
+      for (const element of node.querySelectorAll('*')) {
+        if (element.shadowRoot && !seen.has(element.shadowRoot)) {
+          seen.add(element.shadowRoot);
+          result.push(element.shadowRoot);
+          queue.push(element.shadowRoot);
+        }
+      }
+    }
+    return result;
+  }
+
+  function queryAll(selector) {
+    const output = [];
+    const seen = new Set();
+    for (const root of allRoots()) {
+      try {
+        for (const element of root.querySelectorAll(selector)) {
+          if (!seen.has(element)) { seen.add(element); output.push(element); }
+        }
+      } catch (_) {}
+    }
+    return output;
+  }
+
+  function shadowClosest(element, selector) {
+    let node = element;
+    while (node) {
+      if (node.matches?.(selector)) return node;
+      node = node.parentElement || node.getRootNode?.()?.host || null;
+    }
+    return null;
+  }
+
+  function parseCourse(raw, id) {
+    const original = clean(raw).replace(/\b(Open|Closed)\b/ig, '').trim();
+    const term = (original.match(/\b(Fall|Winter|Summer|Spring)\s+20\d{2}\b/i) || [])[0] || '';
+    const codeMatch = original.match(/\b([A-Z]{3,6})\s*[-:]?\s*(\d{4}[A-Z]?)\b/i);
+    const code = codeMatch ? `${codeMatch[1]}${codeMatch[2]}`.toUpperCase() : `COURSE${id}`;
+    let name = original
+      .replace(/^\s*(Merge|Crosslist)\s+/i, '')
+      .replace(/\[[\d:\s,]+\]/g, ' ')
+      .replace(/\bXLS[A-Z0-9_-]+\b/ig, ' ')
+      .replace(/\bSP[_-]?\d+\b/ig, ' ')
+      .replace(/\b(Fall|Winter|Summer|Spring)\s+20\d{2}\b/ig, ' ')
+      .replace(/\((LEC|LAB|TUT|SEM|DIS|PRA)(?:\s+[^)]*)?\)/ig, ' ')
+      .replace(new RegExp(`^${code}\\s*[-:]?\\s*`, 'i'), '')
+      .replace(/^\s*[,._-]+|[,._-]+\s*$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!name || name.length < 3) name = code;
+    return { code, name, term, original };
+  }
+
+  function imageFrom(container) {
+    for (const image of container?.querySelectorAll?.('img') || []) {
+      const src = absolute(image.currentSrc || image.src || image.getAttribute('data-src'));
+      if (src && !/avatar|icon|logo/i.test(src)) return src;
+    }
+    for (const node of container?.querySelectorAll ? [container, ...container.querySelectorAll('*')] : []) {
+      try {
+        const match = getComputedStyle(node).backgroundImage?.match(/url\(["']?(.*?)["']?\)/);
+        if (match) return absolute(match[1]);
+      } catch (_) {}
+    }
+    return '';
+  }
+
+  function discoverCoursesFromDom() {
+    const map = new Map();
+    for (const anchor of queryAll('a[href*="/d2l/home/"],[href*="/d2l/home/"]')) {
+      const url = absolute(anchor.getAttribute?.('href') || anchor.href || '');
+      const id = orgUnitIdFrom(url);
+      if (!id) continue;
+      const card = shadowClosest(anchor, 'd2l-enrollment-card,d2l-card,article,li,[role="listitem"],[class*="enrollment"],[class*="course"],[class*="tile"],[class*="card"]') || anchor;
+      const raw = clean(`${card.getAttribute?.('aria-label') || ''} ${card.textContent || ''} ${card.shadowRoot?.textContent || ''}`);
+      if (!raw) continue;
+      const parsed = parseCourse(raw, id);
+      const old = map.get(id);
+      map.set(id, {
+        source_uid: id,
+        course_code: parsed.code,
+        course_name: parsed.name,
+        raw_course_name: parsed.original,
+        term: parsed.term,
+        instructor: '',
+        image_url: imageFrom(card) || old?.image_url || '',
+        brightspace_url: `${location.origin}/d2l/home/${id}`
+      });
+    }
+    return [...map.values()];
+  }
+
+  async function fetchJson(path) {
+    const response = await fetch(path, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store'
+    });
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    if (!contentType.includes('json')) throw new Error(`Expected JSON but received ${contentType || 'unknown content type'}`);
+    return response.json();
+  }
+
+  async function detectApiVersions() {
+    const candidates = [];
+    try {
+      const versions = await fetchJson('/d2l/api/versions/');
+      const rows = Array.isArray(versions) ? versions : versions?.Versions || versions?.versions || [];
+      for (const row of rows) {
+        const product = clean(row.ProductCode || row.productCode || row.Product || '').toLowerCase();
+        const version = clean(row.LatestVersion || row.Version || row.version || '');
+        if (version && (!product || /le|lp/.test(product))) candidates.push(version);
+      }
+    } catch (_) {}
+    // Conservative fallbacks cover older and current Brightspace tenants.
+    for (const version of ['1.82', '1.75', '1.74', '1.67', '1.60', '1.50', '1.48', '1.44']) {
+      if (!candidates.includes(version)) candidates.push(version);
+    }
+    return candidates;
+  }
+
+  async function firstWorking(builders, versions) {
+    const errors = [];
+    for (const version of versions) {
+      for (const build of builders) {
+        const path = build(version);
+        try { return { data: await fetchJson(path), version, path }; }
+        catch (error) { errors.push(`${path}: ${error.message}`); }
+      }
+    }
+    throw new Error(errors.slice(-4).join(' | ') || 'No compatible endpoint found');
+  }
+
+  function htmlToText(value) {
+    if (!value) return '';
+    const html = typeof value === 'string' ? value : value.Html || value.Text || value.html || value.text || '';
+    const template = document.createElement('template');
+    template.innerHTML = String(html);
+    return clean(template.content.textContent || '').slice(0, 120000);
+  }
+
+  function dateValue(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    return clean(value.Date || value.date || value.StartDate || value.startDate || '');
+  }
+
+  function fileInfoFromTopic(topic, orgUnitId, version) {
+    const url = topic.Url || topic.URL || topic.ContentUrl || topic.ContentURL || topic.Location || '';
+    const absoluteUrl = absolute(url);
+    const title = clean(topic.Title || topic.Name || 'Untitled content');
+    const extension = ((title.match(/\.([a-z0-9]{1,8})\b/i) || absoluteUrl.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
+    const topicId = topic.Id || topic.TopicId || topic.Identifier || '';
+    const downloadUrl = topicId ? `${location.origin}/d2l/api/le/${version}/${orgUnitId}/content/topics/${topicId}/file` : '';
+    return { source_url: absoluteUrl || downloadUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
+  }
+
+  function classifyContent(title, url, activityType) {
+    const text = `${title} ${url} ${activityType || ''}`.toLowerCase();
+    const ext = ((title.match(/\.([a-z0-9]{1,8})\b/i) || url.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
+    if (/practice|sample question|review question|worksheet|problem set/.test(text)) return 'practice';
+    if (/assignment|dropbox/.test(text)) return 'assignment';
+    if (/quiz|quizzing/.test(text)) return 'quiz';
+    if (/announcement|news/.test(text)) return 'announcement';
+    if (['py', 'c', 'cpp', 'h', 'java', 'js', 'ts', 'ipynb', 'zip', 'rar', '7z', 'csv', 'xlsx', 'xls'].includes(ext)) return 'resource';
+    if (['pdf', 'ppt', 'pptx'].includes(ext) && /lecture|slides?|week\s*\d+|module\s*\d+|chapter\s*\d+|lesson\s*\d+/i.test(title)) return 'lecture';
+    if (/lecture|slides?|lesson\s*\d+/i.test(title)) return 'lecture';
+    if (['pdf', 'ppt', 'pptx', 'doc', 'docx'].includes(ext)) return 'resource';
+    return 'page';
+  }
+
+  function itemUid(courseId, type, id, fallback) {
+    return clean(`${courseId}|${type}|${id || fallback}`).slice(0, 255);
+  }
+
+  function flattenToc(toc, course, version) {
+    const items = [];
+    const orgUnitId = course.source_uid;
+    const walk = (nodes, parentPath = []) => {
+      if (!Array.isArray(nodes)) return;
+      for (const node of nodes) {
+        const title = clean(node.Title || node.Name || 'Untitled');
+        const id = node.Id || node.ModuleId || node.TopicId || node.Identifier || title;
+        const isModule = Array.isArray(node.Modules) || Array.isArray(node.Topics) || Number(node.Type) === 0 || /module/i.test(clean(node.Type));
+        if (isModule) {
+          const nextPath = title ? [...parentPath, title] : parentPath;
+          walk(node.Modules || node.Children || [], nextPath);
+          walk(node.Topics || node.Content || [], nextPath);
+          continue;
+        }
+        const file = fileInfoFromTopic(node, orgUnitId, version);
+        const activity = node.ActivityType || node.TypeIdentifier || node.Type || '';
+        const type = classifyContent(title, file.source_url, activity);
+        items.push({
+          course: course.course_code,
+          source_uid: itemUid(orgUnitId, 'content', id, file.source_url || title),
+          title,
+          content_type: type,
+          source_url: file.source_url,
+          download_url: file.download_url,
+          file_name: file.file_name,
+          file_ext: file.file_ext,
+          module_name: parentPath.join(' › '),
+          content_text: htmlToText(node.Description || node.Body || node.Instructions || ''),
+          published_at: dateValue(node.StartDate || node.LastModifiedDate || node.ModifiedDate),
+          smart_sync: true
+        });
+      }
+    };
+    const roots = Array.isArray(toc) ? toc : toc.Modules || toc.Items || toc.Content || toc.Objects || [];
+    walk(roots);
+    return items;
+  }
+
+  function listFromPaged(data) {
+    if (Array.isArray(data)) return data;
+    return data?.Objects || data?.Items || data?.Results || data?.objects || data?.items || [];
+  }
+
+  function assignmentItems(data, course) {
+    return listFromPaged(data).map(row => {
+      const id = row.Id || row.FolderId || row.Identifier || row.Name;
+      const title = clean(row.Name || row.Title || 'Assignment');
+      return {
+        course: course.course_code,
+        source_uid: itemUid(course.source_uid, 'assignment', id, title),
+        title,
+        content_type: 'assignment',
+        source_url: `${location.origin}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=${encodeURIComponent(id)}&grpid=0&isprv=0&bp=0&ou=${course.source_uid}`,
+        module_name: clean(row.Category?.Name || row.CategoryName || 'Assignments'),
+        content_text: htmlToText(row.Instructions || row.Description || ''),
+        published_at: dateValue(row.DueDate || row.EndDate || row.StartDate),
+        due_at: dateValue(row.DueDate),
+        smart_sync: true
+      };
+    }).filter(x => x.title);
+  }
+
+  function quizItems(data, course) {
+    return listFromPaged(data).map(row => {
+      const id = row.QuizId || row.Id || row.Identifier || row.Name;
+      const title = clean(row.Name || row.Title || 'Quiz');
+      return {
+        course: course.course_code,
+        source_uid: itemUid(course.source_uid, 'quiz', id, title),
+        title,
+        content_type: 'quiz',
+        source_url: `${location.origin}/d2l/lms/quizzing/user/quiz_summary.d2l?qi=${encodeURIComponent(id)}&ou=${course.source_uid}`,
+        module_name: clean(row.Category?.Name || row.CategoryName || 'Quizzes'),
+        content_text: htmlToText(row.Description || row.Header || ''),
+        published_at: dateValue(row.StartDate || row.DueDate || row.EndDate),
+        due_at: dateValue(row.DueDate || row.EndDate),
+        smart_sync: true
+      };
+    }).filter(x => x.title);
+  }
+
+  function announcementItems(data, course) {
+    return listFromPaged(data).map(row => {
+      const id = row.Id || row.NewsItemId || row.Identifier || row.Title;
+      const title = clean(row.Title || row.Name || 'Announcement');
+      return {
+        course: course.course_code,
+        source_uid: itemUid(course.source_uid, 'announcement', id, title),
+        title,
+        content_type: 'announcement',
+        source_url: `${location.origin}/d2l/lms/news/main.d2l?ou=${course.source_uid}`,
+        module_name: 'Announcements',
+        content_text: htmlToText(row.Body || row.Content || row.Description || ''),
+        published_at: dateValue(row.StartDate || row.CreatedDate || row.LastModifiedDate),
+        smart_sync: true
+      };
+    }).filter(x => x.title);
+  }
+
+  async function apiScanCourse(course) {
+    const versions = await detectApiVersions();
+    const diagnostics = { versionsTried: versions.slice(0, 8), endpoints: {}, errors: {} };
+    const items = [];
+    let successfulSections = 0;
+
+    try {
+      const result = await firstWorking([
+        v => `/d2l/api/le/${v}/${course.source_uid}/content/toc`
+      ], versions);
+      diagnostics.endpoints.content = result.path;
+      const content = flattenToc(result.data, course, result.version);
+      items.push(...content);
+      successfulSections++;
+      diagnostics.contentCount = content.length;
+    } catch (error) { diagnostics.errors.content = error.message; }
+
+    try {
+      const result = await firstWorking([
+        v => `/d2l/api/le/${v}/${course.source_uid}/dropbox/folders/`
+      ], versions);
+      diagnostics.endpoints.assignments = result.path;
+      const assignments = assignmentItems(result.data, course);
+      items.push(...assignments);
+      successfulSections++;
+      diagnostics.assignmentCount = assignments.length;
+    } catch (error) { diagnostics.errors.assignments = error.message; }
+
+    try {
+      const result = await firstWorking([
+        v => `/d2l/api/le/${v}/${course.source_uid}/quizzes/`
+      ], versions);
+      diagnostics.endpoints.quizzes = result.path;
+      const quizzes = quizItems(result.data, course);
+      items.push(...quizzes);
+      successfulSections++;
+      diagnostics.quizCount = quizzes.length;
+    } catch (error) { diagnostics.errors.quizzes = error.message; }
+
+    try {
+      const result = await firstWorking([
+        v => `/d2l/api/le/${v}/${course.source_uid}/news/`
+      ], versions);
+      diagnostics.endpoints.announcements = result.path;
+      const announcements = announcementItems(result.data, course);
+      items.push(...announcements);
+      successfulSections++;
+      diagnostics.announcementCount = announcements.length;
+    } catch (error) { diagnostics.errors.announcements = error.message; }
+
+    const deduped = new Map();
+    for (const item of items) deduped.set(item.source_uid, item);
+    return {
+      ok: successfulSections > 0,
+      authenticated: true,
+      complete: successfulSections >= 3,
+      method: 'brightspace-session-api',
+      diagnostics: { ...diagnostics, successfulSections },
+      items: [...deduped.values()],
+      error: successfulSections ? '' : 'Brightspace API routes were unavailable for this student session.'
+    };
+  }
+
+  async function expandDynamicPage() {
+    let clicks = 0;
+    let stableRounds = 0;
+    let previousCount = -1;
+    for (let round = 0; round < 30; round++) {
+      const button = queryAll('button,a,[role="button"]').find(element => {
+        const text = clean(element.textContent || element.getAttribute?.('aria-label') || '').toLowerCase();
+        const visible = !!(element.offsetWidth || element.offsetHeight || element.getClientRects?.().length);
+        return visible && !element.disabled && /load more|show more|view more|more results/.test(text);
+      });
+      if (button) { button.click(); clicks++; await sleep(900); }
+      else { window.scrollTo(0, document.body.scrollHeight); await sleep(650); }
+      const count = queryAll('a[href],article,li,[role="listitem"]').length;
+      stableRounds = count === previousCount ? stableRounds + 1 : 0;
+      previousCount = count;
+      if (!button && stableRounds >= 3) break;
+    }
+    return clicks;
+  }
+
+  async function domFallbackCourse(course) {
+    const currentOu = orgUnitIdFrom(location.href);
+    if (currentOu !== String(course.source_uid)) {
+      return { ok: false, authenticated: true, complete: false, method: 'dom-fallback', items: [], error: 'DOM fallback requires the course page to be open.' };
+    }
+    const expanded = await expandDynamicPage();
+    const map = new Map();
+    for (const element of queryAll('a[href],[role="link"][href],d2l-link[href]')) {
+      const url = absolute(element.getAttribute?.('href') || '');
+      const title = clean(element.getAttribute?.('aria-label') || element.getAttribute?.('title') || element.textContent || '');
+      if (!url || !title || title.length < 2 || title.length > 500) continue;
+      if (/^(home|content|grades|calendar|help|logout|settings|search)$/i.test(title)) continue;
+      const type = classifyContent(title, url, '');
+      if (type === 'page' && !/\/content\/|\/lessons\//.test(url)) continue;
+      const id = itemUid(course.source_uid, type, '', `${title}|${url}`);
+      map.set(id, {
+        course: course.course_code,
+        source_uid: id,
+        title,
+        content_type: type,
+        source_url: url,
+        module_name: '',
+        content_text: '',
+        published_at: '',
+        smart_sync: true
+      });
+    }
+    return {
+      ok: map.size > 0,
+      authenticated: true,
+      complete: false,
+      method: 'dom-fallback',
+      diagnostics: { expanded, found: map.size },
+      items: [...map.values()],
+      error: map.size ? '' : 'No usable items found in the open course page.'
+    };
+  }
+
+  async function smartScanCourse(course) {
+    const apiResult = await apiScanCourse(course);
+    if (apiResult.ok && apiResult.items.length) return apiResult;
+    const fallback = await domFallbackCourse(course);
+    if (fallback.ok) {
+      fallback.diagnostics = { ...(fallback.diagnostics || {}), apiErrors: apiResult.diagnostics?.errors || {} };
+      return fallback;
+    }
+    return apiResult;
+  }
+
+  async function sessionCheck() {
+    try {
+      const response = await fetch('/d2l/home', { credentials: 'include', redirect: 'follow', cache: 'no-store' });
+      const text = await response.text();
+      const signedOut = /login|sign in|authenticate/i.test(text.slice(0, 5000)) && !/logout|my courses|course home/i.test(text.slice(0, 5000));
+      return signedOut ? { ok: false, error: 'Brightspace appears signed out.' } : { ok: true };
+    } catch (error) {
+      return { ok: false, error: `Could not verify Brightspace session: ${error.message}` };
+    }
+  }
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === 'NEXORA_SESSION_CHECK') { sessionCheck().then(sendResponse); return true; }
+    if (message?.type === 'NEXORA_DISCOVER_COURSES') {
+      (async () => {
+        for (let i = 0; i < 8; i++) {
+          const courses = discoverCoursesFromDom();
+          if (courses.length) return { ok: true, courses, method: 'course-card-dom' };
+          await sleep(600);
+        }
+        return { ok: false, courses: [], error: 'No course cards were found. Open the Brightspace My Courses page.' };
+      })().then(sendResponse);
+      return true;
+    }
+    if (message?.type === 'NEXORA_SMART_SCAN_COURSE') {
+      smartScanCourse(message.course || {}).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message, items: [] }));
+      return true;
+    }
+  });
 })();

@@ -1520,7 +1520,7 @@ def sync_course_content():
     replace_courses = [_normalize_course_code(c) for c in (payload.get("replace_courses") or [])]
     if replace_courses:
         CourseContent.query.filter(CourseContent.user_id == user.id, CourseContent.course_full.in_(replace_courses)).delete(synchronize_session=False)
-        SyncedFile.query.filter(SyncedFile.user_id == user.id, SyncedFile.course_full.in_(replace_courses)).delete(synchronize_session=False)
+        # Smart Sync refreshes metadata only; preserve any user-requested cached files.
         db.session.flush()
     counts = {"added": 0, "updated": 0, "unchanged": 0}
     for item in items[:1200]:
@@ -1583,7 +1583,7 @@ def sync_course_content():
             course_row.content_count = CourseContent.query.filter_by(user_id=user.id, course_full=code).count()
             course_row.updated_at = datetime.utcnow()
     db.session.commit()
-    return jsonify({"ok": True, **counts})
+    return jsonify({"ok": True, **counts, "received": len(items), "replaced_courses": replace_courses})
 
 
 @app.route("/api/updates")
