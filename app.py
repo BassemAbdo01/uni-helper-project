@@ -5,6 +5,7 @@ import urllib.error
 import urllib.parse
 import json
 import hashlib
+import secrets
 from datetime import datetime, date, timedelta
 import calendar as calendar_module
 from uuid import uuid4
@@ -55,6 +56,7 @@ class User(db.Model, UserMixin):
     last_sync = db.Column(db.DateTime, nullable=True)
     sync_status = db.Column(db.String(30), default="never")
     sync_message = db.Column(db.Text, default="Not synchronized yet.")
+    extension_token = db.Column(db.String(128), default="")
 
     tasks = db.relationship("Task", backref="user", lazy=True, cascade="all, delete-orphan")
 
@@ -84,6 +86,53 @@ class Task(db.Model):
     source_updated = db.Column(db.String(80), default="")
     sync_state = db.Column(db.String(30), default="active")
     last_seen_sync = db.Column(db.String(40), default="")
+    completed = db.Column(db.Boolean, default=False)
+
+
+class CourseContent(db.Model):
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    course_full = db.Column(db.String(40), default="OTHER", index=True)
+    title = db.Column(db.Text, nullable=False)
+    content_type = db.Column(db.String(30), default="resource")
+    source_url = db.Column(db.Text, default="")
+    source_uid = db.Column(db.String(255), default="", index=True)
+    content_text = db.Column(db.Text, default="")
+    module_name = db.Column(db.Text, default="")
+    published_at = db.Column(db.String(80), default="")
+    content_hash = db.Column(db.String(64), default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+
+
+class SyncedCourse(db.Model):
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    source_uid = db.Column(db.String(255), default="", index=True)
+    course_code = db.Column(db.String(40), default="OTHER", index=True)
+    course_name = db.Column(db.Text, default="")
+    term = db.Column(db.String(120), default="")
+    instructor = db.Column(db.String(255), default="")
+    image_url = db.Column(db.Text, default="")
+    brightspace_url = db.Column(db.Text, default="")
+    content_count = db.Column(db.Integer, default=0)
+    source_hash = db.Column(db.String(64), default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AcademicUpdate(db.Model):
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    course_full = db.Column(db.String(40), default="OTHER")
+    update_type = db.Column(db.String(40), default="content")
+    title = db.Column(db.Text, nullable=False)
+    detail = db.Column(db.Text, default="")
+    related_uid = db.Column(db.String(255), default="")
+    is_read = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 @login_manager.user_loader
@@ -97,6 +146,7 @@ def ensure_schema_columns():
         "user": {
             "sync_status": "VARCHAR(30) DEFAULT 'never'",
             "sync_message": "TEXT DEFAULT 'Not synchronized yet.'",
+            "extension_token": "VARCHAR(128) DEFAULT ''",
         },
         "task": {
             "source_uid": "VARCHAR(255) DEFAULT ''",
@@ -104,6 +154,7 @@ def ensure_schema_columns():
             "source_updated": "VARCHAR(80) DEFAULT ''",
             "sync_state": "VARCHAR(30) DEFAULT 'active'",
             "last_seen_sync": "VARCHAR(40) DEFAULT ''",
+            "completed": "BOOLEAN DEFAULT FALSE",
         },
     }
 
@@ -144,6 +195,7 @@ def task_to_dict(t):
         "source_updated": t.source_updated or "",
         "sync_state": t.sync_state or "active",
         "last_seen_sync": t.last_seen_sync or "",
+        "completed": bool(t.completed),
     }
 
 
@@ -174,6 +226,7 @@ def add_task(task_data):
         source_updated=task_data.get("source_updated", ""),
         sync_state=task_data.get("sync_state", "active"),
         last_seen_sync=task_data.get("last_seen_sync", ""),
+        completed=task_data.get("completed", False),
     )
 
     db.session.add(task)
@@ -422,7 +475,7 @@ def build_grouped_cards(raw_tasks):
     grouped = {}
 
     for t in raw_tasks:
-        if t.get("kind") == "junk":
+        if t.get("kind") == "junk" or t.get("completed"):
             continue
 
         course_full = (t.get("course_full") or "OTHER").strip().upper() or "OTHER"
@@ -1117,11 +1170,48 @@ def home():
             course_map[course]["next_title"] = c.get("title", "Task")
             course_map[course]["next_due"] = c.get("main_due_pretty", "")
 
-    course_cards = list(course_map.values())[:4]
+    synced_courses = SyncedCourse.query.filter_by(user_id=current_user.id).order_by(SyncedCourse.updated_at.desc()).all()
+    for synced in synced_courses:
+        code = synced.course_code or "OTHER"
+        if code not in course_map:
+            course_map[code] = {
+                "course": code, "total": synced.content_count or 0,
+                "next_title": "", "next_due": "", "progress": 0,
+            }
+        course_map[code]["title"] = synced.course_name or code
+        course_map[code]["image_url"] = synced.image_url or ""
+        course_map[code]["brightspace_url"] = synced.brightspace_url or ""
+        course_map[code]["term"] = synced.term or ""
+        course_map[code]["content_count"] = synced.content_count or 0
 
-    for course_card in course_cards:
+    course_cards = list(course_map.values())[:8]
+
+    course_titles = {
+        "SYSC2004": "Object-Oriented Programming",
+        "SYSC 2004": "Object-Oriented Programming",
+        "ELEC2507": "Circuits & Electronics",
+        "ELEC 2507": "Circuits & Electronics",
+        "ECOR1034": "Engineering Economy",
+        "ECOR 1034": "Engineering Economy",
+        "MATH2004": "Linear Algebra",
+        "MATH 2004": "Linear Algebra",
+        "MATH2005": "Differential Equations",
+        "MATH 2005": "Differential Equations",
+        "BIOL1103": "Cell Biology",
+        "BIOL 1103": "Cell Biology",
+        "CCDP2100": "Communication Skills",
+        "CCDP 2100": "Communication Skills",
+        "OTHER": "General Coursework",
+    }
+
+    course_art = ["code", "circuit", "economy", "math"]
+    for index, course_card in enumerate(course_cards):
         total = course_card["total"]
+        compact_code = course_card["course"].replace(" ", "").upper()
+        course_card["title"] = course_card.get("title") or course_titles.get(course_card["course"], course_titles.get(compact_code, "Course Workspace"))
         course_card["progress"] = min(95, max(25, 100 - (total * 8)))
+        course_card["art"] = course_art[index % len(course_art)]
+        course_card["due_status"] = course_card.get("next_due") or "No date"
 
     task_preview = dashboard_cards[:6]
 
@@ -1173,6 +1263,7 @@ def home():
     prefixes, fulls = get_course_options(raw_tasks)
     feed_url = load_feed_url()
     last_sync = load_last_sync()
+    academic_updates = AcademicUpdate.query.filter_by(user_id=current_user.id).order_by(AcademicUpdate.created_at.desc()).limit(4).all()
 
     if last_sync:
         last_sync_text = last_sync.strftime("%b %d, %Y at %I:%M %p")
@@ -1196,7 +1287,291 @@ def home():
         upcoming_cards=upcoming_cards,
         month_title=month_title,
         month_days=month_days,
+        academic_updates=academic_updates,
     )
+
+
+@app.route("/api/tasks/<group_id>/complete", methods=["POST"])
+@login_required
+def complete_task_group(group_id):
+    tasks = Task.query.filter_by(user_id=current_user.id, group_id=group_id).all()
+    if not tasks:
+        return jsonify({"error": "Task not found."}), 404
+    completed = bool((request.get_json(silent=True) or {}).get("completed", True))
+    for task in tasks:
+        task.completed = completed
+    db.session.commit()
+    return jsonify({"ok": True, "completed": completed, "group_id": group_id})
+
+
+@app.route("/api/start-my-day", methods=["GET"])
+@login_required
+def start_my_day():
+    cards = sort_cards(build_grouped_cards(load_tasks()))
+    plan = []
+    total_minutes = 0
+    for card in cards[:5]:
+        dleft = days_until(card.get("main_due_raw", ""))
+        minutes = 60 if dleft is not None and dleft <= 1 else 45 if dleft is not None and dleft <= 3 else 30
+        total_minutes += minutes
+        plan.append({
+            "group_id": card.get("group_id", ""),
+            "title": card.get("title", "Task"),
+            "course": card.get("course_full", "OTHER"),
+            "due": pretty_date(card.get("main_due_raw", "")) or "No date",
+            "minutes": minutes,
+        })
+    return jsonify({"plan": plan, "total_minutes": total_minutes, "count": len(plan)})
+
+
+
+def _normalize_course_code(value):
+    detected = extract_course_from_text(value or "")
+    if detected:
+        return detected
+    cleaned = re.sub(r"[^A-Za-z0-9]", "", value or "").upper()
+    return cleaned or "OTHER"
+
+
+def _content_payload_hash(payload):
+    raw = json.dumps({
+        "title": payload.get("title", ""),
+        "type": payload.get("content_type", "resource"),
+        "url": payload.get("source_url", ""),
+        "text": payload.get("content_text", ""),
+        "module": payload.get("module_name", ""),
+        "published": payload.get("published_at", ""),
+    }, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _extension_user_from_request():
+    auth = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ").strip()
+    if not token:
+        return None
+    return User.query.filter_by(extension_token=token).first()
+
+
+@app.route("/course/<course_code>")
+@login_required
+def course_workspace(course_code):
+    course = _normalize_course_code(course_code)
+    all_cards = sort_cards(build_grouped_cards(load_tasks()))
+    assignments = [c for c in all_cards if _normalize_course_code(c.get("course_full")) == course]
+    contents = CourseContent.query.filter_by(user_id=current_user.id, course_full=course).order_by(CourseContent.updated_at.desc()).all()
+    updates = AcademicUpdate.query.filter_by(user_id=current_user.id, course_full=course).order_by(AcademicUpdate.created_at.desc()).limit(12).all()
+
+    lectures = [c for c in contents if c.content_type in ("lecture", "module", "page")]
+    resources = [c for c in contents if c.content_type in ("file", "resource", "link")]
+    quizzes = [c for c in contents if c.content_type == "quiz"]
+    announcements = [c for c in contents if c.content_type == "announcement"]
+
+    next_assignment = assignments[0] if assignments else None
+    return render_template(
+        "course_workspace.html",
+        user=current_user,
+        course=course,
+        assignments=assignments,
+        contents=contents,
+        lectures=lectures,
+        resources=resources,
+        quizzes=quizzes,
+        announcements=announcements,
+        updates=updates,
+        next_assignment=next_assignment,
+    )
+
+
+@app.route("/api/sync/extension-key", methods=["GET", "POST"])
+@login_required
+def extension_key():
+    if request.method == "POST" or not current_user.extension_token:
+        current_user.extension_token = secrets.token_urlsafe(32)
+        db.session.commit()
+    return jsonify({"token": current_user.extension_token})
+
+
+@app.route("/api/sync/courses", methods=["POST"])
+def sync_courses():
+    user = _extension_user_from_request()
+    if not user:
+        return jsonify({"error": "Invalid or missing extension token."}), 401
+
+    payload = request.get_json(silent=True) or {}
+    courses = payload.get("courses") or []
+    if not isinstance(courses, list):
+        return jsonify({"error": "courses must be a list."}), 400
+
+    counts = {"added": 0, "updated": 0, "unchanged": 0}
+    imported = []
+    for item in courses[:80]:
+        url = str(item.get("brightspace_url") or item.get("url") or "").strip()[:4000]
+        raw_code = str(item.get("course_code") or item.get("code") or item.get("title") or "OTHER")
+        code = _normalize_course_code(raw_code)
+        name = str(item.get("course_name") or item.get("name") or item.get("title") or code).strip()[:1000]
+        source_uid = str(item.get("source_uid") or url or f"{code}|{name}")[:255]
+        data = {
+            "course_code": code,
+            "course_name": name,
+            "term": str(item.get("term") or "")[:120],
+            "instructor": str(item.get("instructor") or "")[:255],
+            "image_url": str(item.get("image_url") or "")[:4000],
+            "brightspace_url": url,
+        }
+        fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        existing = SyncedCourse.query.filter_by(user_id=user.id, source_uid=source_uid).first()
+        if not existing and code != "OTHER":
+            existing = SyncedCourse.query.filter_by(user_id=user.id, course_code=code).first()
+        if existing:
+            if existing.source_hash == fingerprint:
+                counts["unchanged"] += 1
+            else:
+                existing.source_uid = source_uid
+                existing.course_code = code
+                existing.course_name = name
+                existing.term = data["term"]
+                existing.instructor = data["instructor"]
+                existing.image_url = data["image_url"]
+                existing.brightspace_url = url
+                existing.source_hash = fingerprint
+                existing.updated_at = datetime.utcnow()
+                counts["updated"] += 1
+        else:
+            db.session.add(SyncedCourse(
+                id=uuid4().hex, user_id=user.id, source_uid=source_uid,
+                course_code=code, course_name=name, term=data["term"],
+                instructor=data["instructor"], image_url=data["image_url"],
+                brightspace_url=url, source_hash=fingerprint,
+            ))
+            counts["added"] += 1
+            db.session.add(AcademicUpdate(
+                id=uuid4().hex, user_id=user.id, course_full=code,
+                update_type="new_course", title=f"Course imported: {code}",
+                detail=name, related_uid=source_uid,
+            ))
+        imported.append({"course_code": code, "course_name": name, "brightspace_url": url})
+
+    db.session.commit()
+    return jsonify({"ok": True, **counts, "courses": imported})
+
+
+@app.route("/api/sync/status")
+def extension_sync_status():
+    user = _extension_user_from_request()
+    if not user:
+        return jsonify({"error": "Invalid or missing extension token."}), 401
+    courses = SyncedCourse.query.filter_by(user_id=user.id).order_by(SyncedCourse.updated_at.desc()).all()
+    content_total = CourseContent.query.filter_by(user_id=user.id).count()
+    return jsonify({
+        "ok": True,
+        "course_count": len(courses),
+        "content_count": content_total,
+        "courses": [{
+            "code": c.course_code, "name": c.course_name, "image_url": c.image_url,
+            "url": c.brightspace_url, "updated_at": c.updated_at.isoformat() if c.updated_at else ""
+        } for c in courses]
+    })
+
+
+@app.route("/api/sync/content", methods=["POST"])
+def sync_course_content():
+    user = _extension_user_from_request()
+    if not user:
+        return jsonify({"error": "Invalid or missing extension token."}), 401
+
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("items") or []
+    if not isinstance(items, list):
+        return jsonify({"error": "items must be a list."}), 400
+
+    counts = {"added": 0, "updated": 0, "unchanged": 0}
+    for item in items[:250]:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        course = _normalize_course_code(item.get("course") or item.get("course_full") or "OTHER")
+        source_url = str(item.get("source_url") or "")[:4000]
+        source_uid = str(item.get("source_uid") or source_url or f"{course}|{title}")[:255]
+        item_data = {
+            "title": title,
+            "content_type": str(item.get("content_type") or "resource")[:30],
+            "source_url": source_url,
+            "content_text": str(item.get("content_text") or "")[:120000],
+            "module_name": str(item.get("module_name") or "")[:1000],
+            "published_at": str(item.get("published_at") or "")[:80],
+        }
+        fingerprint = _content_payload_hash(item_data)
+        existing = CourseContent.query.filter_by(user_id=user.id, source_uid=source_uid).first()
+        if existing:
+            if existing.content_hash == fingerprint:
+                counts["unchanged"] += 1
+                continue
+            existing.course_full = course
+            existing.title = title
+            existing.content_type = item_data["content_type"]
+            existing.source_url = source_url
+            existing.content_text = item_data["content_text"]
+            existing.module_name = item_data["module_name"]
+            existing.published_at = item_data["published_at"]
+            existing.content_hash = fingerprint
+            existing.updated_at = datetime.utcnow()
+            counts["updated"] += 1
+            db.session.add(AcademicUpdate(
+                id=uuid4().hex, user_id=user.id, course_full=course,
+                update_type="content_updated", title=f"{title} updated",
+                detail=f"{item_data['content_type'].title()} content changed in Brightspace.",
+                related_uid=source_uid,
+            ))
+        else:
+            db.session.add(CourseContent(
+                id=uuid4().hex, user_id=user.id, course_full=course,
+                title=title, content_type=item_data["content_type"],
+                source_url=source_url, source_uid=source_uid,
+                content_text=item_data["content_text"], module_name=item_data["module_name"],
+                published_at=item_data["published_at"], content_hash=fingerprint,
+            ))
+            counts["added"] += 1
+            db.session.add(AcademicUpdate(
+                id=uuid4().hex, user_id=user.id, course_full=course,
+                update_type="new_content", title=f"New {item_data['content_type']}: {title}",
+                detail=item_data["module_name"] or "Imported from Brightspace.",
+                related_uid=source_uid,
+            ))
+    # Keep course cards aware of how much content was imported.
+    touched_courses = { _normalize_course_code((item or {}).get("course") or (item or {}).get("course_full") or "OTHER") for item in items if isinstance(item, dict) }
+    for code in touched_courses:
+        course_row = SyncedCourse.query.filter_by(user_id=user.id, course_code=code).first()
+        if course_row:
+            course_row.content_count = CourseContent.query.filter_by(user_id=user.id, course_full=code).count()
+            course_row.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, **counts})
+
+
+@app.route("/api/updates")
+@login_required
+def academic_updates_api():
+    updates = AcademicUpdate.query.filter_by(user_id=current_user.id).order_by(AcademicUpdate.created_at.desc()).limit(20).all()
+    return jsonify({"updates": [{
+        "id": u.id, "course": u.course_full, "type": u.update_type,
+        "title": u.title, "detail": u.detail,
+        "created_at": u.created_at.isoformat() if u.created_at else "",
+        "is_read": bool(u.is_read),
+    } for u in updates]})
+
+
+@app.route("/api/course/<course_code>/ai-context")
+@login_required
+def course_ai_context(course_code):
+    course = _normalize_course_code(course_code)
+    contents = CourseContent.query.filter_by(user_id=current_user.id, course_full=course).order_by(CourseContent.updated_at.desc()).limit(20).all()
+    cards = [c for c in sort_cards(build_grouped_cards(load_tasks())) if _normalize_course_code(c.get("course_full")) == course]
+    return jsonify({
+        "course": course,
+        "content": [{"title": c.title, "type": c.content_type, "module": c.module_name, "text": (c.content_text or "")[:5000]} for c in contents],
+        "assignments": [{"title": c.get("title"), "due": c.get("main_due_raw")} for c in cards],
+    })
 
 
 @app.route("/calendar")

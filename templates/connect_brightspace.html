@@ -68,8 +68,8 @@
     <main class="main">
       <div class="topbar">
         <div>
-          <div class="page-title">Connect Brightspace</div>
-          <div class="page-sub">Set up automatic Brightspace calendar syncing.</div>
+          <div class="page-title">Nexora Sync</div>
+          <div class="page-sub">Import your courses, course images, deadlines, lectures, assignments, quizzes, resources, and announcements.</div>
         </div>
       </div>
 
@@ -96,6 +96,23 @@
 
           <a class="btn" href="/sync" style="display:inline-block; margin-top:12px;">Sync now</a>
         </div>
+      </div>
+
+
+      <div class="card" style="margin-top:18px;">
+        <div class="h2">Nexora Sync Extension</div>
+        <div style="margin:14px 0;padding:14px;border-radius:14px;background:linear-gradient(135deg,rgba(111,76,255,.15),rgba(41,199,255,.08));border:1px solid rgba(130,105,255,.3)">
+          <strong style="display:block;margin-bottom:5px">Automatic course discovery</strong>
+          <span class="muted">Open Brightspace through Nexora, then the extension discovers your enrolled courses and imports each course image and visible content into the correct workspace.</span>
+          <a class="btn" href="https://brightspace.carleton.ca/d2l/home" target="_blank" rel="noopener" style="display:inline-block;margin-top:12px">Open Brightspace and start import</a>
+        </div>
+        <div class="muted">Install the extension, generate a key, then click “Open Brightspace and start import.” It first copies your courses and images, then scans course sections and routes content into Lectures, Assignments, Quizzes, Resources, and Announcements.</div>
+        <button class="btn" id="generateExtensionKey" type="button" style="margin-top:14px;">Generate extension key</button>
+        <div id="extensionKeyBox" style="display:none;margin-top:12px;padding:12px;border-radius:12px;background:rgba(125,100,255,.08);border:1px solid rgba(125,100,255,.25)">
+          <div class="muted" style="margin-bottom:6px;">Paste this key into the Nexora Sync browser extension:</div>
+          <code id="extensionKey" style="display:block;word-break:break-all;user-select:all"></code>
+        </div>
+        <p class="muted" style="margin-top:12px;">The extension uses the student’s existing Brightspace session. Nexora never receives or stores their Brightspace password.</p>
       </div>
 
       <div class="card" style="margin-top:18px;">
@@ -134,6 +151,24 @@
         applyTheme(nextTheme);
       });
     }
+
+const extensionButton = document.getElementById("generateExtensionKey");
+if(extensionButton){
+  extensionButton.addEventListener("click", async function(){
+    extensionButton.disabled = true;
+    extensionButton.textContent = "Generating…";
+    try{
+      const response = await fetch("/api/sync/extension-key", {method:"POST"});
+      const data = await response.json();
+      document.getElementById("extensionKey").textContent = data.token || "";
+      document.getElementById("extensionKeyBox").style.display = "block";
+      extensionButton.textContent = "Regenerate extension key";
+    }catch(error){
+      extensionButton.textContent = "Could not generate key";
+    }
+    extensionButton.disabled = false;
+  });
+}
 
 const accountButton = document.getElementById("accountButton");
 const accountDropdown = document.getElementById("accountDropdown");

@@ -1,635 +1,300 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Uni Helper</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080914">
+  <title>Nexora · Mission Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='nexora-target.css') }}">
 </head>
+<body class="nxv2-page">
+<canvas id="ambientCanvas" class="nxv2-ambient" aria-hidden="true"></canvas>
+<div class="nxv2-shell">
+  <aside class="nxv2-sidebar">
+    <a class="nxv2-brand" href="/dashboard" aria-label="Nexora Mission Control">
+      <span class="nxv2-logo"><i></i><b>◆</b></span>
+      <span><strong>NEXORA</strong><small>AI Academic OS</small></span>
+    </a>
 
-<body class="dash-v3-page">
-  <div class="cosmos" aria-hidden="true">
-    {% for n in range(1, 29) %}<i class="ambient-star star-{{ n }}"></i>{% endfor %}
-    <i class="space-dust dust-a"></i><i class="space-dust dust-b"></i><i class="space-dust dust-c"></i>
-  </div>
-  <div class="dash-v3-shell">
-    <aside class="dash-v3-sidebar">
-      <a class="dash-v3-brand" href="/">
-        <div class="dash-v3-brand-mark">U</div>
-        <div>
-          <strong>Uni Helper</strong>
-          <span>Student OS</span>
-        </div>
-      </a>
+    <nav class="nxv2-nav" aria-label="Primary navigation">
+      <a class="active" href="/dashboard"><span>⌂</span><b>Mission Control</b><i></i></a>
+      <a href="/dashboard?view=all#tasks"><span>▦</span><b>Planner</b><i></i></a>
+      <a href="/calendar"><span>□</span><b>Calendar</b><i></i></a>
+      <a href="#courses"><span>▣</span><b>Courses</b><i></i></a>
+      <a href="/dashboard?view=all#tasks"><span>☑</span><b>Assignments</b><i></i></a>
+      <a href="#analytics"><span>⌁</span><b>Analytics</b><i></i></a>
+      <button id="aiNav" type="button"><span>✦</span><b>AI Assistant</b><i></i></button>
+      <a href="{{ url_for('connect_brightspace') }}"><span>↻</span><b>Nexora Sync</b><i></i></a>
+      <a href="#courses"><span>◉</span><b>Resources</b><i></i></a>
+      <a href="/settings"><span>⚙</span><b>Settings</b><i></i></a>
+    </nav>
 
-      <nav class="dash-v3-nav">
-        <a class="dash-v3-nav-item active" href="/dashboard?view={{ view }}&course={{ course_filter }}&deadlines={{ deadlines_only }}">
-          <span>⌂</span> Dashboard
-        </a>
-        <a class="dash-v3-nav-item" href="/calendar">
-          <span>◷</span> Calendar
-        </a>
-        <a class="dash-v3-nav-item" href="#courses">
-          <span>▣</span> Courses
-        </a>
-        <a class="dash-v3-nav-item" href="#tasks">
-          <span>☷</span> Tasks
-        </a>
-        <a class="dash-v3-nav-item" href="{{ url_for('connect_brightspace') }}">
-          <span>↻</span> Brightspace
-        </a>
-      </nav>
-
-      <div class="sidebar-tools">
-        <button class="gemini-launcher" id="geminiLauncher" type="button">
-          <span class="gemini-logo" aria-hidden="true">✦</span>
-          <span><strong>Nexora AI</strong><small>Gemini · Academic AI</small></span><em>↗</em>
-        </button>
-        <a class="dash-v3-nav-item" href="/settings"><span>⚙</span> Settings</a>
+    <section class="nxv2-sync-card">
+      <div class="nxv2-sync-heading"><span><i></i>Nexora Sync</span><button type="button" aria-label="Hide sync card">×</button></div>
+      {% if feed_url %}
+      <div class="nxv2-sync-state"><b>Connected</b><span>Live</span></div>
+      <p>Last synced {{ last_sync_text }}</p>
+      <div class="nxv2-sync-events">
+        <span><i>✓</i> Deadline feed connected</span>
+        <span><i>✓</i> Changes update on refresh</span>
+        <span><i>✓</i> AI context ready</span>
       </div>
+      <a href="{{ url_for('connect_brightspace') }}">Open Sync Center <span>→</span></a>
+      {% else %}
+      <div class="nxv2-sync-state disconnected"><b>Not connected</b><span>Setup</span></div>
+      <p>Connect Brightspace to import your academic deadlines.</p>
+      <a href="{{ url_for('connect_brightspace') }}">Connect Brightspace <span>→</span></a>
+      {% endif %}
+    </section>
 
-      <div class="dash-v3-sidebar-bottom">
-        <div class="account-menu">
-          <button class="account-button dash-v3-account-button" id="accountButton" type="button">
-            <div class="account-avatar dash-v3-account-avatar">
-              {{ user.name[0]|upper if user and user.name else "U" }}
-            </div>
-
-            <div class="account-text">
-              <div class="account-name">{{ user.name if user else "Student" }}</div>
-              <div class="account-email">{{ user.email if user else "" }}</div>
-            </div>
-
-            <div class="account-caret">⌄</div>
-          </button>
-
-          <div class="account-dropdown" id="accountDropdown">
-            <a href="/profile">Profile</a>
-            {% if user and user.email == "bassemtamer2016@gmail.com" %}
-              <a href="/admin/feedback">Feedback</a>
-            {% else %}
-              <a href="/feedback">Feedback</a>
-            {% endif %}
-            <a href="/settings">Settings</a>
-            <a class="logout-link" href="/logout">Log out</a>
-          </div>
-        </div>
-
-        <button class="theme-toggle dash-v3-theme-toggle" id="themeToggle" type="button">
-          ☀️ Light mode
-        </button>
-      </div>
-    </aside>
-
-    <main class="dash-v3-main">
-      <header class="dash-v3-topbar clean-topbar">
-        <div class="topbar-context"><span></span><div><strong>Command Center</strong><small>Your semester, beautifully organized.</small></div></div>
-        <div class="dash-v3-tabs">
-          <a class="dash-v3-tab {% if view=='today' %}active{% endif %}" href="/dashboard?view=today&course={{ course_filter }}&deadlines={{ deadlines_only }}">Today</a>
-          <a class="dash-v3-tab {% if view=='week' %}active{% endif %}" href="/dashboard?view=week&course={{ course_filter }}&deadlines={{ deadlines_only }}">Week</a>
-          <a class="dash-v3-tab {% if view=='all' %}active{% endif %}" href="/dashboard?view=all&course={{ course_filter }}&deadlines={{ deadlines_only }}">All</a>
-          <a class="dash-v3-tab {% if view=='archive' %}active{% endif %}" href="/dashboard?view=archive&course={{ course_filter }}&deadlines={{ deadlines_only }}">Archive</a>
-        </div>
-      </header>
-
-      <section class="command-strip ai-command-strip">
-        <div class="command-strip-copy">
-          <span class="command-kicker"><i></i> NEXORA INTELLIGENCE</span>
-          <strong>What do you want to accomplish?</strong>
-          <p>Plan the day, understand a topic, or turn your deadlines into a study plan.</p>
-        </div>
-        <div class="command-input">
-          <span>✦</span>
-          <input id="copilotPrompt" type="text" placeholder="Ask Copilot about your semester...">
-          <button id="copilotSend" type="button">Ask <kbd>↵</kbd></button>
-        </div>
-        <div class="ai-suggestions" aria-label="Copilot suggestions">
-          <button type="button" data-prompt="Plan my study day">Plan my day</button>
-          <button type="button" data-prompt="What is due next?">Next deadlines</button>
-          <button type="button" data-prompt="Show my overdue work">Rescue overdue work</button>
-        </div>
-      </section>
-
-      <section class="dash-v3-grid">
-        <section class="dash-v3-welcome dash-v3-card">
-          <div class="dash-v3-welcome-copy">
-            <span class="briefing-label">YOUR DAILY BRIEFING</span>
-            <h1>Good to have you back,<br>{{ user.name if user else "Student" }}.</h1>
-            <p>
-              Your semester is under control. Here is what deserves your attention today.
-              <span id="clock">--:--</span>
-              <span>•</span>
-              <span id="dateLabel">---</span>
-            </p>
-            <div class="briefing-actions">
-              <a href="#tasks">Review priorities</a>
-              <a class="quiet" href="/calendar">Open calendar</a>
-            </div>
-          </div>
-
-          <div class="intelligence-core ai-status-card" aria-hidden="true">
-            <div class="ai-status-mark">✦</div>
-            <div><small>NEXORA COPILOT</small><strong>Ready to help</strong><span><i></i> Live semester context</span></div>
-          </div>
-        </section>
-
-        <section class="dash-v3-calendar dash-v3-card">
-          <div class="dash-v3-card-head">
-            <div>
-              <h2>{{ month_title }}</h2>
-              <p>Calendar preview</p>
-            </div>
-            <a href="/calendar">Open</a>
-          </div>
-
-          <div class="dash-v3-calendar-grid">
-            <span>Sun</span>
-            <span>Mon</span>
-            <span>Tue</span>
-            <span>Wed</span>
-            <span>Thu</span>
-            <span>Fri</span>
-            <span>Sat</span>
-
-            {% for d in month_days %}
-              <div class="{% if d.is_today %}today{% endif %} {% if d.has_deadline %}deadline{% endif %}">
-                {{ d.day }}
-              </div>
-            {% endfor %}
-          </div>
-        </section>
-
-        <section class="dash-v3-stats-row">
-          <div class="dash-v3-stat dash-v3-card">
-            <div class="dash-v3-stat-icon purple">☷</div>
-            <div>
-              <strong>{{ summary.week }}</strong>
-              <span>This week</span>
-              <p>Active deadlines</p>
-            </div>
-          </div>
-
-          <div class="dash-v3-stat dash-v3-card">
-            <div class="dash-v3-stat-icon blue">◷</div>
-            <div>
-              <strong>{{ groups["today"]|length if groups["today"] else 0 }}</strong>
-              <span>Due today</span>
-              <p>Priority queue</p>
-            </div>
-          </div>
-
-          <div class="dash-v3-stat dash-v3-card">
-            <div class="dash-v3-stat-icon orange">☑</div>
-            <div>
-              <strong>{{ groups["overdue"]|length if groups["overdue"] else 0 }}</strong>
-              <span>Needs attention</span>
-              <p>Overdue work</p>
-            </div>
-          </div>
-
-          <div class="dash-v3-stat dash-v3-card">
-            <div class="dash-v3-stat-icon green">✓</div>
-            <div>
-              <strong>
-                {% if summary.week == 0 %}
-                  100%
-                {% else %}
-                  {{ 100 - (summary.urgent * 10) if 100 - (summary.urgent * 10) > 0 else 10 }}%
-                {% endif %}
-              </strong>
-              <span>Readiness</span>
-              <p>Weekly health</p>
-            </div>
-          </div>
-        </section>
-
-        <section class="dash-v3-courses dash-v3-card" id="courses">
-          <div class="dash-v3-card-head">
-            <div>
-              <h2>Your Courses</h2>
-              <p>Active courses and next deadlines.</p>
-            </div>
-          </div>
-
-          <div class="dash-v3-course-list">
-            {% if course_cards and course_cards|length > 0 %}
-              {% for c in course_cards %}
-                <div class="dash-v3-course-item">
-                  <div class="dash-v3-course-icon">{{ c.course[:1] }}</div>
-
-                  <div class="dash-v3-course-main">
-                    <strong>{{ c.course }}</strong>
-                    <div class="dash-v3-course-bar">
-                      <span style="width: {{ c.progress }}%;"></span>
-                    </div>
-                  </div>
-
-                  <div class="dash-v3-course-next">
-                    <span>Next: {{ c.next_title }}</span>
-                    <small>{{ c.next_due if c.next_due else "No date" }}</small>
-                  </div>
-                </div>
-              {% endfor %}
-            {% else %}
-              <div class="dash-v3-empty">
-                No courses yet. Connect Brightspace or add a task.
-              </div>
-            {% endif %}
-          </div>
-        </section>
-
-        <section class="dash-v3-tasks dash-v3-card" id="tasks">
-          <div class="dash-v3-card-head">
-            <div>
-              <h2>Tasks</h2>
-              <p>Priority task preview.</p>
-            </div>
-            <a href="/dashboard?view=all&course={{ course_filter }}&deadlines={{ deadlines_only }}">View all</a>
-          </div>
-
-          <div class="dash-v3-task-list">
-            {% if task_preview and task_preview|length > 0 %}
-              {% for t in task_preview %}
-                <div class="dash-v3-task-item">
-                  <span class="dash-v3-check"></span>
-
-                  <div>
-                    <strong>{{ t.title }}</strong>
-                    <small>{{ t.course_full }}{% if t.main_due_pretty %} • {{ t.main_due_pretty }}{% endif %}</small>
-                  </div>
-
-                  <em class="{{ t.status }}">{{ t.status_label }}</em>
-                </div>
-              {% endfor %}
-            {% else %}
-              <div class="dash-v3-empty">
-                No tasks with this filter.
-              </div>
-            {% endif %}
-          </div>
-        </section>
-
-        <section class="dash-v3-focus dash-v3-card">
-          <div class="dash-v3-card-head">
-            <div>
-              <h2>Focus Timer</h2>
-              <p>Study session</p>
-            </div>
-          </div>
-
-          <div class="dash-v3-focus-time" id="focusTime">25:00</div>
-
-          <div class="timer-controls dash-v3-timer-controls">
-            <input id="focusMinutes" type="number" min="1" max="180" value="25">
-            <span>min</span>
-          </div>
-
-          <div class="timer-buttons dash-v3-timer-buttons">
-            <button class="btn small" id="startTimer" type="button">Start</button>
-            <button class="btn small secondary" id="resetTimer" type="button">Reset</button>
-          </div>
-        </section>
-
-        <section class="dash-v3-upcoming dash-v3-card">
-          <div class="dash-v3-card-head">
-            <div>
-              <h2>Upcoming Deadlines</h2>
-              <p>Important deadlines at a glance.</p>
-            </div>
-          </div>
-
-          <div class="dash-v3-upcoming-row">
-            {% if upcoming_cards and upcoming_cards|length > 0 %}
-              {% for u in upcoming_cards %}
-                <div class="dash-v3-upcoming-item {{ u.status }}">
-                  <span>{{ u.due_label }}</span>
-                  <strong>{{ u.title }}</strong>
-                  <p>{{ u.course_full }}</p>
-                  <small>{{ u.due_pretty }}</small>
-                </div>
-              {% endfor %}
-            {% else %}
-              <div class="dash-v3-empty">
-                No upcoming deadlines yet.
-              </div>
-            {% endif %}
-          </div>
-        </section>
-
-        <section class="dash-v3-quick dash-v3-card" id="brightspace">
-          <div class="dash-v3-card-head">
-            <div>
-              <h2>Quick Add</h2>
-              <p>Add anything not in Brightspace.</p>
-            </div>
-          </div>
-
-          <form method="POST" class="dash-v3-form">
-            <input type="text" name="title" placeholder="Task title" required>
-            <input type="text" name="course" placeholder="Course optional">
-            <input type="date" name="due">
-            <button type="submit">Add task</button>
-          </form>
-
-          <div class="dash-v3-sync-box" id="brightspace">
-            <div class="dash-v3-sync-copy">
-              <span>Brightspace Sync</span>
-              <strong>{% if feed_url %}Connected · Auto-sync on{% else %}Not connected{% endif %}</strong>
-              {% if feed_url %}
-                <small>Checks automatically every 30 minutes while you use Nexora.</small>
-                <small>Last successful sync: {{ last_sync_text }}</small>
-              {% else %}
-                <small>Connect your calendar feed to enable automatic deadline syncing.</small>
-              {% endif %}
-            </div>
-
-            {% if feed_url %}
-              <a href="{{ url_for('sync_now') }}">Sync now</a>
-            {% else %}
-              <a href="{{ url_for('connect_brightspace') }}">Connect</a>
-            {% endif %}
-          </div>
-        </section>
-      </section>
-    </main>
-  </div>
-
-  <aside class="copilot-workspace" id="copilotWorkspace" aria-label="Nexora AI Copilot" aria-hidden="true">
-    <header>
-      <div class="copilot-avatar"><span>✦</span><i></i></div>
-      <div><small>GEMINI · NEXORA AI</small><strong>Nexora Assistant</strong><p>Conversation, academic help & semester context</p></div>
-      <button id="copilotClose" type="button" aria-label="Close Copilot">×</button>
-    </header>
-    <div class="copilot-status"><span>LIVE CONTEXT</span><b id="copilotMeta">Reading your tasks and deadlines</b></div>
-    <div class="copilot-messages" id="copilotMessages">
-      <article class="assistant-message"><i>✦</i><div><strong>Ready when you are.</strong><p>Ask about your courses, get a study plan, or get help understanding difficult concepts.</p></div></article>
+    <div class="nxv2-user">
+      <div class="nxv2-avatar">{{ user.name[0]|upper if user and user.name else 'U' }}</div>
+      <span><strong>{{ user.name if user else 'Student' }}</strong><small>Student Plan</small></span>
+      <button id="themeToggle" type="button" aria-label="Toggle theme">☾</button>
     </div>
-    <div class="copilot-composer">
-      <textarea id="copilotChatInput" rows="1" placeholder="Message Nexora AI..."></textarea>
-      <button id="copilotChatSend" type="button">Send <span>↗</span></button>
-    </div>
-    <small class="copilot-note">Powered by Gemini and your semester context.</small>
   </aside>
 
-  <script>
-    function pad(n){
-      return String(n).padStart(2, "0");
-    }
+  <main class="nxv2-main">
+    <header class="nxv2-topbar">
+      <div>
+        <p class="nxv2-eyebrow"><i></i>MISSION CONTROL</p>
+        <h1><span id="greeting">Good morning</span>, <em>{{ user.name.split(' ')[0] if user and user.name else 'Student' }}</em>! <span class="wave">👋</span></h1>
+        <p>Your semester is under control. Here’s what deserves your attention today.</p>
+      </div>
+      <div class="nxv2-top-actions">
+        <button class="nxv2-icon" id="commandSearch" type="button" aria-label="Search"><span>⌕</span></button>
+        <button class="nxv2-icon notification" type="button" aria-label="Notifications"><span>♧</span><b>{{ summary.urgent }}</b></button>
+        <button class="nxv2-icon ai" id="topAi" type="button" aria-label="Open Nexora AI"><span>✦</span></button>
+        <button class="nxv2-start" id="startMyDay" type="button"><span>▶</span><b>Start My Day</b><i></i></button>
+      </div>
+    </header>
 
-    function setHeader(){
-      const now = new Date();
-      const h = now.getHours();
-      const m = now.getMinutes();
+    <section class="nxv2-update-strip nxv2-update-strip-four">
+      <article class="sync">
+        <div class="nxv2-update-icon">⌁</div>
+        <div><small>NEW UPDATES</small><strong>{% if academic_updates %}{{ academic_updates|length }} new Brightspace update{% if academic_updates|length != 1 %}s{% endif %}{% else %}{{ summary.week }} academic update{% if summary.week != 1 %}s{% endif %}{% endif %}</strong><p>{% if academic_updates %}{{ academic_updates[0].title }}{% else %}{{ groups['today']|length }} due today · {{ course_cards|length }} active courses{% endif %}</p></div>
+        <span class="nxv2-arrow">›</span>
+      </article>
+      <article class="work">
+        <div class="nxv2-update-icon">▣</div>
+        <div><small>UPCOMING DEADLINE</small><strong>{% if upcoming_cards %}{{ upcoming_cards[0].title }}{% else %}No urgent deadline{% endif %}</strong><p>{% if upcoming_cards %}{{ upcoming_cards[0].due_label }}{% else %}Your week is clear{% endif %}</p></div>
+        <span class="nxv2-arrow">›</span>
+      </article>
+      <article class="plan">
+        <div class="nxv2-update-icon">✦</div>
+        <div><small>AI PLANNER</small><strong>Schedule optimized</strong><p>Start My Day is ready</p></div>
+        <span class="nxv2-arrow">›</span>
+      </article>
+      <article class="alert">
+        <div class="nxv2-update-icon">△</div>
+        <div><small>WORKLOAD STATUS</small><strong>{{ summary.urgent }} urgent item{% if summary.urgent != 1 %}s{% endif %}</strong><p>{{ groups['overdue']|length }} overdue · {{ summary.week }} this week</p></div>
+        <span class="nxv2-arrow">›</span>
+      </article>
+    </section>
 
-      const clock = document.getElementById("clock");
-      const dateLabel = document.getElementById("dateLabel");
+    <div class="nxv2-layout">
+      <section class="nxv2-primary">
+        <article class="nxv2-hero">
+          <div class="nxv2-hero-copy">
+            <div class="nxv2-section-label"><span>✦</span>TODAY'S MISSION</div>
+            <h2>You’re all set to have a <em>productive day.</em></h2>
+            <p class="nxv2-hero-sub">Nexora has ranked your most important work using urgency, workload, and upcoming deadlines.</p>
+            <div class="nxv2-missions" id="missionList">
+              {% if task_preview %}
+                {% for t in task_preview[:3] %}
+                <button class="nxv2-mission" data-group="{{ t.group_id }}" type="button">
+                  <span class="check"><i></i></span>
+                  <span class="copy"><strong>{{ t.title }}</strong><small>{{ t.course_full }}{% if t.main_due_pretty %} · {{ t.main_due_pretty }}{% endif %}</small></span>
+                  <b>{{ 45 + (loop.index0 * 15) }} min</b>
+                </button>
+                {% endfor %}
+              {% else %}
+                <div class="nxv2-empty-state"><span>✦</span><p>No urgent tasks right now.</p><a href="/dashboard?view=all#tasks">Add a task</a></div>
+              {% endif %}
+            </div>
+            <div class="nxv2-hero-footer">
+              <div><small>ESTIMATED FOCUS</small><strong id="estimatedTime">{{ (task_preview[:3]|length * 45) // 60 }}h {{ (task_preview[:3]|length * 45) % 60 }}m</strong></div>
+              <div class="nxv2-focus-meter"><span style="--p:{{ [95, 25 + (task_preview[:3]|length * 22)]|min }}%"></span><b>AI</b></div>
+              <button id="reviewPriorities" type="button">Review priorities <span>→</span></button>
+            </div>
+          </div>
 
-      if(clock){
-        clock.textContent = `${pad(h)}:${pad(m)}`;
-      }
+          <div class="nxv2-hero-visual">
+            <div class="nxv2-hero-art"></div>
+            <div class="nxv2-hero-scan"></div>
+            <div class="nxv2-float-card classes"><small>CLASSES TODAY</small><strong>{{ course_cards|length }}</strong><span>Calendar connected</span></div>
+            <div class="nxv2-float-card deadline"><small>DEADLINES</small><strong>{{ summary.week }}</strong><span>{% if upcoming_cards %}Next: {{ upcoming_cards[0].title }}{% else %}No urgent work{% endif %}</span></div>
+            <div class="nxv2-core-status"><span>◆</span><i></i></div>
+          </div>
+        </article>
 
-      const days = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-      const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        <article class="nxv2-courses" id="courses">
+          <header class="nxv2-section-head">
+            <div><span>COURSE INTELLIGENCE</span><h3>Your Courses</h3><p>Real courses, workload signals, and next actions.</p></div>
+            <a href="/dashboard?view=all">View all courses <span>→</span></a>
+          </header>
+          <div class="nxv2-course-track">
+            {% if course_cards %}
+              {% for c in course_cards %}
+              <a class="nxv2-course-card course-{{ loop.index }}" href="{{ url_for('course_workspace', course_code=c.course) }}">
+                <div class="nxv2-course-cover"{% if c.image_url %} style="background-image:linear-gradient(180deg,rgba(7,10,25,.12),rgba(7,10,25,.82)),url('{{ c.image_url|e }}');background-size:cover;background-position:center"{% endif %}>
+                  <span class="course-code">{{ c.course }}</span>
+                  <button type="button" aria-label="Course options">•••</button>
+                  <div class="course-emblem"><i></i><b>{{ c.course[:1] }}</b></div>
+                  <div class="course-grid-lines"></div>
+                </div>
+                <div class="nxv2-course-body">
+                  <div class="nxv2-course-title"><strong>{{ c.title }}</strong><span>{{ c.course }}</span></div>
+                  <div class="nxv2-course-progress-row"><b>{{ c.progress }}%</b><div class="nxv2-progress"><span style="width:{{ c.progress }}%"></span></div></div>
+                  <small>{% if c.next_title %}NEXT: {{ c.next_title }}{% else %}{{ c.content_count or c.total }} imported item{% if (c.content_count or c.total) != 1 %}s{% endif %}{% endif %}</small>
+                  <p>{{ c.due_status }}</p>
+                  <footer><span>Open Workspace</span><b>→</b></footer>
+                </div>
+              </a>
+              {% endfor %}
+            {% else %}
+              <div class="nxv2-course-empty"><span>▣</span><h4>Your courses will appear here</h4><p>Connect Brightspace or add your first task.</p><a href="{{ url_for('connect_brightspace') }}">Connect Brightspace</a></div>
+            {% endif %}
+          </div>
+        </article>
 
-      if(dateLabel){
-        dateLabel.textContent = `${days[now.getDay()]}, ${months[now.getMonth()]} ${now.getDate()}`;
-      }
-    }
+        <div class="nxv2-bottom-grid">
+          <article class="nxv2-panel nxv2-schedule">
+            <header><div><span>TODAY</span><h3>Schedule</h3></div><a href="/calendar">View calendar →</a></header>
+            <div class="nxv2-timeline">
+              {% if task_preview %}
+                {% for t in task_preview[:3] %}
+                <div class="nxv2-time-item">
+                  <time>{{ loop.index * 2 + 8 }}:00</time><i></i>
+                  <div><strong>{{ t.course_full }}</strong><small>{{ t.title }}</small></div>
+                  <span>{{ 'Next' if loop.first else 'Planned' }}</span>
+                </div>
+                {% endfor %}
+              {% else %}<div class="nxv2-placeholder">Your schedule will appear here.</div>{% endif %}
+            </div>
+          </article>
 
-    setHeader();
-    setInterval(setHeader, 15000);
+          <article class="nxv2-panel nxv2-focus-panel">
+            <header><div><span>AI RECOMMENDATION</span><h3>Focus Suggestion</h3></div></header>
+            <div class="nxv2-brain"><span>✦</span><i></i></div>
+            <p>Your best focus window is <strong>10 AM – 12 PM.</strong></p>
+            <button id="focusStart" type="button">Start 25-min focus <span>→</span></button>
+            <b id="focusClock">25:00</b>
+          </article>
 
-    let timerSeconds = 25 * 60;
-    let timerInterval = null;
-    let timerRunning = false;
+          <article class="nxv2-panel nxv2-streak">
+            <header><div><span>MOMENTUM</span><h3>Study Streak</h3></div></header>
+            <div class="nxv2-streak-number"><strong>1</strong><span>day</span></div>
+            <p>Complete one focus block today to continue your streak.</p>
+            <div class="nxv2-week"><b>🔥</b><b>○</b><b>○</b><b>○</b><b>○</b><b>○</b><b>○</b></div>
+          </article>
+        </div>
+      </section>
 
-    const doneSound = new Audio("https://actions.google.com/sounds/v1/alarms/beep_short.ogg");
+      <aside class="nxv2-right">
+        <article class="nxv2-ai-card">
+          <header><div><span>✦</span><h3>Nexora AI</h3></div><b>ONLINE</b></header>
+          <div class="nxv2-ai-visual">
+            <div class="nxv2-bot"><div class="face"><i></i><i></i></div><span></span><b>◆</b></div>
+            <div class="nxv2-ai-copy"><small>DAILY BRIEFING</small><p>Good <span id="dayPart">morning</span>, {{ user.name.split(' ')[0] if user and user.name else 'Student' }}! I found <b>{{ summary.week }}</b> important update{% if summary.week != 1 %}s{% endif %}. Your priorities are ready.</p><strong>I’ll help you focus on what matters most.</strong></div>
+          </div>
+          <div class="nxv2-ai-actions nxv2-ai-actions-stack">
+            <button type="button" data-ai-prompt="Summarize what I should study from my courses today."><span>▤</span>Summarize today's work</button>
+            <button type="button" data-ai-prompt="Generate a focused study plan for today."><span>✦</span>Generate study plan</button>
+            <button type="button" data-ai-prompt="Help me understand the hardest concept in my upcoming work."><span>◉</span>Explain difficult concepts</button>
+            <button type="button" data-ai-prompt="Review my upcoming deadlines and tell me what is urgent."><span>☑</span>Review upcoming deadlines</button>
+          </div>
+          <button class="nxv2-chat-button" id="chatWithAI" type="button">Chat with Nexora AI <span>→</span></button>
+        </article>
 
-    const focusTime = document.getElementById("focusTime");
-    const focusMinutes = document.getElementById("focusMinutes");
-    const startTimer = document.getElementById("startTimer");
-    const resetTimer = document.getElementById("resetTimer");
+        <article class="nxv2-health" id="analytics">
+          {% set health = 100 if summary.week == 0 else [35, 100-(summary.urgent*10)]|max %}
+          <header><div><span>SEMESTER</span><h3>Health Score</h3></div><b>{{ health }}%</b></header>
+          <div class="nxv2-health-main">
+            <div class="nxv2-health-ring" style="--health:{{ health }}"><div><strong>{{ health }}%</strong><small>Overall</small></div></div>
+            <ul>
+              <li><i class="green"></i><span>On Track<small>{{ course_cards|length }} courses</small></span><b>✓</b></li>
+              <li><i class="amber"></i><span>At Risk<small>{{ 1 if summary.urgent else 0 }} course</small></span><b>{{ summary.urgent }}</b></li>
+              <li><i class="red"></i><span>Behind<small>{{ groups['overdue']|length }} items</small></span><b>{{ groups['overdue']|length }}</b></li>
+            </ul>
+          </div>
+          <a href="#analytics">View detailed analytics <span>↗</span></a>
+        </article>
 
-    function updateTimerDisplay(){
-      if(!focusTime) return;
+        <article class="nxv2-deadlines" id="tasks">
+          <header><div><span>UPCOMING</span><h3>Deadlines</h3></div><a href="/dashboard?view=all">View all</a></header>
+          <div class="nxv2-deadline-list">
+            {% if upcoming_cards %}
+              {% for u in upcoming_cards[:4] %}
+              <a class="nxv2-deadline" href="/dashboard?view=all#tasks">
+                <span class="index">{{ loop.index }}</span>
+                <div><strong>{{ u.title }}</strong><small>{{ u.course_full }}</small></div>
+                <p>{{ u.due_label }}<small>{{ u.due_pretty }}</small></p>
+              </a>
+              {% endfor %}
+            {% else %}<div class="nxv2-placeholder">No upcoming deadlines.</div>{% endif %}
+          </div>
+        </article>
 
-      const minutes = Math.floor(timerSeconds / 60);
-      const seconds = timerSeconds % 60;
-      focusTime.textContent = `${pad(minutes)}:${pad(seconds)}`;
-    }
+        <article class="nxv2-quick-add">
+          <header><div><span>CAPTURE</span><h3>Quick Add</h3></div><b>⌘ K</b></header>
+          <form action="/tasks/add" method="post">
+            <input name="title" placeholder="Add a task or reminder…" required>
+            <input name="course" placeholder="Course (optional)">
+            <button type="submit">Add task <span>+</span></button>
+          </form>
+        </article>
+      </aside>
+    </div>
+  </main>
+</div>
 
-    function setTimerFromInput(){
-      if(!focusMinutes) return;
+<div class="nxv2-command" id="commandPalette" aria-hidden="true"><div><header><span>⌕</span><input id="commandInput" placeholder="Search courses, tasks, or ask Nexora AI…"><kbd>ESC</kbd></header><section><small>QUICK ACTIONS</small><button data-command="ai">✦ Ask Nexora AI</button><a href="/calendar">□ Open calendar</a><a href="{{ url_for('connect_brightspace') }}">↻ Open Sync Center</a><a href="/dashboard?view=all#tasks">▦ View all tasks</a></section></div></div>
 
-      const mins = parseInt(focusMinutes.value);
+<div class="nxv2-modal" id="dayModal" aria-hidden="true"><div class="nxv2-modal-card"><button class="modal-close" type="button">×</button><span class="nxv2-modal-kicker">✦ AI-GENERATED DAY</span><h2>Start My Day</h2><p>Nexora ranked your priorities and built a focused plan.</p><div id="dayPlan" class="nxv2-day-plan"></div><button class="nxv2-modal-primary" id="beginPlan" type="button">Begin first session <span>→</span></button></div></div>
 
-      if(!isNaN(mins) && mins > 0){
-        timerSeconds = mins * 60;
-        updateTimerDisplay();
-      }
-    }
+<aside class="nxv2-copilot" id="copilotWorkspace" aria-hidden="true">
+  <header><div><span>✦</span><p><small>GEMINI · NEXORA AI</small><strong>Nexora Assistant</strong></p></div><button id="copilotClose" type="button">×</button></header>
+  <div id="copilotMessages" class="nxv2-copilot-messages"><article><b>✦</b><p>Ask about your courses, deadlines, or study plan.</p></article></div>
+  <div class="nxv2-copilot-suggestions"><button data-ai-prompt="What should I work on first?">What first?</button><button data-ai-prompt="Summarize my upcoming deadlines.">Deadlines</button><button data-ai-prompt="Make a study plan for today.">Plan today</button></div>
+  <footer><textarea id="copilotInput" placeholder="Message Nexora AI..."></textarea><button id="copilotSend" type="button">↑</button></footer>
+</aside>
 
-    if(focusMinutes){
-      focusMinutes.addEventListener("change", function(){
-        if(!timerRunning){
-          setTimerFromInput();
-        }
-      });
-    }
+<script>
+const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
+const now=new Date(), hour=now.getHours(), part=hour<12?'morning':hour<18?'afternoon':'evening';
+$('#greeting').textContent=`Good ${part}`; $('#dayPart').textContent=part;
 
-    if(startTimer){
-      startTimer.addEventListener("click", function(){
-        if(timerRunning){
-          clearInterval(timerInterval);
-          timerRunning = false;
-          startTimer.textContent = "Start";
+// ambient canvas
+const canvas=$('#ambientCanvas'), ctx=canvas.getContext('2d');let particles=[];
+function resizeCanvas(){canvas.width=innerWidth*devicePixelRatio;canvas.height=innerHeight*devicePixelRatio;canvas.style.width=innerWidth+'px';canvas.style.height=innerHeight+'px';ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);particles=Array.from({length:Math.min(70,Math.floor(innerWidth/22))},()=>({x:Math.random()*innerWidth,y:Math.random()*innerHeight,r:Math.random()*1.2+.25,s:Math.random()*.16+.03,a:Math.random()*.5+.12}));}
+function drawAmbient(){ctx.clearRect(0,0,innerWidth,innerHeight);for(const p of particles){p.y-=p.s;if(p.y<-4){p.y=innerHeight+4;p.x=Math.random()*innerWidth}ctx.beginPath();ctx.fillStyle=`rgba(158,124,255,${p.a})`;ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill()}requestAnimationFrame(drawAmbient)}
+resizeCanvas();drawAmbient();addEventListener('resize',resizeCanvas);
 
-          if(focusMinutes){
-            focusMinutes.disabled = false;
-          }
+const dayModal=$('#dayModal');
+async function buildDay(){dayModal.classList.add('open');dayModal.setAttribute('aria-hidden','false');$('#dayPlan').innerHTML='<div class="nxv2-loading"><i></i><span>Analyzing your semester…</span></div>';try{const r=await fetch('/api/start-my-day');const d=await r.json();$('#dayPlan').innerHTML=d.plan.length?d.plan.map((x,i)=>`<article><span>${String(i+1).padStart(2,'0')}</span><div><strong>${x.title}</strong><small>${x.course} · ${x.due}</small></div><b>${x.minutes} min</b></article>`).join(''):'<p>No tasks yet. Add one or connect Brightspace.</p>';$('#estimatedTime').textContent=`${Math.floor(d.total_minutes/60)}h ${d.total_minutes%60}m`;}catch(e){$('#dayPlan').innerHTML='<p>Could not build your plan. Please try again.</p>';}}
+$('#startMyDay').onclick=buildDay;$('#reviewPriorities').onclick=buildDay;$('.modal-close').onclick=()=>dayModal.classList.remove('open');dayModal.onclick=e=>{if(e.target===dayModal)dayModal.classList.remove('open')};
 
-          return;
-        }
+$$('.nxv2-mission').forEach(btn=>btn.onclick=async()=>{const done=btn.classList.toggle('done');try{await fetch(`/api/tasks/${btn.dataset.group}/complete`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({completed:done})});if(done)setTimeout(()=>btn.style.display='none',420);}catch(e){btn.classList.toggle('done')}});
 
-        setTimerFromInput();
-        timerRunning = true;
-        startTimer.textContent = "Pause";
+let timer=null,seconds=1500;const timerText=()=>`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
+$('#focusStart').onclick=()=>{if(timer){clearInterval(timer);timer=null;$('#focusStart').innerHTML='Resume focus <span>→</span>';return}$('#focusClock').classList.add('show');$('#focusStart').innerHTML='Pause focus <span>Ⅱ</span>';timer=setInterval(()=>{seconds--;$('#focusClock').textContent=timerText();if(seconds<=0){clearInterval(timer);timer=null;$('#focusStart').innerHTML='Focus complete <span>✓</span>'}},1000)};
 
-        if(focusMinutes){
-          focusMinutes.disabled = true;
-        }
+const cp=$('#copilotWorkspace');function openAI(prefill=''){cp.classList.add('open');cp.setAttribute('aria-hidden','false');if(prefill){$('#copilotInput').value=prefill;setTimeout(sendAI,180)}}
+$('#aiNav').onclick=()=>openAI();$('#chatWithAI').onclick=()=>openAI();$('#topAi').onclick=()=>openAI();$('#copilotClose').onclick=()=>cp.classList.remove('open');
+function addMsg(role,text){const a=document.createElement('article');a.className=role;a.innerHTML=`<b>${role==='user'?'U':'✦'}</b><p></p>`;a.querySelector('p').textContent=text;$('#copilotMessages').appendChild(a);$('#copilotMessages').scrollTop=$('#copilotMessages').scrollHeight;return a}
+async function sendAI(){const input=$('#copilotInput'),q=input.value.trim();if(!q)return;input.value='';addMsg('user',q);const wait=addMsg('assistant','Thinking…');try{const r=await fetch('/api/copilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q,history:[]})});const d=await r.json();wait.querySelector('p').textContent=d.answer||d.error||'No response.';}catch(e){wait.querySelector('p').textContent='Unable to reach Nexora AI.'}}
+$('#copilotSend').onclick=sendAI;$('#copilotInput').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendAI()}};$$('[data-ai-prompt]').forEach(b=>b.onclick=()=>openAI(b.dataset.aiPrompt));
 
-        timerInterval = setInterval(function(){
-          if(timerSeconds > 0){
-            timerSeconds--;
-            updateTimerDisplay();
-          } else {
-            clearInterval(timerInterval);
-            timerRunning = false;
-            startTimer.textContent = "Start";
+const palette=$('#commandPalette');function openPalette(){palette.classList.add('open');palette.setAttribute('aria-hidden','false');setTimeout(()=>$('#commandInput').focus(),100)}function closePalette(){palette.classList.remove('open');palette.setAttribute('aria-hidden','true')}
+$('#commandSearch').onclick=openPalette;palette.onclick=e=>{if(e.target===palette)closePalette()};$('[data-command="ai"]').onclick=()=>{closePalette();openAI()};
+addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openPalette()}if(e.key==='Escape'){closePalette();dayModal.classList.remove('open');cp.classList.remove('open')}});
 
-            if(focusMinutes){
-              focusMinutes.disabled = false;
-            }
-
-            doneSound.play();
-            alert("Focus session done!");
-          }
-        }, 1000);
-      });
-    }
-
-    if(resetTimer){
-      resetTimer.addEventListener("click", function(){
-        clearInterval(timerInterval);
-        timerRunning = false;
-
-        if(startTimer){
-          startTimer.textContent = "Start";
-        }
-
-        if(focusMinutes){
-          focusMinutes.disabled = false;
-        }
-
-        setTimerFromInput();
-      });
-    }
-
-    updateTimerDisplay();
-
-    const themeToggle = document.getElementById("themeToggle");
-
-    function applyTheme(theme){
-      if(theme === "dark"){
-        document.body.classList.add("dark-mode");
-
-        if(themeToggle){
-          themeToggle.textContent = "☀️ Light mode";
-        }
-      } else {
-        document.body.classList.remove("dark-mode");
-
-        if(themeToggle){
-          themeToggle.textContent = "🌙 Dark mode";
-        }
-      }
-    }
-
-    const savedTheme = localStorage.getItem("nexora-theme") || localStorage.getItem("theme") || "dark";
-    applyTheme(savedTheme);
-
-    if(themeToggle){
-      themeToggle.addEventListener("click", function(){
-        const isDark = document.body.classList.contains("dark-mode");
-        const nextTheme = isDark ? "light" : "dark";
-
-        localStorage.setItem("nexora-theme", nextTheme);
-        localStorage.setItem("theme", nextTheme);
-        applyTheme(nextTheme);
-      });
-    }
-
-    const accountButton = document.getElementById("accountButton");
-    const accountDropdown = document.getElementById("accountDropdown");
-
-    if(accountButton && accountDropdown){
-      accountButton.addEventListener("click", function(){
-        accountDropdown.classList.toggle("show");
-      });
-
-      document.addEventListener("click", function(event){
-        if(!accountButton.contains(event.target) && !accountDropdown.contains(event.target)){
-          accountDropdown.classList.remove("show");
-        }
-      });
-    }
-
-    const copilotPrompt = document.getElementById("copilotPrompt");
-    const copilotSend = document.getElementById("copilotSend");
-
-    const copilotWorkspace = document.getElementById("copilotWorkspace");
-    const copilotClose = document.getElementById("copilotClose");
-    const copilotMessages = document.getElementById("copilotMessages");
-    const copilotChatInput = document.getElementById("copilotChatInput");
-    const copilotChatSend = document.getElementById("copilotChatSend");
-    const copilotMeta = document.getElementById("copilotMeta");
-    const geminiLauncher = document.getElementById("geminiLauncher");
-    const copilotHistory = [];
-
-    function openCopilot(){
-      copilotWorkspace.classList.add("open");
-      copilotWorkspace.setAttribute("aria-hidden", "false");
-      document.body.classList.add("copilot-open");
-      fetch("/api/copilot/status")
-        .then(response => response.json())
-        .then(status => {
-          copilotMeta.textContent = status.connected
-            ? `${status.provider} connected • ${status.model}`
-            : "Gemini key is not reaching this Render service";
-        })
-        .catch(() => { copilotMeta.textContent = "Unable to check Gemini connection"; });
-    }
-    function closeCopilot(){
-      copilotWorkspace.classList.remove("open");
-      copilotWorkspace.setAttribute("aria-hidden", "true");
-      document.body.classList.remove("copilot-open");
-    }
-    function addMessage(role, text, loading=false, sources=[]){
-      const article = document.createElement("article");
-      article.className = role === "user" ? "user-message" : "assistant-message";
-      if(loading) article.classList.add("loading-message");
-      const safe = document.createElement("p");
-      safe.textContent = text;
-      if(role === "assistant"){
-        const icon = document.createElement("i"); icon.textContent = "✦";
-        const wrap = document.createElement("div"); wrap.appendChild(safe);
-        if(sources.length){
-          const sourceList = document.createElement("div"); sourceList.className = "copilot-sources";
-          sources.forEach((source, index) => {
-            const link = document.createElement("a"); link.href = source.url; link.target = "_blank"; link.rel = "noopener noreferrer";
-            link.textContent = `${index + 1}. ${source.title}`; sourceList.appendChild(link);
-          });
-          wrap.appendChild(sourceList);
-        }
-        article.append(icon, wrap);
-      } else article.appendChild(safe);
-      copilotMessages.appendChild(article);
-      copilotMessages.scrollTop = copilotMessages.scrollHeight;
-      return article;
-    }
-    async function askCopilot(query){
-      if(!query) return;
-      openCopilot(); addMessage("user", query);
-      const loading = addMessage("assistant", "Thinking…", true);
-      try{
-        const response = await fetch("/api/copilot", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:query,history:copilotHistory})});
-        const data = await response.json();
-        loading.remove();
-        if(!response.ok) throw new Error(data.error || "Copilot could not respond.");
-        addMessage("assistant", data.answer, false, data.sources || []);
-        copilotHistory.push({role:"user",content:query},{role:"assistant",content:data.answer});
-        if(copilotHistory.length > 20) copilotHistory.splice(0, copilotHistory.length - 20);
-        copilotMeta.textContent = `Gemini • ${data.meta.tasks} tasks • ${data.meta.upcoming} upcoming`;
-      }catch(error){ loading.remove(); addMessage("assistant", error.message || "Something went wrong. Please try again."); }
-    }
-    function runCopilotPrompt(){
-      if(!copilotPrompt || !copilotPrompt.value.trim()) return;
-      const query = copilotPrompt.value.trim(); copilotPrompt.value = ""; askCopilot(query);
-    }
-
-    if(copilotSend) copilotSend.addEventListener("click", runCopilotPrompt);
-    if(copilotPrompt){
-      copilotPrompt.addEventListener("keydown", function(event){
-        if(event.key === "Enter") runCopilotPrompt();
-      });
-    }
-    document.querySelectorAll("[data-prompt]").forEach(button => button.addEventListener("click", () => askCopilot(button.dataset.prompt)));
-    if(copilotClose) copilotClose.addEventListener("click", closeCopilot);
-    if(geminiLauncher) geminiLauncher.addEventListener("click", openCopilot);
-    if(copilotChatSend) copilotChatSend.addEventListener("click", () => { const q=copilotChatInput.value.trim(); if(q){copilotChatInput.value="";askCopilot(q);} });
-    if(copilotChatInput) copilotChatInput.addEventListener("keydown", event => { if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();copilotChatSend.click();} });
-    document.addEventListener("keydown", event => { if(event.key==="Escape") closeCopilot(); if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();openCopilot();} });
-  </script>
+const theme=$('#themeToggle');theme.onclick=()=>{document.body.classList.toggle('nxv2-light');theme.textContent=document.body.classList.contains('nxv2-light')?'☀':'☾';localStorage.setItem('nx-theme-v2',document.body.classList.contains('nxv2-light')?'light':'dark')};if(localStorage.getItem('nx-theme-v2')==='light')theme.click();
+</script>
 </body>
 </html>
