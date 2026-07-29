@@ -1,200 +1,34 @@
 const ALARM_NAME = 'nexora-auto-sync';
 const BRIGHTSPACE_PATTERNS = ['https://brightspace.carleton.ca/*', 'https://*.brightspace.com/*'];
+let workerWindowId = null;
+let workerTabId = null;
 
 async function getConfig() {
-  const values = await chrome.storage.sync.get(['apiBase', 'token', 'autoSyncEnabled', 'intervalMinutes']);
-  return {
-    apiBase: values.apiBase || '',
-    token: values.token || '',
-    autoSyncEnabled: values.autoSyncEnabled !== false,
-    intervalMinutes: Math.max(15, Number(values.intervalMinutes) || 30)
-  };
+  const v = await chrome.storage.sync.get(['apiBase','token','autoSyncEnabled','intervalMinutes','copyFiles']);
+  return {apiBase:v.apiBase||'',token:v.token||'',autoSyncEnabled:v.autoSyncEnabled!==false,intervalMinutes:Math.max(15,Number(v.intervalMinutes)||30),copyFiles:v.copyFiles!==false};
 }
-
-async function setStatus(patch) {
-  const old = await chrome.storage.local.get(['syncStatus']);
-  await chrome.storage.local.set({
-    syncStatus: {...(old.syncStatus || {}), ...patch},
-    lastSync: new Date().toISOString()
-  });
-}
-
-async function api(path, options = {}) {
-  const {apiBase, token} = await getConfig();
-  if (!apiBase || !token) throw new Error('Configure Nexora URL and extension key first.');
-  const response = await fetch(`${apiBase.replace(/\/$/, '')}${path}`, {
-    method: options.method || 'GET',
-    headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`},
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
-  let data = {};
-  try { data = await response.json(); } catch (_) {}
-  if (!response.ok) throw new Error(data.error || `Nexora returned ${response.status}`);
-  return data;
-}
-
-function waitForTab(tabId, timeoutMs = 25000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error('Brightspace page timed out.'));
-    }, timeoutMs);
-    function listener(id, info) {
-      if (id === tabId && info.status === 'complete') {
-        clearTimeout(timer);
-        chrome.tabs.onUpdated.removeListener(listener);
-        setTimeout(resolve, 1800);
-      }
-    }
-    chrome.tabs.onUpdated.addListener(listener);
-  });
-}
-
-async function scanOpenBrightspaceTabs() {
-  const tabs = await chrome.tabs.query({url: BRIGHTSPACE_PATTERNS});
-  const results = [];
-  for (const tab of tabs) {
-    try {
-      const result = await chrome.tabs.sendMessage(tab.id, {type: 'NEXORA_SCAN_HOME'});
-      results.push({tabId: tab.id, url: tab.url, ...result});
-    } catch (error) {
-      results.push({tabId: tab.id, url: tab.url, ok: false, error: error.message});
-    }
-  }
-  await setStatus({phase: 'course-discovery', openTabs: tabs.length, tabResults: results});
-  return results;
-}
-
-function coursePageUrls(course) {
-  const url = new URL(course.url || course.brightspace_url);
-  const host = url.origin;
-  const ou = course.source_uid || (url.pathname.match(/\/d2l\/home\/(\d+)/) || [])[1];
-  if (!ou) return [course.url || course.brightspace_url].filter(Boolean);
-  return [
-    `${host}/d2l/le/lessons/${ou}/home`,
-    `${host}/d2l/le/content/${ou}/Home`,
-    `${host}/d2l/lms/dropbox/user/folders_list.d2l?ou=${ou}`,
-    `${host}/d2l/lms/quizzing/user/quizzes_list.d2l?ou=${ou}`,
-    `${host}/d2l/lms/news/main.d2l?ou=${ou}`
-  ];
-}
-
-async function scanCoursePage(course, url) {
-  let tab;
-  try {
-    tab = await chrome.tabs.create({url, active: false});
-    await waitForTab(tab.id);
-    return await chrome.tabs.sendMessage(tab.id, {
-      type: 'NEXORA_SCAN_COURSE_PAGE',
-      course: {
-        source_uid: course.source_uid,
-        course_code: course.code || course.course_code,
-        course_name: course.name || course.course_name,
-        url
-      }
-    });
-  } finally {
-    if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
-  }
-}
-
-async function syncAllCourses() {
-  const config = await getConfig();
-  if (!config.apiBase || !config.token) throw new Error('Configure Nexora Sync first.');
-  await setStatus({running: true, phase: 'loading-courses', error: ''});
-  const status = await api('/api/sync/status');
-  const courses = status.courses || [];
-  const summary = {courses: courses.length, scanned: 0, failed: 0, itemsFound: 0, added: 0, updated: 0, unchanged: 0, details: []};
-
-  for (let i = 0; i < courses.length; i++) {
-    const course = courses[i];
-    await setStatus({running: true, phase: 'scanning-course', currentCourse: course.code, progress: `${i + 1}/${courses.length}`});
-    const deduped = new Map();
-    const pageDiagnostics = [];
-    for (const target of coursePageUrls(course)) {
-      try {
-        const result = await scanCoursePage(course, target);
-        pageDiagnostics.push({url: target, ok: !!result?.ok, found: result?.items?.length || 0, pageKind: result?.pageKind || ''});
-        for (const item of result?.items || []) deduped.set(item.source_uid || item.source_url, item);
-      } catch (error) {
-        pageDiagnostics.push({url: target, ok: false, error: error.message});
-      }
-    }
-
-    const items = [...deduped.values()];
-    try {
-      const imported = items.length ? await api('/api/sync/content', {method: 'POST', body: {items}}) : {added: 0, updated: 0, unchanged: 0};
-      summary.scanned += 1;
-      summary.itemsFound += items.length;
-      summary.added += imported.added || 0;
-      summary.updated += imported.updated || 0;
-      summary.unchanged += imported.unchanged || 0;
-      summary.details.push({course: course.code, items: items.length, pages: pageDiagnostics});
-    } catch (error) {
-      summary.failed += 1;
-      summary.details.push({course: course.code, error: error.message, pages: pageDiagnostics});
-    }
-  }
-
-  await setStatus({running: false, phase: 'complete', currentCourse: '', progress: '', lastContentSync: new Date().toISOString(), contentSummary: summary});
-  return summary;
-}
-
-async function configureAlarm() {
-  const {autoSyncEnabled, intervalMinutes} = await getConfig();
-  await chrome.alarms.clear(ALARM_NAME);
-  if (autoSyncEnabled) chrome.alarms.create(ALARM_NAME, {periodInMinutes: intervalMinutes});
-}
-
-chrome.runtime.onInstalled.addListener(async () => {
-  const current = await chrome.storage.sync.get(['autoSyncEnabled', 'intervalMinutes']);
-  await chrome.storage.sync.set({
-    autoSyncEnabled: current.autoSyncEnabled !== false,
-    intervalMinutes: Math.max(15, Number(current.intervalMinutes) || 30)
-  });
-  await configureAlarm();
-});
-
-chrome.alarms.onAlarm.addListener(async alarm => {
-  if (alarm.name !== ALARM_NAME) return;
-  const {autoSyncEnabled} = await getConfig();
-  if (!autoSyncEnabled) return;
-  try { await syncAllCourses(); } catch (error) { await setStatus({running: false, phase: 'error', error: error.message}); }
-});
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  (async () => {
-    try {
-      if (message?.type === 'NEXORA_COURSES') {
-        const courses = message.courses || [];
-        await chrome.storage.local.set({detectedCourses: courses});
-        const data = await api('/api/sync/courses', {method: 'POST', body: {courses}});
-        await setStatus({phase: 'courses-imported', courseDiscovery: {found: courses.length, ...data}});
-        sendResponse({ok: true, ...data}); return;
-      }
-      if (message?.type === 'NEXORA_SCAN_OPEN_TABS') {
-        sendResponse({ok: true, results: await scanOpenBrightspaceTabs()}); return;
-      }
-      if (message?.type === 'NEXORA_SYNC_ALL_COURSES') {
-        sendResponse({ok: true, summary: await syncAllCourses()}); return;
-      }
-      if (message?.type === 'NEXORA_START_IMPORT') {
-        const tab = await chrome.tabs.create({url: 'https://brightspace.carleton.ca/d2l/home', active: true});
-        sendResponse({ok: true, tabId: tab.id}); return;
-      }
-      if (message?.type === 'NEXORA_CONFIG_CHANGED') {
-        await configureAlarm(); sendResponse({ok: true}); return;
-      }
-      if (message?.type === 'NEXORA_STATUS') {
-        const config = await getConfig();
-        const local = await chrome.storage.local.get(['syncStatus', 'lastSync', 'detectedCourses']);
-        sendResponse({ok: true, configured: !!(config.apiBase && config.token), config, ...local}); return;
-      }
-      sendResponse({ok: true});
-    } catch (error) {
-      await setStatus({running: false, phase: 'error', error: error.message});
-      sendResponse({ok: false, error: error.message});
-    }
-  })();
-  return true;
-});
+async function setStatus(patch){const old=await chrome.storage.local.get(['syncStatus']);await chrome.storage.local.set({syncStatus:{...(old.syncStatus||{}),...patch},lastSync:new Date().toISOString()});}
+async function api(path, options={}){const {apiBase,token}=await getConfig();if(!apiBase||!token)throw new Error('Configure Nexora URL and extension key first.');const r=await fetch(`${apiBase.replace(/\/$/,'')}${path}`,{method:options.method||'GET',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:options.body?JSON.stringify(options.body):undefined});let d={};try{d=await r.json();}catch{}if(!r.ok)throw new Error(d.error||`Nexora returned ${r.status}`);return d;}
+function waitForTab(tabId, timeout=35000){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{chrome.tabs.onUpdated.removeListener(listener);reject(new Error('Brightspace page timed out.'));},timeout);function listener(id,info){if(id===tabId&&info.status==='complete'){clearTimeout(timer);chrome.tabs.onUpdated.removeListener(listener);setTimeout(resolve,1400);}}chrome.tabs.onUpdated.addListener(listener);});}
+async function ensureWorker(){try{if(workerWindowId){const w=await chrome.windows.get(workerWindowId);const tabs=await chrome.tabs.query({windowId:w.id});if(tabs[0]){workerTabId=tabs[0].id;return;}}}catch{}const w=await chrome.windows.create({url:'about:blank',focused:false,state:'minimized',type:'normal',width:520,height:420});workerWindowId=w.id;workerTabId=w.tabs?.[0]?.id;}
+async function closeWorker(){if(workerWindowId){await chrome.windows.remove(workerWindowId).catch(()=>{});}workerWindowId=null;workerTabId=null;}
+async function navigateWorker(url){await ensureWorker();await chrome.tabs.update(workerTabId,{url,active:false});await waitForTab(workerTabId);return workerTabId;}
+async function scanOpenBrightspaceTabs(){const tabs=await chrome.tabs.query({url:BRIGHTSPACE_PATTERNS});const results=[];for(const tab of tabs){try{results.push({tabId:tab.id,url:tab.url,...await chrome.tabs.sendMessage(tab.id,{type:'NEXORA_SCAN_HOME'})});}catch(e){results.push({tabId:tab.id,url:tab.url,ok:false,error:e.message});}}await setStatus({phase:'course-discovery',openTabs:tabs.length,tabResults:results});return results;}
+function coursePageUrls(course){const u=new URL(course.url||course.brightspace_url);const host=u.origin;const ou=course.source_uid||(u.pathname.match(/\/d2l\/home\/(\d+)/)||[])[1];if(!ou)return[];return [
+ {kind:'content',url:`${host}/d2l/le/lessons/${ou}/home`},
+ {kind:'assignments',url:`${host}/d2l/lms/dropbox/user/folders_list.d2l?ou=${ou}`},
+ {kind:'quizzes',url:`${host}/d2l/lms/quizzing/user/quizzes_list.d2l?ou=${ou}`},
+ {kind:'announcements',url:`${host}/d2l/lms/news/main.d2l?ou=${ou}`}
+];}
+async function scanCourseTarget(course,target){const tabId=await navigateWorker(target.url);return chrome.tabs.sendMessage(tabId,{type:'NEXORA_SCAN_COURSE_PAGE',course:{source_uid:course.source_uid,course_code:course.code||course.course_code,course_name:course.name||course.course_name,url:target.url},expectedKind:target.kind});}
+async function uploadFile(item){const cfg=await getConfig();if(!cfg.copyFiles||!item.download_url)return {skipped:true};const r=await fetch(item.download_url,{credentials:'include',redirect:'follow'});if(!r.ok)throw new Error(`File download ${r.status}`);const ct=(r.headers.get('content-type')||'').toLowerCase();if(ct.includes('text/html'))return {skipped:true,reason:'not-direct-file'};const blob=await r.blob();if(blob.size>25*1024*1024)return {skipped:true,reason:'over-25mb'};const form=new FormData();form.append('file',blob,item.file_name||item.title||'resource');form.append('metadata',JSON.stringify(item));const up=await fetch(`${cfg.apiBase.replace(/\/$/,'')}/api/sync/file`,{method:'POST',headers:{Authorization:`Bearer ${cfg.token}`},body:form});let d={};try{d=await up.json();}catch{}if(!up.ok)throw new Error(d.error||`Upload ${up.status}`);return d;}
+async function syncAllCourses(){const cfg=await getConfig();if(!cfg.apiBase||!cfg.token)throw new Error('Configure Nexora Sync first.');await setStatus({running:true,phase:'loading-courses',error:''});const status=await api('/api/sync/status');const courses=status.courses||[];const summary={courses:courses.length,scanned:0,failed:0,itemsFound:0,filesCopied:0,added:0,updated:0,unchanged:0,details:[]};try{for(let i=0;i<courses.length;i++){const course=courses[i];await setStatus({running:true,phase:'scanning-course',currentCourse:course.code,progress:`${i+1}/${courses.length}`});const map=new Map();const pages=[];for(const target of coursePageUrls(course)){try{const result=await scanCourseTarget(course,target);pages.push({kind:target.kind,ok:!!result?.ok,found:result?.items?.length||0,expanded:result?.expanded||0});for(const item of result?.items||[])map.set(item.source_uid,item);}catch(e){pages.push({kind:target.kind,ok:false,error:e.message});}}
+ const items=[...map.values()];const imported=items.length?await api('/api/sync/content',{method:'POST',body:{items,replace_courses:[course.code]}}):{added:0,updated:0,unchanged:0};summary.scanned++;summary.itemsFound+=items.length;summary.added+=imported.added||0;summary.updated+=imported.updated||0;summary.unchanged+=imported.unchanged||0;
+ for(const item of items.filter(x=>x.download_url).slice(0,60)){try{const u=await uploadFile(item);if(u?.ok&&!u.skipped)summary.filesCopied++;}catch(e){}}
+ summary.details.push({course:course.code,items:items.length,pages});}
+ }finally{await closeWorker();}
+ await setStatus({running:false,phase:'complete',currentCourse:'',progress:'',lastContentSync:new Date().toISOString(),contentSummary:summary});return summary;}
+async function configureAlarm(){const {autoSyncEnabled,intervalMinutes}=await getConfig();await chrome.alarms.clear(ALARM_NAME);if(autoSyncEnabled)chrome.alarms.create(ALARM_NAME,{periodInMinutes:intervalMinutes});}
+chrome.runtime.onInstalled.addListener(async()=>{const c=await chrome.storage.sync.get(['autoSyncEnabled','intervalMinutes','copyFiles']);await chrome.storage.sync.set({autoSyncEnabled:c.autoSyncEnabled!==false,intervalMinutes:Math.max(15,Number(c.intervalMinutes)||30),copyFiles:c.copyFiles!==false});await configureAlarm();});
+chrome.alarms.onAlarm.addListener(async a=>{if(a.name!==ALARM_NAME)return;const {autoSyncEnabled}=await getConfig();if(!autoSyncEnabled)return;try{await syncAllCourses();}catch(e){await closeWorker();await setStatus({running:false,phase:'error',error:e.message});}});
+chrome.runtime.onMessage.addListener((m,s,sendResponse)=>{(async()=>{try{if(m?.type==='NEXORA_COURSES'){const courses=m.courses||[];await chrome.storage.local.set({detectedCourses:courses});const d=await api('/api/sync/courses',{method:'POST',body:{courses}});await setStatus({phase:'courses-imported',courseDiscovery:{found:courses.length,...d}});sendResponse({ok:true,...d});return;}if(m?.type==='NEXORA_SCAN_OPEN_TABS'){sendResponse({ok:true,results:await scanOpenBrightspaceTabs()});return;}if(m?.type==='NEXORA_SYNC_ALL_COURSES'){sendResponse({ok:true,summary:await syncAllCourses()});return;}if(m?.type==='NEXORA_START_IMPORT'){const tab=await chrome.tabs.create({url:'https://brightspace.carleton.ca/d2l/home',active:true});sendResponse({ok:true,tabId:tab.id});return;}if(m?.type==='NEXORA_CONFIG_CHANGED'){await configureAlarm();sendResponse({ok:true});return;}if(m?.type==='NEXORA_STATUS'){const config=await getConfig();const local=await chrome.storage.local.get(['syncStatus','lastSync','detectedCourses']);sendResponse({ok:true,configured:!!(config.apiBase&&config.token),config,...local});return;}sendResponse({ok:true});}catch(e){await closeWorker();await setStatus({running:false,phase:'error',error:e.message});sendResponse({ok:false,error:e.message});}})();return true;});

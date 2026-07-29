@@ -40,12 +40,12 @@
         <h2>Everything for {{ course }}, organized automatically.</h2>
         <p>Lectures, files, quizzes, announcements, deadlines, and AI context from Brightspace appear here as Nexora Sync discovers them.</p>
       </div>
-      <div class="hero-art"></div>
+      <div class="hero-art"{% if synced_course and synced_course.image_url %} style="background-image:linear-gradient(135deg,rgba(7,9,20,.22),rgba(26,11,62,.55)),url('{{ synced_course.image_url }}');background-size:cover;background-position:center"{% endif %}></div>
     </section>
 
     <section class="stats">
       <div class="stat"><small>Lectures</small><strong>{{ lectures|length }}</strong></div>
-      <div class="stat"><small>Assignments</small><strong>{{ assignments|length }}</strong></div>
+      <div class="stat"><small>Assignments</small><strong>{{ (assignments|length) + (synced_assignments|length) }}</strong></div>
       <div class="stat"><small>Resources</small><strong>{{ resources|length }}</strong></div>
       <div class="stat"><small>Course updates</small><strong>{{ updates|length }}</strong></div>
     </section>
@@ -62,18 +62,27 @@
     <section class="grid">
       <div>
         <article class="panel tab-panel" data-panel="overview">
-          <h3>Latest course content</h3>
+          <h3>Course overview</h3>
           <div class="list">
             {% for item in contents[:8] %}
-            <div class="item"><div><strong>{{ item.title }}</strong><div class="meta">{{ item.module_name or course }} · {{ item.published_at or 'Synced content' }}</div></div><span class="type">{{ item.content_type }}</span></div>
-            {% else %}<div class="empty">No lecture content has been imported yet. Install Nexora Sync and open Brightspace to populate this workspace.</div>{% endfor %}
+            <a class="item" href="{{ item.source_url or '#' }}"{% if item.source_url %} target="_blank"{% endif %}><div><strong>{{ item.title }}</strong><div class="meta">{{ item.module_name or 'Course content' }}{% if item.published_at %} · {{ item.published_at }}{% endif %}</div></div><span class="type">{{ item.content_type }}</span></a>
+            {% else %}<div class="empty">No structured content has been synced yet.</div>{% endfor %}
           </div>
         </article>
-        <article class="panel tab-panel" data-panel="lectures" hidden><h3>Lectures</h3><div class="list">{% for item in lectures %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">{{ item.module_name }}</div></div><span class="type">{{ item.content_type }}</span></a>{% else %}<div class="empty">No lectures synced yet.</div>{% endfor %}</div></article>
-        <article class="panel tab-panel" data-panel="assignments" hidden><h3>Assignments and deadlines</h3><div class="list">{% for item in assignments %}<div class="item"><div><strong>{{ item.title }}</strong><div class="meta">Due {{ item.main_due_pretty or 'No date' }}</div></div><span class="type">{{ item.status_label }}</span></div>{% else %}<div class="empty">No assignments found for this course.</div>{% endfor %}</div></article>
-        <article class="panel tab-panel" data-panel="resources" hidden><h3>Resources</h3><div class="list">{% for item in resources %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">{{ item.module_name or 'Course resource' }}</div></div><span class="type">{{ item.content_type }}</span></a>{% else %}<div class="empty">No resources synced yet.</div>{% endfor %}</div></article>
-        <article class="panel tab-panel" data-panel="quizzes" hidden><h3>Quizzes</h3><div class="list">{% for item in quizzes %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">{{ item.module_name }}</div></div><span class="type">quiz</span></a>{% else %}<div class="empty">No quizzes synced yet.</div>{% endfor %}</div></article>
-        <article class="panel tab-panel" data-panel="announcements" hidden><h3>Announcements</h3><div class="list">{% for item in announcements %}<div class="item"><div><strong>{{ item.title }}</strong><div class="meta">{{ item.content_text[:180] }}</div></div><span class="type">announcement</span></div>{% else %}<div class="empty">No announcements synced yet.</div>{% endfor %}</div></article>
+        <article class="panel tab-panel" data-panel="lectures" hidden><h3>Lectures</h3>
+          {% for module, module_items in lectures|groupby('module_name') %}
+          <div style="margin:18px 0 9px;font-weight:800;color:#c4b5fd">{{ module or 'Course lectures' }}</div><div class="list">
+          {% for item in module_items %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">{% if '/static/nexora_uploads/' in item.source_url %}Copied privately to Nexora{% else %}Brightspace source{% endif %}</div></div><span class="type">lecture</span></a>{% endfor %}</div>
+          {% else %}<div class="empty">No lectures synced yet.</div>{% endfor %}
+        </article>
+        <article class="panel tab-panel" data-panel="assignments" hidden><h3>Assignments and deadlines</h3><div class="list">
+          {% for item in assignments %}<div class="item"><div><strong>{{ item.title }}</strong><div class="meta">Due {{ item.main_due_pretty or 'No date' }}</div></div><span class="type">{{ item.status_label }}</span></div>{% endfor %}
+          {% for item in synced_assignments %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">Imported from Brightspace</div></div><span class="type">assignment</span></a>{% endfor %}
+          {% if not assignments and not synced_assignments %}<div class="empty">No assignments found for this course.</div>{% endif %}</div></article>
+        <article class="panel tab-panel" data-panel="resources" hidden><h3>Resources</h3>
+          {% for module, module_items in resources|groupby('module_name') %}<div style="margin:18px 0 9px;font-weight:800;color:#c4b5fd">{{ module or 'General resources' }}</div><div class="list">{% for item in module_items %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">{% if '/static/nexora_uploads/' in item.source_url %}Copied privately to Nexora{% else %}External or Brightspace resource{% endif %}</div></div><span class="type">{{ item.content_type }}</span></a>{% endfor %}</div>{% else %}<div class="empty">No resources synced yet.</div>{% endfor %}</article>
+        <article class="panel tab-panel" data-panel="quizzes" hidden><h3>Quizzes</h3><div class="list">{% for item in quizzes %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">Imported from Brightspace</div></div><span class="type">quiz</span></a>{% else %}<div class="empty">No quizzes synced yet.</div>{% endfor %}</div></article>
+        <article class="panel tab-panel" data-panel="announcements" hidden><h3>Announcements</h3><div class="list">{% for item in announcements %}<div class="item" style="align-items:flex-start"><div><strong>{{ item.title }}</strong><div class="meta" style="line-height:1.55;margin-top:8px">{{ item.content_text[:420] }}</div></div><span class="type">announcement</span></div>{% else %}<div class="empty">No announcements synced yet.</div>{% endfor %}</div></article>
       </div>
 
       <aside>

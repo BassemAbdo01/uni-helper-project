@@ -22,6 +22,7 @@ from flask_login import (
     login_required,
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from ics import Calendar
 
 app = Flask(__name__)
@@ -104,6 +105,21 @@ class CourseContent(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
+
+class SyncedFile(db.Model):
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    course_full = db.Column(db.String(40), default="OTHER", index=True)
+    source_uid = db.Column(db.String(255), default="", index=True)
+    original_source_url = db.Column(db.Text, default="")
+    stored_url = db.Column(db.Text, default="")
+    file_name = db.Column(db.Text, default="")
+    mime_type = db.Column(db.String(255), default="")
+    file_size = db.Column(db.Integer, default=0)
+    content_hash = db.Column(db.String(64), default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 
@@ -1358,12 +1374,15 @@ def _extension_user_from_request():
 def course_workspace(course_code):
     course = _normalize_course_code(course_code)
     all_cards = sort_cards(build_grouped_cards(load_tasks()))
-    assignments = [c for c in all_cards if _normalize_course_code(c.get("course_full")) == course]
+    task_assignments = [c for c in all_cards if _normalize_course_code(c.get("course_full")) == course]
     contents = CourseContent.query.filter_by(user_id=current_user.id, course_full=course).order_by(CourseContent.updated_at.desc()).all()
+    synced_assignments = [c for c in contents if c.content_type == "assignment"]
+    assignments = task_assignments
+    synced_course = SyncedCourse.query.filter_by(user_id=current_user.id, course_code=course).first()
     updates = AcademicUpdate.query.filter_by(user_id=current_user.id, course_full=course).order_by(AcademicUpdate.created_at.desc()).limit(12).all()
 
-    lectures = [c for c in contents if c.content_type in ("lecture", "module", "page")]
-    resources = [c for c in contents if c.content_type in ("file", "resource", "link")]
+    lectures = [c for c in contents if c.content_type == "lecture"]
+    resources = [c for c in contents if c.content_type in ("file", "resource", "link", "practice", "page")]
     quizzes = [c for c in contents if c.content_type == "quiz"]
     announcements = [c for c in contents if c.content_type == "announcement"]
 
@@ -1373,6 +1392,8 @@ def course_workspace(course_code):
         user=current_user,
         course=course,
         assignments=assignments,
+        synced_assignments=synced_assignments,
+        synced_course=synced_course,
         contents=contents,
         lectures=lectures,
         resources=resources,
@@ -1419,18 +1440,21 @@ def sync_courses():
         name = re.sub(r"\((LEC|LAB|TUT|SEM|DIS|PRA)(?:\s+[^)]*)?\)", " ", name, flags=re.I)
         name = re.sub(r"^[\s,._-]+|[\s,._-]+$", "", re.sub(r"\s+", " ", name)).strip() or code
         source_uid = str(item.get("source_uid") or url or f"{code}|{name}")[:255]
+        incoming_image = str(item.get("image_url") or "")[:4000]
         data = {
             "course_code": code,
             "course_name": name,
             "term": str(item.get("term") or "")[:120],
             "instructor": str(item.get("instructor") or "")[:255],
-            "image_url": str(item.get("image_url") or "")[:4000],
+            "image_url": incoming_image,
             "brightspace_url": url,
         }
-        fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         existing = SyncedCourse.query.filter_by(user_id=user.id, source_uid=source_uid).first()
         if not existing and code != "OTHER":
             existing = SyncedCourse.query.filter_by(user_id=user.id, course_code=code).first()
+        if existing and not incoming_image:
+            data["image_url"] = existing.image_url or ""
+        fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         if existing:
             if existing.source_hash == fingerprint:
                 counts["unchanged"] += 1
@@ -1477,7 +1501,7 @@ def extension_sync_status():
         "content_count": content_total,
         "courses": [{
             "code": c.course_code, "name": c.course_name, "image_url": c.image_url,
-            "url": c.brightspace_url, "updated_at": c.updated_at.isoformat() if c.updated_at else ""
+            "source_uid": c.source_uid, "url": c.brightspace_url, "updated_at": c.updated_at.isoformat() if c.updated_at else ""
         } for c in courses]
     })
 
@@ -1493,8 +1517,13 @@ def sync_course_content():
     if not isinstance(items, list):
         return jsonify({"error": "items must be a list."}), 400
 
+    replace_courses = [_normalize_course_code(c) for c in (payload.get("replace_courses") or [])]
+    if replace_courses:
+        CourseContent.query.filter(CourseContent.user_id == user.id, CourseContent.course_full.in_(replace_courses)).delete(synchronize_session=False)
+        SyncedFile.query.filter(SyncedFile.user_id == user.id, SyncedFile.course_full.in_(replace_courses)).delete(synchronize_session=False)
+        db.session.flush()
     counts = {"added": 0, "updated": 0, "unchanged": 0}
-    for item in items[:250]:
+    for item in items[:1200]:
         title = str(item.get("title") or "").strip()
         if not title:
             continue
@@ -1764,3 +1793,54 @@ def sync_now():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+@app.route("/api/sync/file", methods=["POST"])
+def sync_course_file():
+    user = _extension_user_from_request()
+    if not user:
+        return jsonify({"error": "Invalid or missing extension token."}), 401
+    uploaded = request.files.get("file")
+    if not uploaded:
+        return jsonify({"error": "No file supplied."}), 400
+    try:
+        metadata = json.loads(request.form.get("metadata") or "{}")
+    except Exception:
+        metadata = {}
+    course = _normalize_course_code(metadata.get("course") or "OTHER")
+    source_uid = str(metadata.get("source_uid") or metadata.get("source_url") or uuid4().hex)[:255]
+    raw_name = metadata.get("file_name") or uploaded.filename or "resource"
+    filename = secure_filename(raw_name) or f"resource-{uuid4().hex[:8]}"
+    data = uploaded.read()
+    if len(data) > 25 * 1024 * 1024:
+        return jsonify({"error": "File exceeds 25 MB limit."}), 413
+    digest = hashlib.sha256(data).hexdigest()
+    folder = os.path.join(app.root_path, "static", "nexora_uploads", str(user.id), course)
+    os.makedirs(folder, exist_ok=True)
+    stored_name = f"{digest[:14]}-{filename}"
+    path = os.path.join(folder, stored_name)
+    if not os.path.exists(path):
+        with open(path, "wb") as f:
+            f.write(data)
+    stored_url = url_for("static", filename=f"nexora_uploads/{user.id}/{course}/{stored_name}")
+    record = SyncedFile.query.filter_by(user_id=user.id, source_uid=source_uid).first()
+    if not record:
+        record = SyncedFile(id=uuid4().hex, user_id=user.id, source_uid=source_uid)
+        db.session.add(record)
+    record.course_full = course
+    record.original_source_url = str(metadata.get("source_url") or "")[:4000]
+    record.stored_url = stored_url
+    record.file_name = filename
+    record.mime_type = uploaded.mimetype or "application/octet-stream"
+    record.file_size = len(data)
+    record.content_hash = digest
+    record.updated_at = datetime.utcnow()
+    content = CourseContent.query.filter_by(user_id=user.id, source_uid=source_uid).first()
+    if content:
+        content.source_url = stored_url
+        original = record.original_source_url
+        content.content_text = json.dumps({"original_source_url": original, "stored_file": True})
+        content.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, "stored_url": stored_url, "file_name": filename, "size": len(data)})
+
+
