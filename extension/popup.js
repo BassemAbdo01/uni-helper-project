@@ -1,44 +1,41 @@
 const $ = id => document.getElementById(id);
 
 async function refresh() {
-  const s = await chrome.storage.sync.get(['apiBase', 'token']);
-  $('apiBase').value = s.apiBase || '';
-  $('token').value = s.token || '';
   const result = await chrome.runtime.sendMessage({type: 'NEXORA_STATUS'}).catch(() => null);
   if (!result) return;
-  const lr = result.lastResult || {};
-  const d = lr.diagnostic || {};
-  const detected = lr.detectedCourses || {};
-  const imported = lr.courses || {};
-  const err = lr.error || {};
+  $('apiBase').value = result.config?.apiBase || '';
+  $('token').value = result.config?.token || '';
+  $('autoSync').checked = result.config?.autoSyncEnabled !== false;
+  $('interval').value = String(result.config?.intervalMinutes || 30);
+  const s = result.syncStatus || {};
+  const c = s.courseDiscovery || {};
+  const x = s.contentSummary || {};
   const lines = [
     result.configured ? '✓ Connected' : 'Not configured',
-    result.lastSync ? `Last activity: ${new Date(result.lastSync).toLocaleString()}` : 'No scan yet',
-    Number.isFinite(d.found) ? `Detected on page: ${d.found} course(s)` : '',
-    d.candidateAnchors !== undefined ? `Course-link candidates: ${d.candidateAnchors} · DOM roots: ${d.roots}` : '',
-    detected.ok ? `Prepared for import: ${detected.found || 0}` : '',
-    imported.ok ? `Nexora import: +${imported.added || 0}, ${imported.updated || 0} updated, ${imported.unchanged || 0} unchanged` : '',
-    err.error ? `Error: ${err.error}` : '',
-    d.names?.length ? `\n${d.names.slice(0, 8).join('\n')}` : ''
+    result.lastSync ? `Last activity: ${new Date(result.lastSync).toLocaleString()}` : 'No activity yet',
+    s.running ? `Working: ${s.phase || 'syncing'} ${s.currentCourse || ''} ${s.progress || ''}` : '',
+    c.found !== undefined ? `Courses: ${c.found} detected · +${c.added || 0} · ${c.updated || 0} cleaned/updated · ${c.unchanged || 0} unchanged` : '',
+    x.courses !== undefined ? `Content scan: ${x.scanned}/${x.courses} courses · ${x.itemsFound} items found` : '',
+    x.courses !== undefined ? `Nexora content: +${x.added || 0} · ${x.updated || 0} updated · ${x.unchanged || 0} unchanged · ${x.failed || 0} failed` : '',
+    s.error ? `Error: ${s.error}` : '',
+    x.details?.length ? '\n' + x.details.slice(-8).map(d => `${d.course}: ${d.items ?? 0} items${d.error ? ` — ${d.error}` : ''}`).join('\n') : ''
   ].filter(Boolean);
   $('status').textContent = lines.join('\n');
 }
 
-refresh();
-$('save').onclick = async () => {
-  const apiBase = $('apiBase').value.trim();
-  const token = $('token').value.trim();
-  await chrome.storage.sync.set({apiBase, token});
-  $('status').textContent = 'Connection saved.';
+async function save() {
+  await chrome.storage.sync.set({
+    apiBase: $('apiBase').value.trim(),
+    token: $('token').value.trim(),
+    autoSyncEnabled: $('autoSync').checked,
+    intervalMinutes: Number($('interval').value)
+  });
+  await chrome.runtime.sendMessage({type: 'NEXORA_CONFIG_CHANGED'});
   await refresh();
-};
-$('import').onclick = async () => {
-  await $('save').onclick();
-  await chrome.runtime.sendMessage({type: 'NEXORA_START_IMPORT'});
-  window.close();
-};
-$('scan').onclick = async () => {
-  $('status').textContent = 'Scanning open Carleton Brightspace pages…';
-  await chrome.runtime.sendMessage({type: 'NEXORA_SCAN_OPEN_TABS'});
-  setTimeout(refresh, 1200);
-};
+}
+
+$('save').onclick = save;
+$('import').onclick = async () => { await save(); await chrome.runtime.sendMessage({type: 'NEXORA_START_IMPORT'}); window.close(); };
+$('scan').onclick = async () => { await save(); $('status').textContent = 'Scanning open Brightspace homepage…'; await chrome.runtime.sendMessage({type: 'NEXORA_SCAN_OPEN_TABS'}); await refresh(); };
+$('sync').onclick = async () => { await save(); $('status').textContent = 'Scanning every imported course. Keep Chrome open…'; chrome.runtime.sendMessage({type: 'NEXORA_SYNC_ALL_COURSES'}).then(refresh); setTimeout(refresh, 1500); };
+refresh();

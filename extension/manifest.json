@@ -1,37 +1,21 @@
 {
   "manifest_version": 3,
   "name": "Nexora Sync",
-  "version": "0.3.0",
-  "description": "Detects Carleton Brightspace course cards, including D2L web components and Shadow DOM, and imports them into Nexora.",
-  "permissions": [
-    "storage",
-    "alarms",
-    "tabs"
-  ],
+  "version": "0.4.0",
+  "description": "Imports Carleton Brightspace courses and maps course content into Nexora with scheduled background scanning.",
+  "permissions": ["storage", "alarms", "tabs"],
   "host_permissions": [
     "https://brightspace.carleton.ca/*",
     "https://*.brightspace.com/*",
     "https://*.onrender.com/*",
     "http://127.0.0.1:5000/*"
   ],
-  "background": {
-    "service_worker": "background.js"
-  },
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "Nexora Sync"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "https://brightspace.carleton.ca/*",
-        "https://*.brightspace.com/*"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "run_at": "document_idle",
-      "all_frames": true
-    }
-  ]
+  "background": {"service_worker": "background.js"},
+  "action": {"default_popup": "popup.html", "default_title": "Nexora Sync"},
+  "content_scripts": [{
+    "matches": ["https://brightspace.carleton.ca/*", "https://*.brightspace.com/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle",
+    "all_frames": true
+  }]
 }

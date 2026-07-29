@@ -1410,6 +1410,14 @@ def sync_courses():
         raw_code = str(item.get("course_code") or item.get("code") or item.get("title") or "OTHER")
         code = _normalize_course_code(raw_code)
         name = str(item.get("course_name") or item.get("name") or item.get("title") or code).strip()[:1000]
+        # Defensive cleanup for raw Brightspace cross-list/section metadata.
+        name = re.sub(r"^\s*(Merge|Crosslist)\s+", "", name, flags=re.I)
+        name = re.sub(r"\[[\d:\s,]+\]", " ", name)
+        name = re.sub(r"\bXLS[A-Z0-9_-]+\b", " ", name, flags=re.I)
+        name = re.sub(r"\bSP[_-]?\d+\b", " ", name, flags=re.I)
+        name = re.sub(r"\b(Fall|Winter|Summer|Spring)\s+20\d{2}\b", " ", name, flags=re.I)
+        name = re.sub(r"\((LEC|LAB|TUT|SEM|DIS|PRA)(?:\s+[^)]*)?\)", " ", name, flags=re.I)
+        name = re.sub(r"^[\s,._-]+|[\s,._-]+$", "", re.sub(r"\s+", " ", name)).strip() or code
         source_uid = str(item.get("source_uid") or url or f"{code}|{name}")[:255]
         data = {
             "course_code": code,

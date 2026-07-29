@@ -1,20 +1,14 @@
-# Nexora Sync 0.3.0 — Carleton Course Discovery
+# Nexora Sync v0.4
 
-This build focuses only on the first milestone: reliably detecting the course cards shown on Carleton Brightspace and importing those courses into Nexora.
+This developer build is for Carleton Brightspace testing.
 
-## Update an existing unpacked installation
-1. Extract this ZIP.
-2. Open `chrome://extensions`.
-3. Find **Nexora Sync** and click **Remove** (or replace the old extension folder and click Reload).
-4. Click **Load unpacked** and select this ZIP's `extension` folder.
-5. Open `https://brightspace.carleton.ca/d2l/home` and keep the My Courses cards visible.
-6. Open Nexora Sync and click **Scan open Brightspace pages**.
+## What it does
+- Detects and cleans Carleton course names, codes, terms, IDs, URLs and images.
+- Imports/updates matching Nexora course workspaces.
+- Opens temporary inactive tabs for each imported course.
+- Maps visible Content, Assignments, Quizzes and Announcements links.
+- Sends the content map to Nexora with deduplication.
+- Runs on a 15/30/60-minute Chrome alarm when auto-sync is enabled.
 
-The popup now reports:
-- number of courses detected
-- number of candidate course links
-- Shadow DOM roots inspected
-- course names/codes found
-- server import counts
-
-This build intentionally does not crawl lecture files yet. Course detection must work first.
+## Current limitation
+This version maps links and visible items. It does not yet upload the actual PDF/PPTX file bytes. The next version will add authenticated file transfer after this content map is verified against real Carleton courses.
