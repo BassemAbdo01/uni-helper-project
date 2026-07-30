@@ -6,9 +6,12 @@ import urllib.parse
 import json
 import hashlib
 import secrets
+import io
+import zipfile
 from datetime import datetime, date, timedelta
 import calendar as calendar_module
 from uuid import uuid4
+from pathlib import Path
 
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 from flask_sqlalchemy import SQLAlchemy
@@ -23,6 +26,9 @@ from flask_login import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+from pypdf import PdfReader
+from pptx import Presentation
+from docx import Document
 from ics import Calendar
 
 app = Flask(__name__)
@@ -845,6 +851,131 @@ def copilot_status():
     })
 
 
+
+def _tokenize_query(value):
+    return {w for w in re.findall(r"[a-z0-9]+", (value or "").lower()) if len(w) > 2}
+
+
+def _select_course_content(user_id, prompt, limit=8):
+    """Rank imported content against a natural-language request without inventing a match."""
+    rows = CourseContent.query.filter_by(user_id=user_id).order_by(CourseContent.updated_at.desc()).limit(500).all()
+    terms = _tokenize_query(prompt)
+    explicit_course = None
+    course_match = re.search(r"\b([A-Za-z]{2,5})\s*[- ]?\s*(\d{3,4}[A-Za-z]?)\b", prompt or "")
+    if course_match:
+        explicit_course = _normalize_course_code(f"{course_match.group(1)} {course_match.group(2)}")
+    lecture_numbers = set(re.findall(r"(?:lecture|lesson|week|module|chapter|slides?)\s*#?\s*(\d{1,3})", (prompt or "").lower()))
+    ranked = []
+    for row in rows:
+        if explicit_course and _normalize_course_code(row.course_full) != explicit_course:
+            continue
+        hay = f"{row.course_full} {row.title} {row.module_name} {row.content_type}".lower()
+        score = 0
+        for term in terms:
+            if term in hay:
+                score += 4 if term in (row.title or '').lower() else 2
+        if row.content_type == 'lecture' and re.search(r"\b(explain|teach|summari[sz]e|lecture|slides?|week|module)\b", (prompt or '').lower()):
+            score += 5
+        if lecture_numbers and any(re.search(rf"\b{re.escape(n)}\b", hay) for n in lecture_numbers):
+            score += 12
+        if score:
+            ranked.append((score, row.updated_at or datetime.min, row))
+    ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [r for _, _, r in ranked[:limit]]
+
+
+def _extract_uploaded_course_file(upload):
+    filename = secure_filename(upload.filename or 'lecture-file')
+    raw = upload.read()
+    if not raw:
+        raise ValueError('The Brightspace file was empty.')
+    if len(raw) > 30 * 1024 * 1024:
+        raise ValueError('This lecture is larger than the 30 MB processing limit.')
+    suffix = Path(filename).suffix.lower()
+    text_parts = []
+    if suffix == '.pdf':
+        reader = PdfReader(io.BytesIO(raw))
+        for index, page in enumerate(reader.pages[:250], 1):
+            extracted = (page.extract_text() or '').strip()
+            if extracted:
+                text_parts.append(f"[Page {index}]\n{extracted}")
+    elif suffix in {'.pptx', '.ppt'}:
+        if suffix == '.ppt':
+            raise ValueError('Legacy .ppt files must be converted to .pptx by Brightspace or the instructor.')
+        deck = Presentation(io.BytesIO(raw))
+        for index, slide in enumerate(deck.slides[:300], 1):
+            chunks = []
+            for shape in slide.shapes:
+                if hasattr(shape, 'text') and shape.text and shape.text.strip():
+                    chunks.append(shape.text.strip())
+                if getattr(shape, 'has_table', False):
+                    for table_row in shape.table.rows:
+                        chunks.append(' | '.join(cell.text.strip() for cell in table_row.cells))
+            notes = ''
+            try:
+                notes = slide.notes_slide.notes_text_frame.text.strip()
+            except Exception:
+                pass
+            if notes:
+                chunks.append(f"Speaker notes: {notes}")
+            if chunks:
+                text_parts.append(f"[Slide {index}]\n" + '\n'.join(chunks))
+    elif suffix == '.docx':
+        doc = Document(io.BytesIO(raw))
+        text_parts.extend(p.text.strip() for p in doc.paragraphs if p.text.strip())
+        for table in doc.tables:
+            for row in table.rows:
+                text_parts.append(' | '.join(cell.text.strip() for cell in row.cells))
+    elif suffix in {'.txt', '.md', '.csv', '.py', '.java', '.c', '.cpp', '.js', '.html'}:
+        text_parts.append(raw.decode('utf-8', errors='replace'))
+    else:
+        raise ValueError(f'Automatic lecture reading does not yet support {suffix or "this file type"}.')
+    text = '\n\n'.join(x for x in text_parts if x).strip()
+    if not text:
+        raise ValueError('No readable text was found in this lecture. It may contain only scanned images.')
+    return filename, text[:500000], hashlib.sha256(raw).hexdigest(), len(raw)
+
+
+@app.route('/api/sync/process-content', methods=['POST'])
+def process_course_content_file():
+    """Receive one temporary Brightspace file from Nexora Sync, extract text, then discard the bytes."""
+    user = _extension_user_from_request()
+    if not user:
+        return jsonify({'error': 'Invalid or missing extension token.'}), 401
+    source_uid = str(request.form.get('source_uid') or '')[:255]
+    if not source_uid:
+        return jsonify({'error': 'Missing source_uid.'}), 400
+    row = CourseContent.query.filter_by(user_id=user.id, source_uid=source_uid).first()
+    if not row:
+        return jsonify({'error': 'This imported lecture could not be found in Nexora.'}), 404
+    upload = request.files.get('file')
+    if not upload:
+        return jsonify({'error': 'No lecture file was received.'}), 400
+    try:
+        filename, extracted, file_hash, size = _extract_uploaded_course_file(upload)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 422
+    row.content_text = extracted
+    row.content_hash = _content_payload_hash({
+        'title': row.title, 'content_type': row.content_type, 'source_url': row.source_url,
+        'content_text': extracted, 'module_name': row.module_name, 'published_at': row.published_at,
+    })
+    row.updated_at = datetime.utcnow()
+    existing = SyncedFile.query.filter_by(user_id=user.id, source_uid=source_uid).first()
+    if not existing:
+        existing = SyncedFile(id=uuid4().hex, user_id=user.id, source_uid=source_uid, course_full=row.course_full)
+        db.session.add(existing)
+    existing.original_source_url = row.source_url
+    existing.file_name = filename
+    existing.mime_type = upload.mimetype or ''
+    existing.file_size = size
+    existing.content_hash = file_hash
+    existing.stored_url = ''
+    existing.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'ok': True, 'source_uid': source_uid, 'title': row.title, 'characters': len(extracted), 'temporary_file_deleted': True})
+
+
 @app.route("/api/copilot", methods=["POST"])
 @login_required
 def copilot():
@@ -879,6 +1010,21 @@ def copilot():
             "error": "Gemini is not connected to this service. Add GEMINI_API_KEY to the Render web service, then redeploy."
         }), 503
 
+    matched_content = _select_course_content(current_user.id, prompt)
+    lecture_intent = bool(re.search(r"\b(explain|teach|summari[sz]e|break down|quiz me|flashcards?).{0,80}\b(lecture|slides?|week|module|chapter)\b|\b(lecture|slides?|week|module|chapter).{0,80}\b(explain|teach|summari[sz]e|break down|quiz|flashcards?)\b", prompt.lower()))
+    primary = matched_content[0] if matched_content else None
+    if lecture_intent and primary and len((primary.content_text or '').strip()) < 120:
+        return jsonify({
+            "answer": f"I found {primary.title} in {primary.course_full}. I’m securely fetching and reading it from Brightspace now…",
+            "needs_content": True,
+            "content_request": {
+                "source_uid": primary.source_uid,
+                "source_url": primary.source_url,
+                "title": primary.title,
+                "course": primary.course_full,
+            },
+        }), 409
+
     semester_context = {
         "student_first_name": first_name,
         "today": date.today().isoformat(),
@@ -887,6 +1033,13 @@ def copilot():
             "course": task.get("course_full", "OTHER"),
             "due": task.get("main_due_raw", ""),
         } for task in tasks[:40]],
+        "matched_course_content": [{
+            "course": row.course_full,
+            "title": row.title,
+            "type": row.content_type,
+            "module": row.module_name,
+            "text": (row.content_text or '')[:45000],
+        } for row in matched_content[:3] if (row.content_text or '').strip()],
     }
 
     contents = []
@@ -955,8 +1108,8 @@ def copilot():
         return jsonify({
             "answer": answer,
             "mode": "gemini",
-            "grounded": False,
-            "sources": [],
+            "grounded": bool(semester_context.get("matched_course_content")),
+            "sources": [{"course": x["course"], "title": x["title"], "module": x["module"]} for x in semester_context.get("matched_course_content", [])],
             "meta": {"upcoming": len(upcoming), "overdue": len(overdue), "tasks": len(tasks)},
         })
     except urllib.error.HTTPError as exc:

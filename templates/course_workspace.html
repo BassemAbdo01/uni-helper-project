@@ -108,15 +108,17 @@
     btn.classList.add('active');
     document.querySelector(`[data-panel="${btn.dataset.tab}"]`).hidden=false;
   }));
+  function requestLectureFromExtension(request){return new Promise((resolve,reject)=>{const requestId=crypto.randomUUID();const timer=setTimeout(()=>{window.removeEventListener('message',listener);reject(new Error('Nexora Sync did not respond. Install extension v0.8 and sign into Brightspace once.'));},90000);function listener(event){const d=event.data;if(event.source!==window||d?.channel!=='NEXORA_COURSE_INTELLIGENCE_V08'||d?.type!=='FETCH_LECTURE_RESULT'||d?.requestId!==requestId)return;clearTimeout(timer);window.removeEventListener('message',listener);if(d.response?.ok)resolve(d.response.result);else reject(new Error(d.response?.error||'The extension could not read this lecture.'));}window.addEventListener('message',listener);window.postMessage({channel:'NEXORA_COURSE_INTELLIGENCE_V08',type:'FETCH_LECTURE',requestId,request},window.location.origin);});}
+  async function askCourseAI(message){return fetch('/api/copilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})});}
   document.getElementById('askAi').addEventListener('click', async()=>{
     const prompt=document.getElementById('aiPrompt').value.trim(); if(!prompt)return;
-    const out=document.getElementById('aiAnswer'); out.textContent='Thinking with {{ course }} context…';
+    const out=document.getElementById('aiAnswer'); out.textContent='Finding the right {{ course }} material…';
     try{
-      const context=await fetch('/api/course/{{ course }}/ai-context').then(r=>r.json());
-      const message=`You are helping with {{ course }}. Use this course context when useful:\n${JSON.stringify(context)}\n\nStudent question: ${prompt}`;
-      const res=await fetch('/api/copilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})});
-      const data=await res.json(); out.textContent=data.answer||data.error||'No response.';
-    }catch(e){out.textContent='Could not reach Nexora AI.'}
+      const message=`Course: {{ course }}. Student question: ${prompt}`;
+      let res=await askCourseAI(message); let data=await res.json();
+      if(data.needs_content&&data.content_request){out.textContent=`Found ${data.content_request.title}. Securely reading it from Brightspace…`;await requestLectureFromExtension(data.content_request);out.textContent='Lecture processed. Building your explanation…';res=await askCourseAI(message);data=await res.json();}
+      out.textContent=data.answer||data.error||'No response.';
+    }catch(e){out.textContent=e.message||'Could not reach Nexora AI.'}
   });
 </script>
 </body>

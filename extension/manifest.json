@@ -1,21 +1,47 @@
 {
   "manifest_version": 3,
   "name": "Nexora Sync",
-  "version": "0.6.0",
-  "description": "Imports Carleton Brightspace courses and uses Smart Sync to map structured Brightspace content without permanently copying lecture files.",
-  "permissions": ["storage", "alarms", "tabs"],
+  "version": "0.8.0",
+  "description": "Nexora Smart Sync and on-demand Course Intelligence for Brightspace lectures, assignments, quizzes and announcements.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "tabs"
+  ],
   "host_permissions": [
     "https://brightspace.carleton.ca/*",
     "https://*.brightspace.com/*",
     "https://*.onrender.com/*",
     "http://127.0.0.1:5000/*"
   ],
-  "background": {"service_worker": "background.js"},
-  "action": {"default_popup": "popup.html", "default_title": "Nexora Sync"},
-  "content_scripts": [{
-    "matches": ["https://brightspace.carleton.ca/*", "https://*.brightspace.com/*"],
-    "js": ["content.js"],
-    "run_at": "document_idle",
-    "all_frames": true
-  }]
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Nexora Sync"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://brightspace.carleton.ca/*",
+        "https://*.brightspace.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://*.onrender.com/*",
+        "http://127.0.0.1:5000/*"
+      ],
+      "js": [
+        "nexora-bridge.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
 }
