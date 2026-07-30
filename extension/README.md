@@ -1,4 +1,4 @@
-# Nexora Sync v0.8 — Course Intelligence
+# Nexora Sync v0.9 — Course Intelligence
 
 This version adds on-demand lecture understanding to Background Smart Sync.
 
@@ -23,3 +23,7 @@ This version adds on-demand lecture understanding to Background Smart Sync.
 - Maximum lecture file size: 30 MB.
 - Supported extraction: PDF, PPTX, DOCX, and common text/code files.
 - Image-only scanned lectures need OCR, which is not enabled in this version.
+
+
+## v0.9
+Adds full-screen multimodal AI Tutor support and clearer lecture-fetch errors.

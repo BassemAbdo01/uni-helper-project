@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Nexora Sync",
-  "version": "0.8.0",
-  "description": "Nexora Smart Sync and on-demand Course Intelligence for Brightspace lectures, assignments, quizzes and announcements.",
+  "version": "0.9.0",
+  "description": "Nexora Smart Sync, background lecture intelligence, and full-screen multimodal AI Tutor.",
   "permissions": [
     "storage",
     "alarms",

@@ -1,5 +1,5 @@
 (() => {
-  const CHANNEL = 'NEXORA_COURSE_INTELLIGENCE_V08';
+  const CHANNEL = 'NEXORA_COURSE_INTELLIGENCE_V09';
   window.addEventListener('message', async event => {
     if (event.source !== window || event.data?.channel !== CHANNEL || event.data?.type !== 'FETCH_LECTURE') return;
     const requestId = event.data.requestId;

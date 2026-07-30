@@ -488,6 +488,15 @@ async function fetchAndProcessLecture(request) {
   });
   const blob = await response.blob();
   if (!blob.size) throw new Error('Brightspace returned an empty lecture file.');
+  if (/text\/html/i.test(contentType)) {
+    const preview = (await blob.slice(0, 12000).text()).toLowerCase();
+    if (/sign in|log in|authenticate|saml|single sign-on/.test(preview)) {
+      const error = new Error('Brightspace connection expired. Open Brightspace and sign in again.');
+      error.code = 'AUTH_EXPIRED';
+      throw error;
+    }
+    throw new Error('Brightspace returned a webpage instead of the lecture file. Run a fresh course sync so Nexora can capture the direct download link.');
+  }
   if (blob.size > 30 * 1024 * 1024) throw new Error('This lecture is larger than Nexora’s 30 MB processing limit.');
   const fallbackName = clean(request.title || 'lecture-file');
   let fileName = fallbackName;

@@ -881,7 +881,16 @@ def _select_course_content(user_id, prompt, limit=8):
         if score:
             ranked.append((score, row.updated_at or datetime.min, row))
     ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    return [r for _, _, r in ranked[:limit]]
+    results = [r for _, _, r in ranked[:limit]]
+    # Never silently substitute an unrelated lecture when the student explicitly names a number.
+    if lecture_numbers:
+        exact = []
+        for row in results:
+            hay = f"{row.title} {row.module_name}".lower()
+            if any(re.search(rf"(?:lecture|lesson|week|module|chapter|slides?)?\s*#?\s*{re.escape(n)}\b", hay) for n in lecture_numbers):
+                exact.append(row)
+        return exact
+    return results
 
 
 def _extract_uploaded_course_file(upload):
@@ -954,7 +963,14 @@ def process_course_content_file():
     try:
         filename, extracted, file_hash, size = _extract_uploaded_course_file(upload)
     except ValueError as exc:
-        return jsonify({'error': str(exc)}), 422
+        return jsonify({'error': str(exc), 'stage': 'extract'}), 422
+    except Exception as exc:
+        app.logger.exception('Unexpected lecture extraction failure for %s', source_uid)
+        return jsonify({
+            'error': 'Nexora received the lecture but could not read its file format. Try syncing again or ask the professor to provide PDF/PPTX.',
+            'stage': 'extract',
+            'detail': type(exc).__name__,
+        }), 422
     row.content_text = extracted
     row.content_hash = _content_payload_hash({
         'title': row.title, 'content_type': row.content_type, 'source_url': row.source_url,
@@ -982,8 +998,30 @@ def copilot():
     """Conversational, semester-aware Nexora AI powered by Gemini."""
     payload = request.get_json(silent=True) or {}
     prompt = (payload.get("message") or "").strip()
-    if not prompt:
-        return jsonify({"error": "Ask me something first."}), 400
+    images = payload.get('images') or []
+    if not isinstance(images, list):
+        images = []
+    images = images[:4]
+    if not prompt and not images:
+        return jsonify({"error": "Ask me something or attach an image first."}), 400
+
+    validated_images = []
+    total_image_bytes = 0
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        mime = str(image.get('mime_type') or '').lower().strip()
+        data = str(image.get('data') or '').strip()
+        if mime not in {'image/jpeg','image/png','image/webp','image/gif'} or not data:
+            continue
+        try:
+            raw_size = (len(data) * 3) // 4
+        except Exception:
+            continue
+        total_image_bytes += raw_size
+        if total_image_bytes > 8 * 1024 * 1024:
+            return jsonify({'error': 'Attached images are too large. Keep the total under 8 MB.'}), 413
+        validated_images.append({'mime_type': mime, 'data': data})
 
     tasks = sort_cards(build_grouped_cards(load_tasks()))
     upcoming = []
@@ -1013,6 +1051,13 @@ def copilot():
     matched_content = _select_course_content(current_user.id, prompt)
     lecture_intent = bool(re.search(r"\b(explain|teach|summari[sz]e|break down|quiz me|flashcards?).{0,80}\b(lecture|slides?|week|module|chapter)\b|\b(lecture|slides?|week|module|chapter).{0,80}\b(explain|teach|summari[sz]e|break down|quiz|flashcards?)\b", prompt.lower()))
     primary = matched_content[0] if matched_content else None
+    explicit_lecture_number = re.search(r'(?:lecture|lesson|week|module|chapter|slides?)\s*#?\s*(\d{1,3})', prompt.lower())
+    if lecture_intent and explicit_lecture_number and not primary:
+        return jsonify({
+            'answer': f"I couldn't find Lecture {explicit_lecture_number.group(1)} in this course yet. I won't guess using a different file. Run Nexora Sync or choose a lecture that appears in the workspace.",
+            'grounded': False,
+            'sources': [],
+        }), 200
     if lecture_intent and primary and len((primary.content_text or '').strip()) < 120:
         return jsonify({
             "answer": f"I found {primary.title} in {primary.course_full}. I’m securely fetching and reading it from Brightspace now…",
@@ -1051,7 +1096,10 @@ def copilot():
                 "role": "model" if role == "assistant" else "user",
                 "parts": [{"text": content[:4000]}],
             })
-    contents.append({"role": "user", "parts": [{"text": prompt[:6000]}]})
+    user_parts = [{"text": (prompt or 'Please explain the attached image in the context of this course.')[:6000]}]
+    for image in validated_images:
+        user_parts.append({"inline_data": {"mime_type": image['mime_type'], "data": image['data']}})
+    contents.append({"role": "user", "parts": user_parts})
 
     model = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash").strip()
     system_instruction = (
