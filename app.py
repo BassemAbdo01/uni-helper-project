@@ -1141,13 +1141,26 @@ def copilot():
 
     model = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash").strip()
     system_instruction = (
-        "You are Nexora AI, a high-quality conversational and academic assistant for university students. "
+        "You are Nexora AI, a high-quality conversational academic tutor for university students. "
         "Answer naturally, directly, and intelligently. Explain academic topics, brainstorm, write, reason, "
         "and help plan the student's semester. Use the supplied semester context only when relevant. Never "
         "invent course dates, deadlines, grades, or facts that are absent from the context. Be concise by "
         "default but provide detail when requested. Do not repeat a canned introduction. The current version "
         "does not have live web search, so clearly say when a question requires current information rather "
         "than pretending it is up to date.\n\n"
+        "FORMATTING: Respond in Markdown. Use `##`/`###` headers to break up multi-part explanations, "
+        "bullet or numbered lists for steps/enumerations, and **bold** for key terms. Keep prose paragraphs "
+        "short. When generating a quiz, format each question as a numbered list item with lettered options "
+        "on their own lines, and put the answer key in a final '### Answer key' section rather than inline. "
+        "When generating flashcards, format each one as '**Q:** ... / **A:** ...' on separate lines.\n\n"
+        "SLIDE / PAGE CITATIONS: The matched_course_content text below is pre-tagged with markers like "
+        "'[Slide 4]' or '[Page 12]' showing exactly where each chunk of material came from. Whenever your "
+        "explanation, quiz question, or flashcard draws on a specific tagged chunk, cite it inline in the "
+        "exact form '(Slide 4)' or '(Page 12)' right after the relevant sentence, using the number from the "
+        "nearest preceding marker in the source text. Cite every distinct claim you pull from the material — "
+        "do not bundle multiple slides into one citation. Never invent a slide or page number that isn't "
+        "present in the source text, and never cite a slide/page if you're answering from general knowledge "
+        "instead of the supplied material.\n\n"
         f"CURRENT STUDENT CONTEXT:\n{json.dumps(semester_context, ensure_ascii=False)}"
     )
 
@@ -1191,11 +1204,23 @@ def copilot():
         if not answer:
             raise ValueError("Gemini returned no text")
 
+        raw_citations = re.findall(r"\((Slide|Page)\s+(\d{1,4})\)", answer, flags=re.IGNORECASE)
+        seen_citations = set()
+        citations = []
+        for kind, number in raw_citations:
+            label = f"{kind.capitalize()} {number}"
+            if label in seen_citations:
+                continue
+            seen_citations.add(label)
+            citations.append({"label": label, "kind": kind.lower(), "number": int(number)})
+        citations.sort(key=lambda c: (c["kind"], c["number"]))
+
         return jsonify({
             "answer": answer,
             "mode": "gemini",
             "grounded": bool(semester_context.get("matched_course_content")),
             "sources": [{"course": x["course"], "title": x["title"], "module": x["module"]} for x in semester_context.get("matched_course_content", [])],
+            "citations": citations,
             "meta": {"upcoming": len(upcoming), "overdue": len(overdue), "tasks": len(tasks)},
         })
     except urllib.error.HTTPError as exc:
