@@ -1,6 +1,6 @@
 (() => {
-  if (globalThis.__NEXORA_SITE_BRIDGE_V11__) return;
-  globalThis.__NEXORA_SITE_BRIDGE_V11__ = true;
+  if (globalThis.__NEXORA_SITE_BRIDGE_V12__) return;
+  globalThis.__NEXORA_SITE_BRIDGE_V12__ = true;
   const CHANNEL = 'NEXORA_COURSE_INTELLIGENCE_V10';
   const pending = new Map();
 
@@ -14,7 +14,7 @@
     const data = event.data;
     if (event.source !== window || data?.channel !== CHANNEL) return;
     if (data.type === 'PING_EXTENSION') {
-      window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '1.1.0' }, window.location.origin);
+      window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '1.2.0' }, window.location.origin);
       return;
     }
     if (data.type !== 'FETCH_LECTURE') return;
@@ -31,5 +31,5 @@
     }
   });
 
-  window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '1.1.0' }, window.location.origin);
+  window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '1.2.0' }, window.location.origin);
 })();

@@ -87,7 +87,29 @@
     return '';
   }
 
-  function discoverCoursesFromDom() {
+  async function expandAllCourseCards() {
+    let stableRounds = 0;
+    let previous = 0;
+    for (let round = 0; round < 18 && stableRounds < 3; round++) {
+      const controls = queryAll('button,a,[role="button"]');
+      let clicked = 0;
+      for (const control of controls) {
+        const label = clean(`${control.textContent || ''} ${control.getAttribute?.('aria-label') || ''}`);
+        if (/^(view|show|load)\s+(all\s+)?(more|courses?)$|view all courses|show more courses|load more/i.test(label) && !control.disabled) {
+          try { control.click(); clicked++; } catch (_) {}
+        }
+      }
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      await sleep(clicked ? 900 : 450);
+      const count = queryAll('a[href*="/d2l/home/"]').length;
+      if (count <= previous) stableRounds++; else stableRounds = 0;
+      previous = Math.max(previous, count);
+    }
+    window.scrollTo(0, 0);
+  }
+
+  async function discoverCoursesFromDom() {
+    await expandAllCourseCards();
     const map = new Map();
     for (const anchor of queryAll('a[href*="/d2l/home/"],[href*="/d2l/home/"]')) {
       const url = absolute(anchor.getAttribute?.('href') || anchor.href || '');
@@ -175,20 +197,21 @@
     const extension = ((title.match(/\.([a-z0-9]{1,8})\b/i) || absoluteUrl.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
     const topicId = topic.Id || topic.TopicId || topic.Identifier || '';
     const downloadUrl = topicId ? `${location.origin}/d2l/api/le/${version}/${orgUnitId}/content/topics/${topicId}/file` : '';
-    return { source_url: absoluteUrl || downloadUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
+    return { source_url: absoluteUrl || downloadUrl, download_url: downloadUrl, file_name: title, file_ext: extension, topic_id: String(topicId || ''), api_version: String(version || '') };
   }
 
-  function classifyContent(title, url, activityType) {
-    const text = `${title} ${url} ${activityType || ''}`.toLowerCase();
+  function classifyContent(title, url, activityType, moduleName = '') {
+    const text = `${title} ${url} ${activityType || ''} ${moduleName || ''}`.toLowerCase();
     const ext = ((title.match(/\.([a-z0-9]{1,8})\b/i) || url.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
-    if (/practice|sample question|review question|worksheet|problem set/.test(text)) return 'practice';
     if (/assignment|dropbox/.test(text)) return 'assignment';
     if (/quiz|quizzing/.test(text)) return 'quiz';
     if (/announcement|news/.test(text)) return 'announcement';
-    if (['py', 'c', 'cpp', 'h', 'java', 'js', 'ts', 'ipynb', 'zip', 'rar', '7z', 'csv', 'xlsx', 'xls'].includes(ext)) return 'resource';
-    if (['pdf', 'ppt', 'pptx'].includes(ext) && /(?:lecture|lec|slides?|week|module|chapter|lesson|unit)\s*[-_#:]?\s*\d+|\b(?:l|lec|wk|ch)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
+    if (/practice|sample question|review question|worksheet|problem set/.test(text)) return 'practice';
+    if (['py','c','cpp','h','java','js','ts','ipynb','zip','rar','7z','csv','xlsx','xls'].includes(ext)) return 'resource';
+    const lectureContext = /lecture notes?|lectures?|slides?|class notes?|lesson|week\s*\d+|module\s*\d+|chapter\s*\d+|unit\s*\d+|course content/.test(text);
+    if (lectureContext && ['pdf','ppt','pptx','doc','docx',''].includes(ext)) return 'lecture';
     if (/(?:lecture|lec|slides?|lesson)\s*[-_#:]?\s*\d+|\b(?:l|lec)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
-    if (['pdf', 'ppt', 'pptx', 'doc', 'docx'].includes(ext)) return 'resource';
+    if (['pdf','ppt','pptx','doc','docx'].includes(ext)) return /notes?|slides?|lecture/i.test(text) ? 'lecture' : 'resource';
     return 'page';
   }
 
@@ -213,7 +236,7 @@
         }
         const file = fileInfoFromTopic(node, orgUnitId, version);
         const activity = node.ActivityType || node.TypeIdentifier || node.Type || '';
-        const type = classifyContent(title, file.source_url, activity);
+        const type = classifyContent(title, file.source_url, activity, parentPath.join(" › "));
         items.push({
           course: course.course_code,
           source_uid: itemUid(orgUnitId, 'content', id, file.source_url || title),
@@ -223,6 +246,8 @@
           download_url: file.download_url,
           file_name: file.file_name,
           file_ext: file.file_ext,
+          topic_id: file.topic_id,
+          api_version: file.api_version,
           module_name: parentPath.join(' › '),
           content_text: htmlToText(node.Description || node.Body || node.Instructions || ''),
           published_at: dateValue(node.StartDate || node.LastModifiedDate || node.ModifiedDate),
@@ -440,12 +465,12 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '1.1.0' }); return false; }
+    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '1.2.0' }); return false; }
     if (message?.type === 'NEXORA_SESSION_CHECK') { sessionCheck().then(sendResponse); return true; }
     if (message?.type === 'NEXORA_DISCOVER_COURSES') {
       (async () => {
         for (let i = 0; i < 8; i++) {
-          const courses = discoverCoursesFromDom();
+          const courses = await discoverCoursesFromDom();
           if (courses.length) return { ok: true, courses, method: 'course-card-dom' };
           await sleep(600);
         }

@@ -103,6 +103,11 @@ class CourseContent(db.Model):
     title = db.Column(db.Text, nullable=False)
     content_type = db.Column(db.String(30), default="resource")
     source_url = db.Column(db.Text, default="")
+    download_url = db.Column(db.Text, default="")
+    file_name = db.Column(db.Text, default="")
+    file_ext = db.Column(db.String(20), default="")
+    api_version = db.Column(db.String(30), default="")
+    topic_id = db.Column(db.String(80), default="")
     source_uid = db.Column(db.String(255), default="", index=True)
     content_text = db.Column(db.Text, default="")
     module_name = db.Column(db.Text, default="")
@@ -169,6 +174,13 @@ def ensure_schema_columns():
             "sync_status": "VARCHAR(30) DEFAULT 'never'",
             "sync_message": "TEXT DEFAULT 'Not synchronized yet.'",
             "extension_token": "VARCHAR(128) DEFAULT ''",
+        },
+        "course_content": {
+            "download_url": "TEXT DEFAULT ''",
+            "file_name": "TEXT DEFAULT ''",
+            "file_ext": "VARCHAR(20) DEFAULT ''",
+            "api_version": "VARCHAR(30) DEFAULT ''",
+            "topic_id": "VARCHAR(80) DEFAULT ''",
         },
         "task": {
             "source_uid": "VARCHAR(255) DEFAULT ''",
@@ -1111,9 +1123,12 @@ def copilot():
             "content_request": {
                 "source_uid": primary.source_uid,
                 "source_url": primary.source_url,
-                "download_url": primary.source_url,
+                "download_url": primary.download_url or primary.source_url,
                 "title": primary.title,
-                "file_name": primary.title,
+                "file_name": primary.file_name or primary.title,
+                "file_ext": primary.file_ext or "",
+                "api_version": primary.api_version or "",
+                "topic_id": primary.topic_id or "",
                 "course": primary.course_full,
             },
         }), 409
@@ -1154,8 +1169,11 @@ def copilot():
         "You are Nexora AI, a high-quality conversational academic tutor for university students. "
         "Answer naturally, directly, and intelligently. Explain academic topics, brainstorm, write, reason, "
         "and help plan the student's semester. Use the supplied semester context only when relevant. Never "
-        "invent course dates, deadlines, grades, or facts that are absent from the context. Be concise by "
-        "default but provide detail when requested. Do not repeat a canned introduction. The current version "
+        "invent course dates, deadlines, grades, or facts that are absent from the context. When the student asks to "
+        "explain a lecture, teach the complete lecture in depth rather than summarizing it: follow the source order, "
+        "cover every major concept, equation, example, diagram description, and code idea available in the extracted material; "
+        "use clear headings, step-by-step explanations, worked examples, common mistakes, key takeaways, and practice questions. "
+        "Do not stop after one paragraph. For ordinary questions, match the depth requested. Do not repeat a canned introduction. The current version "
         "does not have live web search, so clearly say when a question requires current information rather "
         "than pretending it is up to date.\n\n"
         "FORMATTING: Respond in Markdown. Use `##`/`###` headers to break up multi-part explanations, "
@@ -1179,7 +1197,7 @@ def copilot():
         "contents": contents,
         "generationConfig": {
             "temperature": 0.7,
-            "maxOutputTokens": 1200,
+            "maxOutputTokens": 8192 if lecture_intent else 4096,
         },
     }).encode("utf-8")
     endpoint = (
@@ -1628,6 +1646,10 @@ def _content_payload_hash(payload):
         "title": payload.get("title", ""),
         "type": payload.get("content_type", "resource"),
         "url": payload.get("source_url", ""),
+        "download_url": payload.get("download_url", ""),
+        "file_name": payload.get("file_name", ""),
+        "api_version": payload.get("api_version", ""),
+        "topic_id": payload.get("topic_id", ""),
         "text": payload.get("content_text", ""),
         "module": payload.get("module_name", ""),
         "published": payload.get("published_at", ""),
@@ -1808,6 +1830,11 @@ def sync_course_content():
             "title": title,
             "content_type": str(item.get("content_type") or "resource")[:30],
             "source_url": source_url,
+            "download_url": str(item.get("download_url") or "")[:4000],
+            "file_name": str(item.get("file_name") or title)[:1000],
+            "file_ext": str(item.get("file_ext") or "")[:20],
+            "api_version": str(item.get("api_version") or "")[:30],
+            "topic_id": str(item.get("topic_id") or "")[:80],
             "content_text": str(item.get("content_text") or "")[:120000],
             "module_name": str(item.get("module_name") or "")[:1000],
             "published_at": str(item.get("published_at") or "")[:80],
@@ -1822,6 +1849,11 @@ def sync_course_content():
             existing.title = title
             existing.content_type = item_data["content_type"]
             existing.source_url = source_url
+            existing.download_url = item_data["download_url"]
+            existing.file_name = item_data["file_name"]
+            existing.file_ext = item_data["file_ext"]
+            existing.api_version = item_data["api_version"]
+            existing.topic_id = item_data["topic_id"]
             existing.content_text = item_data["content_text"]
             existing.module_name = item_data["module_name"]
             existing.published_at = item_data["published_at"]
@@ -1838,7 +1870,9 @@ def sync_course_content():
             db.session.add(CourseContent(
                 id=uuid4().hex, user_id=user.id, course_full=course,
                 title=title, content_type=item_data["content_type"],
-                source_url=source_url, source_uid=source_uid,
+                source_url=source_url, download_url=item_data["download_url"],
+                file_name=item_data["file_name"], file_ext=item_data["file_ext"],
+                api_version=item_data["api_version"], topic_id=item_data["topic_id"], source_uid=source_uid,
                 content_text=item_data["content_text"], module_name=item_data["module_name"],
                 published_at=item_data["published_at"], content_hash=fingerprint,
             ))
