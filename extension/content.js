@@ -1,4 +1,6 @@
 (() => {
+  if (globalThis.__NEXORA_BRIGHTSPACE_CONTENT_V11__) return;
+  globalThis.__NEXORA_BRIGHTSPACE_CONTENT_V11__ = true;
   const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const absolute = href => { try { return new URL(href, location.href).href; } catch (_) { return ''; } };
@@ -184,8 +186,8 @@
     if (/quiz|quizzing/.test(text)) return 'quiz';
     if (/announcement|news/.test(text)) return 'announcement';
     if (['py', 'c', 'cpp', 'h', 'java', 'js', 'ts', 'ipynb', 'zip', 'rar', '7z', 'csv', 'xlsx', 'xls'].includes(ext)) return 'resource';
-    if (['pdf', 'ppt', 'pptx'].includes(ext) && /lecture|slides?|week\s*\d+|module\s*\d+|chapter\s*\d+|lesson\s*\d+/i.test(title)) return 'lecture';
-    if (/lecture|slides?|lesson\s*\d+/i.test(title)) return 'lecture';
+    if (['pdf', 'ppt', 'pptx'].includes(ext) && /(?:lecture|lec|slides?|week|module|chapter|lesson|unit)\s*[-_#:]?\s*\d+|\b(?:l|lec|wk|ch)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
+    if (/(?:lecture|lec|slides?|lesson)\s*[-_#:]?\s*\d+|\b(?:l|lec)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
     if (['pdf', 'ppt', 'pptx', 'doc', 'docx'].includes(ext)) return 'resource';
     return 'page';
   }
@@ -438,6 +440,7 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '1.1.0' }); return false; }
     if (message?.type === 'NEXORA_SESSION_CHECK') { sessionCheck().then(sendResponse); return true; }
     if (message?.type === 'NEXORA_DISCOVER_COURSES') {
       (async () => {

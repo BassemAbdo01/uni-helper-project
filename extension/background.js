@@ -110,15 +110,48 @@ async function findBrightspaceTab() {
   return tabs.find(t => /\/d2l\//i.test(t.url || '')) || tabs[0] || null;
 }
 
+async function pingBrightspaceContentScript(tabId) {
+  try {
+    const result = await chrome.tabs.sendMessage(tabId, { type: 'NEXORA_CONTENT_PING' });
+    return result?.ok === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function ensureBrightspaceContentScript(tab) {
+  if (!tab?.id) throw new Error('Brightspace tab is unavailable.');
+  if (await pingBrightspaceContentScript(tab.id)) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: false },
+      files: ['content.js']
+    });
+  } catch (error) {
+    throw new Error(`Nexora could not activate on this Brightspace page: ${error?.message || 'script injection failed'}`);
+  }
+  for (let attempt = 0; attempt < 8; attempt++) {
+    if (await pingBrightspaceContentScript(tab.id)) return;
+    await sleep(250);
+  }
+  throw new Error('Nexora activated on Brightspace, but the page did not respond. Refresh Brightspace once and try again.');
+}
+
 async function sendToBrightspace(message, retries = 2) {
   const tab = await findBrightspaceTab();
   if (!tab) throw new Error('Open Brightspace once and sign in so Nexora can connect your courses.');
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt++) {
-    try { return await chrome.tabs.sendMessage(tab.id, message); }
-    catch (error) {
+    try {
+      await ensureBrightspaceContentScript(tab);
+      return await chrome.tabs.sendMessage(tab.id, message);
+    } catch (error) {
       lastError = error;
-      if (attempt < retries) await sleep(900);
+      if (attempt < retries) {
+        await sleep(500 + attempt * 500);
+        try { await chrome.tabs.reload(tab.id); } catch (_) {}
+        await sleep(900);
+      }
     }
   }
   throw new Error(`Could not communicate with Brightspace: ${lastError?.message || 'unknown error'}`);
@@ -180,8 +213,8 @@ function classifyContent(title, url, activityType) {
   if (/quiz|quizzing/.test(text)) return 'quiz';
   if (/announcement|news/.test(text)) return 'announcement';
   if (['py', 'c', 'cpp', 'h', 'java', 'js', 'ts', 'ipynb', 'zip', 'rar', '7z', 'csv', 'xlsx', 'xls'].includes(ext)) return 'resource';
-  if (['pdf', 'ppt', 'pptx'].includes(ext) && /lecture|slides?|week\s*\d+|module\s*\d+|chapter\s*\d+|lesson\s*\d+/i.test(title)) return 'lecture';
-  if (/lecture|slides?|lesson\s*\d+/i.test(title)) return 'lecture';
+  if (['pdf', 'ppt', 'pptx'].includes(ext) && /(?:lecture|lec|slides?|week|module|chapter|lesson|unit)\s*[-_#:]?\s*\d+|\b(?:l|lec|wk|ch)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
+  if (/(?:lecture|lec|slides?|lesson)\s*[-_#:]?\s*\d+|\b(?:l|lec)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
   if (['pdf', 'ppt', 'pptx', 'doc', 'docx'].includes(ext)) return 'resource';
   return 'page';
 }

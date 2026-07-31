@@ -1,29 +1,12 @@
-# Nexora Sync v0.9 — Course Intelligence
+# Nexora Sync 1.1
 
-This version adds on-demand lecture understanding to Background Smart Sync.
+Production-hardening update for Smart Sync and Course Intelligence Bridge.
 
-## What it does
-- Syncs Brightspace course metadata in the background while Chrome runs.
-- Lets Nexora AI locate an imported lecture from a natural-language request.
-- Temporarily downloads the matching PDF, PPTX, DOCX, or text file through the signed-in Brightspace browser session.
-- Extracts text on Nexora, discards the temporary bytes, and keeps only processed text for later questions.
-- Retries the original AI request automatically after processing.
-- Shows a clear reconnect/error message when Brightspace or the extension is unavailable.
+- Automatically detects and injects the Brightspace content script when Chrome did not load it.
+- Retries messaging safely instead of failing with “Receiving end does not exist”.
+- Background Smart Sync continues through the signed-in Brightspace browser session without requiring an open Brightspace tab after initial course detection.
+- Improved lecture classification for titles such as L18, Lec-18, Week 4, Unit 3, and similar naming schemes.
+- On-demand PDF/PPTX/DOCX reading remains temporary; only extracted text is cached in Nexora.
+- Maximum temporary lecture file size: 30 MB.
 
-## Install
-1. Deploy the included website files and requirements.
-2. Open chrome://extensions and enable Developer mode.
-3. Remove/disable the older Nexora Sync version.
-4. Load the `extension` folder unpacked.
-5. Sign into Brightspace once, detect courses, and run one full sync.
-6. In Nexora ask: `Explain Lecture 4 from ELEC 2507`.
-
-## Limits
-- Chrome must be running and the Brightspace session must remain valid.
-- Maximum lecture file size: 30 MB.
-- Supported extraction: PDF, PPTX, DOCX, and common text/code files.
-- Image-only scanned lectures need OCR, which is not enabled in this version.
-
-
-## v0.9
-Adds full-screen multimodal AI Tutor support and clearer lecture-fetch errors.
+After updating the unpacked extension, refresh Brightspace once, run Detect & clean courses, then Scan every course now.
