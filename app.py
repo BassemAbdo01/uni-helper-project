@@ -901,6 +901,25 @@ def _extract_uploaded_course_file(upload):
     if len(raw) > 30 * 1024 * 1024:
         raise ValueError('This lecture is larger than the 30 MB processing limit.')
     suffix = Path(filename).suffix.lower()
+    # Brightspace download endpoints sometimes return extensionless names. Detect common formats by file signature.
+    if suffix in {'', '.bin'}:
+        if raw.startswith(b'%PDF'):
+            suffix = '.pdf'
+            filename = f"{Path(filename).stem or 'lecture'}.pdf"
+        elif raw.startswith(b'PK\x03\x04'):
+            # PPTX and DOCX are both ZIP containers. Inspect package markers.
+            try:
+                import zipfile
+                with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                    names = set(archive.namelist())
+                if any(name.startswith('ppt/') for name in names):
+                    suffix = '.pptx'
+                    filename = f"{Path(filename).stem or 'lecture'}.pptx"
+                elif any(name.startswith('word/') for name in names):
+                    suffix = '.docx'
+                    filename = f"{Path(filename).stem or 'lecture'}.docx"
+            except Exception:
+                pass
     text_parts = []
     if suffix == '.pdf':
         reader = PdfReader(io.BytesIO(raw))
@@ -971,25 +990,42 @@ def process_course_content_file():
             'stage': 'extract',
             'detail': type(exc).__name__,
         }), 422
-    row.content_text = extracted
-    row.content_hash = _content_payload_hash({
-        'title': row.title, 'content_type': row.content_type, 'source_url': row.source_url,
-        'content_text': extracted, 'module_name': row.module_name, 'published_at': row.published_at,
+    try:
+        row.content_text = extracted
+        row.content_hash = _content_payload_hash({
+            'title': row.title, 'content_type': row.content_type, 'source_url': row.source_url,
+            'content_text': extracted, 'module_name': row.module_name, 'published_at': row.published_at,
+        })
+        row.updated_at = datetime.utcnow()
+        existing = SyncedFile.query.filter_by(user_id=user.id, source_uid=source_uid).first()
+        if not existing:
+            existing = SyncedFile(id=uuid4().hex, user_id=user.id, source_uid=source_uid, course_full=row.course_full)
+            db.session.add(existing)
+        existing.original_source_url = row.source_url
+        existing.file_name = filename
+        existing.mime_type = upload.mimetype or ''
+        existing.file_size = size
+        existing.content_hash = file_hash
+        existing.stored_url = ''
+        existing.updated_at = datetime.utcnow()
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.exception('Lecture text persistence failed for %s', source_uid)
+        return jsonify({
+            'error': 'The lecture was read successfully, but Nexora could not save its extracted text.',
+            'stage': 'database',
+            'detail': type(exc).__name__,
+        }), 500
+    return jsonify({
+        'ok': True,
+        'source_uid': source_uid,
+        'title': row.title,
+        'characters': len(extracted),
+        'file_name': filename,
+        'temporary_file_deleted': True,
+        'cached_as_text_only': True,
     })
-    row.updated_at = datetime.utcnow()
-    existing = SyncedFile.query.filter_by(user_id=user.id, source_uid=source_uid).first()
-    if not existing:
-        existing = SyncedFile(id=uuid4().hex, user_id=user.id, source_uid=source_uid, course_full=row.course_full)
-        db.session.add(existing)
-    existing.original_source_url = row.source_url
-    existing.file_name = filename
-    existing.mime_type = upload.mimetype or ''
-    existing.file_size = size
-    existing.content_hash = file_hash
-    existing.stored_url = ''
-    existing.updated_at = datetime.utcnow()
-    db.session.commit()
-    return jsonify({'ok': True, 'source_uid': source_uid, 'title': row.title, 'characters': len(extracted), 'temporary_file_deleted': True})
 
 
 @app.route("/api/copilot", methods=["POST"])
@@ -1065,7 +1101,9 @@ def copilot():
             "content_request": {
                 "source_uid": primary.source_uid,
                 "source_url": primary.source_url,
+                "download_url": primary.source_url,
                 "title": primary.title,
+                "file_name": primary.title,
                 "course": primary.course_full,
             },
         }), 409

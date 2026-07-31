@@ -479,49 +479,110 @@ async function configureAlarm() {
 }
 
 
+async function responseLooksLikeLogin(blob, finalUrl = '') {
+  if (/\/login|\/d2l\/login|saml|authenticate/i.test(finalUrl || '')) return true;
+  const preview = (await blob.slice(0, 20000).text()).toLowerCase();
+  return /sign in|log in|single sign-on|samlrequest|authentication required/.test(preview);
+}
+
+function extractDownloadCandidates(html, baseUrl) {
+  const candidates = [];
+  const patterns = [
+    /(?:href|src)=["']([^"']+(?:download|file|content\/topics)[^"']*)["']/gi,
+    /["'](\/d2l\/api\/le\/[^"']+\/content\/topics\/[^"']+\/file)["']/gi,
+    /["'](\/d2l\/common\/dialogues\/quickLink\/quickLink\.d2l[^"']+)["']/gi
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(html)) && candidates.length < 12) {
+      try { candidates.push(new URL(match[1].replace(/&amp;/g, '&'), baseUrl).href); } catch (_) {}
+    }
+  }
+  return [...new Set(candidates)];
+}
+
+async function downloadLectureBlob(request, cfg) {
+  const urls = [...new Set([request.download_url, request.source_url].filter(Boolean))];
+  let lastError = null;
+  for (const url of urls) {
+    try {
+      const fetched = await brightspaceFetch(url, {
+        origin: cfg.brightspaceOrigin,
+        accept: 'application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,*/*'
+      });
+      let blob = await fetched.response.blob();
+      if (!blob.size) throw new Error('Brightspace returned an empty file.');
+      if (/text\/html/i.test(fetched.contentType)) {
+        if (await responseLooksLikeLogin(blob, fetched.finalUrl)) {
+          const error = new Error('Brightspace connection expired. Open Brightspace and sign in again.');
+          error.code = 'AUTH_EXPIRED';
+          throw error;
+        }
+        const html = await blob.text();
+        const candidates = extractDownloadCandidates(html, fetched.finalUrl);
+        for (const candidate of candidates) {
+          try {
+            const nested = await brightspaceFetch(candidate, { origin: cfg.brightspaceOrigin, accept: '*/*' });
+            const nestedBlob = await nested.response.blob();
+            if (nestedBlob.size && !/text\/html/i.test(nested.contentType)) {
+              return { ...nested, blob: nestedBlob };
+            }
+          } catch (_) {}
+        }
+        throw new Error('Brightspace returned a page instead of the file. Run “Scan every course now” using Nexora Sync v1.0 so the direct file link is refreshed.');
+      }
+      return { ...fetched, blob };
+    } catch (error) {
+      if (error.code === 'AUTH_EXPIRED') throw error;
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('No downloadable Brightspace file URL was available for this lecture.');
+}
+
 async function fetchAndProcessLecture(request) {
   const cfg = await getConfig();
-  if (!request?.source_uid || !request?.source_url) throw new Error('Nexora did not provide a valid lecture reference.');
-  const { response, contentType, finalUrl } = await brightspaceFetch(request.source_url, {
-    origin: cfg.brightspaceOrigin,
-    accept: 'application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,*/*'
-  });
-  const blob = await response.blob();
-  if (!blob.size) throw new Error('Brightspace returned an empty lecture file.');
-  if (/text\/html/i.test(contentType)) {
-    const preview = (await blob.slice(0, 12000).text()).toLowerCase();
-    if (/sign in|log in|authenticate|saml|single sign-on/.test(preview)) {
-      const error = new Error('Brightspace connection expired. Open Brightspace and sign in again.');
-      error.code = 'AUTH_EXPIRED';
-      throw error;
-    }
-    throw new Error('Brightspace returned a webpage instead of the lecture file. Run a fresh course sync so Nexora can capture the direct download link.');
+  if (!request?.source_uid || !(request?.source_url || request?.download_url)) {
+    throw new Error('Nexora did not provide a valid lecture file reference. Run a fresh Smart Sync.');
   }
+  const { response, contentType, finalUrl, blob } = await downloadLectureBlob(request, cfg);
   if (blob.size > 30 * 1024 * 1024) throw new Error('This lecture is larger than Nexora’s 30 MB processing limit.');
-  const fallbackName = clean(request.title || 'lecture-file');
+
+  const fallbackName = clean(request.file_name || request.title || 'lecture-file');
   let fileName = fallbackName;
   try {
     const disposition = response.headers.get('content-disposition') || '';
-    const match = disposition.match(/filename\*?=(?:UTF-8''|\")?([^\";]+)/i);
-    if (match) fileName = decodeURIComponent(match[1].replace(/[\"]/g, '').trim());
+    const utf = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    const basic = disposition.match(/filename=["']?([^"';]+)/i);
+    if (utf) fileName = decodeURIComponent(utf[1].trim());
+    else if (basic) fileName = basic[1].trim();
     else {
       const pathName = new URL(finalUrl).pathname.split('/').pop();
       if (pathName && /\.[a-z0-9]{2,6}$/i.test(pathName)) fileName = decodeURIComponent(pathName);
     }
   } catch (_) {}
   if (!/\.[a-z0-9]{2,6}$/i.test(fileName)) {
-    const ext = /pdf/i.test(contentType) ? '.pdf' : /presentation|powerpoint/i.test(contentType) ? '.pptx' : /wordprocessingml/i.test(contentType) ? '.docx' : '.bin';
+    const ext = /pdf/i.test(contentType) ? '.pdf'
+      : /presentation|powerpoint/i.test(contentType) ? '.pptx'
+      : /wordprocessingml|msword/i.test(contentType) ? '.docx'
+      : /text\//i.test(contentType) ? '.txt' : '.bin';
     fileName += ext;
   }
+
   const form = new FormData();
   form.append('source_uid', request.source_uid);
+  form.append('source_url', request.source_url || request.download_url || '');
   form.append('file', blob, fileName);
   const uploaded = await fetch(`${cfg.apiBase}/api/sync/process-content`, {
     method: 'POST', headers: { Authorization: `Bearer ${cfg.token}` }, body: form
   });
+  const raw = await uploaded.text();
   let data = {};
-  try { data = await uploaded.json(); } catch (_) {}
-  if (!uploaded.ok) throw new Error(data.error || `Nexora could not process this lecture (${uploaded.status}).`);
+  try { data = JSON.parse(raw); } catch (_) { data = { error: raw.slice(0, 500) }; }
+  if (!uploaded.ok) {
+    const stage = data.stage ? ` (${data.stage})` : '';
+    throw new Error((data.error || `Nexora returned ${uploaded.status}`) + stage);
+  }
   return data;
 }
 

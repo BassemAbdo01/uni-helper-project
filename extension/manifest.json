@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Nexora Sync",
-  "version": "0.9.0",
-  "description": "Nexora Smart Sync, background lecture intelligence, and full-screen multimodal AI Tutor.",
+  "version": "1.0.0",
+  "description": "Nexora Smart Sync, background lecture intelligence, and Nexora Bridge, resilient lecture intelligence, and full-screen multimodal AI Tutor.",
   "permissions": [
     "storage",
     "alarms",

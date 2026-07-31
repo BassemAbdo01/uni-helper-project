@@ -1,14 +1,33 @@
 (() => {
-  const CHANNEL = 'NEXORA_COURSE_INTELLIGENCE_V09';
+  const CHANNEL = 'NEXORA_COURSE_INTELLIGENCE_V10';
+  const pending = new Map();
+
+  async function extensionRequest(payload) {
+    const response = await chrome.runtime.sendMessage(payload);
+    if (!response?.ok) throw new Error(response?.error || 'Nexora Sync could not complete the request.');
+    return response.result;
+  }
+
   window.addEventListener('message', async event => {
-    if (event.source !== window || event.data?.channel !== CHANNEL || event.data?.type !== 'FETCH_LECTURE') return;
-    const requestId = event.data.requestId;
+    const data = event.data;
+    if (event.source !== window || data?.channel !== CHANNEL) return;
+    if (data.type === 'PING_EXTENSION') {
+      window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '1.0.0' }, window.location.origin);
+      return;
+    }
+    if (data.type !== 'FETCH_LECTURE') return;
+    const requestId = data.requestId;
+    if (!requestId || pending.has(requestId)) return;
+    pending.set(requestId, true);
     try {
-      const response = await chrome.runtime.sendMessage({ type: 'NEXORA_FETCH_AND_PROCESS_LECTURE', request: event.data.request });
-      window.postMessage({ channel: CHANNEL, type: 'FETCH_LECTURE_RESULT', requestId, response }, window.location.origin);
+      const result = await extensionRequest({ type: 'NEXORA_FETCH_AND_PROCESS_LECTURE', request: data.request });
+      window.postMessage({ channel: CHANNEL, type: 'FETCH_LECTURE_RESULT', requestId, response: { ok: true, result } }, window.location.origin);
     } catch (error) {
-      window.postMessage({ channel: CHANNEL, type: 'FETCH_LECTURE_RESULT', requestId, response: { ok: false, error: error.message } }, window.location.origin);
+      window.postMessage({ channel: CHANNEL, type: 'FETCH_LECTURE_RESULT', requestId, response: { ok: false, error: error?.message || 'Lecture fetch failed.' } }, window.location.origin);
+    } finally {
+      pending.delete(requestId);
     }
   });
-  window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY' }, window.location.origin);
+
+  window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '1.0.0' }, window.location.origin);
 })();
