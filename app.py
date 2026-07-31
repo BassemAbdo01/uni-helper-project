@@ -865,15 +865,21 @@ def _select_course_content(user_id, prompt, limit=8):
     if course_match:
         explicit_course = _normalize_course_code(f"{course_match.group(1)} {course_match.group(2)}")
     lecture_numbers = set(re.findall(r"(?:lecture|lesson|week|module|chapter|slides?)\s*#?\s*(\d{1,3})", (prompt or "").lower()))
+
+    def _clean(value):
+        # Brightspace-sourced titles sometimes carry non-breaking spaces or other invisible
+        # unicode whitespace that don't behave like a normal space under \b / \s in regex.
+        return re.sub(r"[\s\u00a0\u200b\u2007\u202f]+", " ", (value or ""))
+
     ranked = []
     for row in rows:
         if explicit_course and _normalize_course_code(row.course_full) != explicit_course:
             continue
-        hay = f"{row.course_full} {row.title} {row.module_name} {row.content_type}".lower()
+        hay = _clean(f"{row.course_full} {row.title} {row.module_name} {row.content_type}").lower()
         score = 0
         for term in terms:
             if term in hay:
-                score += 4 if term in (row.title or '').lower() else 2
+                score += 4 if term in _clean(row.title).lower() else 2
         if row.content_type == 'lecture' and re.search(r"\b(explain|teach|summari[sz]e|lecture|slides?|week|module)\b", (prompt or '').lower()):
             score += 5
         if lecture_numbers and any(re.search(rf"\b{re.escape(n)}\b", hay) for n in lecture_numbers):
@@ -882,14 +888,18 @@ def _select_course_content(user_id, prompt, limit=8):
             ranked.append((score, row.updated_at or datetime.min, row))
     ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
     results = [r for _, _, r in ranked[:limit]]
-    # Never silently substitute an unrelated lecture when the student explicitly names a number.
+    # If the student named a specific lecture number, prefer results that literally contain
+    # it in the title/module — but never fall back to an empty list just because that stricter
+    # check missed on formatting; the scored ranking above already required the number to be
+    # present in the title/module to get here, so `results` is a safe fallback rather than
+    # silently telling the student nothing was found.
     if lecture_numbers:
         exact = []
         for row in results:
-            hay = f"{row.title} {row.module_name}".lower()
+            hay = _clean(f"{row.title} {row.module_name}").lower()
             if any(re.search(rf"(?:lecture|lesson|week|module|chapter|slides?)?\s*#?\s*{re.escape(n)}\b", hay) for n in lecture_numbers):
                 exact.append(row)
-        return exact
+        return exact or results
     return results
 
 
