@@ -208,7 +208,7 @@ function absolute(origin, href) {
 function classifyContent(title, url, activityType) {
   const text = `${title} ${url} ${activityType || ''}`.toLowerCase();
   const ext = ((title.match(/\.([a-z0-9]{1,8})\b/i) || url.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
-  if (/course\s*outline|syllabus|grading scheme|evaluation scheme/.test(text)) return 'outline';
+  if (/course\s*(?:outline|syllabus|information|guide)|syllabus|grading\s*(?:scheme|breakdown|policy)|evaluation\s*(?:scheme|breakdown)|marking\s*scheme|assessment\s*(?:scheme|breakdown)|course\s*policies/.test(text)) return 'outline';
   if (/practice|sample question|review question|worksheet|problem set/.test(text)) return 'practice';
   if (/assignment|dropbox/.test(text)) return 'assignment';
   if (/quiz|quizzing/.test(text)) return 'quiz';

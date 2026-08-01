@@ -14,7 +14,7 @@
     const data = event.data;
     if (event.source !== window || data?.channel !== CHANNEL) return;
     if (data.type === 'PING_EXTENSION') {
-      window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '1.4.0' }, window.location.origin);
+      window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '1.5.0' }, window.location.origin);
       return;
     }
     if (data.type !== 'FETCH_LECTURE') return;
@@ -31,5 +31,5 @@
     }
   });
 
-  window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '1.4.0' }, window.location.origin);
+  window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '1.5.0' }, window.location.origin);
 })();

@@ -928,6 +928,180 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2):
     raise RuntimeError(f"Gemini could not complete the request: {type(last_error).__name__ if last_error else 'unknown error'}")
 
 
+
+def _source_chunks(text_value, max_chunks=48):
+    """Turn extracted lecture text into useful page/slide-aware chunks."""
+    cleaned = _sanitize_extracted_text(text_value)
+    if not cleaned:
+        return []
+    parts = re.split(r'(?=\[(?:Slide|Page)\s+\d+\])', cleaned, flags=re.I)
+    chunks = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        label_match = re.match(r'\[((?:Slide|Page)\s+\d+)\]\s*', part, flags=re.I)
+        label = label_match.group(1).title() if label_match else ''
+        body = part[label_match.end():].strip() if label_match else part
+        # Split very large pages while preserving the citation label.
+        paras = [p.strip() for p in re.split(r'\n\s*\n|(?<=[.!?])\s+(?=[A-Z0-9])', body) if p.strip()]
+        if not paras:
+            paras = [body]
+        bucket = ''
+        for para in paras:
+            candidate = (bucket + '\n' + para).strip()
+            if len(candidate) > 2200 and bucket:
+                chunks.append({'label': label, 'text': bucket})
+                bucket = para
+            else:
+                bucket = candidate
+        if bucket:
+            chunks.append({'label': label, 'text': bucket})
+        if len(chunks) >= max_chunks:
+            break
+    return chunks[:max_chunks]
+
+
+def _key_sentences(text_value, limit=20):
+    chunks = _source_chunks(text_value, 60)
+    candidates=[]
+    for chunk in chunks:
+        for sent in re.split(r'(?<=[.!?])\s+|\n+', chunk['text']):
+            sent=' '.join(sent.split()).strip(' -•\t')
+            if 45 <= len(sent) <= 320 and not re.match(r'^(copyright|page \d+|slide \d+)$', sent, re.I):
+                score=0
+                if re.search(r'\b(is|are|means|defined as|refers to|used to|because|therefore|formula|equation|important|note)\b', sent, re.I): score+=3
+                if re.search(r'[:=]|\b[A-Z][A-Za-z]+\b', sent): score+=1
+                score += min(len(sent)//80,3)
+                candidates.append((score,chunk['label'],sent))
+    seen=set(); out=[]
+    for _,label,sent in sorted(candidates,key=lambda x:x[0],reverse=True):
+        key=re.sub(r'\W+','',sent.lower())[:140]
+        if key in seen: continue
+        seen.add(key); out.append({'label':label,'text':sent})
+        if len(out)>=limit: break
+    return out
+
+
+def _local_study_artifact(artifact_type, title, text_value):
+    """Guaranteed deterministic fallback when Gemini is unavailable."""
+    points=_key_sentences(text_value, 24)
+    chunks=_source_chunks(text_value, 18)
+    source_name=title or 'Course material'
+    if artifact_type=='flashcards':
+        cards=[]
+        for i,p in enumerate(points[:18],1):
+            sentence=p['text']
+            m=re.match(r'(.{3,80}?)\s+(?:is|are|means|refers to|is defined as)\s+(.+)',sentence,re.I)
+            if m:
+                front=f"What is {m.group(1).strip()}?"; back=m.group(2).strip()
+            else:
+                front=f"Explain this key idea from {source_name}: {sentence[:95]}{'…' if len(sentence)>95 else ''}"
+                back=sentence
+            cards.append({'front':front,'back':back,'source':p['label'] or source_name})
+        return {'title':f'{source_name} Flashcards','cards':cards or [{'front':'What is the main idea?','back':_sanitize_extracted_text(text_value)[:500],'source':source_name}]}
+    if artifact_type=='quiz':
+        cards=_local_study_artifact('flashcards',title,text_value)['cards']
+        answers=[c['back'] for c in cards]
+        questions=[]
+        for i,c in enumerate(cards[:12]):
+            distractors=[]
+            for j,a in enumerate(answers):
+                if j!=i and a not in distractors and a!=c['back']:
+                    distractors.append(a)
+                if len(distractors)==3: break
+            while len(distractors)<3: distractors.append('None of the provided course concepts')
+            options=[c['back']]+distractors
+            # deterministic rotation keeps correct index varied
+            shift=i%4; options=options[shift:]+options[:shift]; answer=(4-shift)%4
+            questions.append({'question':c['front'],'options':options,'answer':answer,'explanation':c['back'],'source':c['source']})
+        return {'title':f'{source_name} Practice Quiz','questions':questions}
+    if artifact_type=='summary':
+        concepts=[]
+        for p in points[:12]:
+            concept=(p['text'].split(':',1)[0][:90] if ':' in p['text'] else 'Key concept')
+            concepts.append({'concept':concept,'explanation':p['text'],'source':p['label'] or source_name})
+        overview=' '.join(p['text'] for p in points[:3])[:1400] or _sanitize_extracted_text(text_value)[:1400]
+        return {'title':f'{source_name} Summary','overview':overview,'key_concepts':concepts,'takeaways':[p['text'] for p in points[:8]]}
+    sections=[]
+    for idx,ch in enumerate(chunks[:14],1):
+        heading=ch['label'] or f'Section {idx}'
+        sections.append({'heading':heading,'content':ch['text'][:1800],'source':ch['label'] or source_name})
+    return {'title':f'{source_name} Study Guide','sections':sections,'key_takeaways':[p['text'] for p in points[:10]],'practice_prompts':[f"Explain {p['text'][:100]}" for p in points[:6]]}
+
+
+
+def _local_outline_analysis(text_value, course=''):
+    """Conservative deterministic parser for common course-outline grading tables."""
+    text_value=_sanitize_extracted_text(text_value)
+    components=[]; seen=set()
+    # Capture lines/cells such as "Assignments 20%", "Final Exam: 50 %", and table rows.
+    for raw_line in text_value.splitlines():
+        line=' '.join(raw_line.replace('|',' ').split()).strip()
+        if not line or len(line)>350: continue
+        matches=list(re.finditer(r'(?P<name>[A-Za-z][A-Za-z0-9 &/()\-]{2,100}?)\s*[:\-–—]?\s*(?P<weight>\d{1,3}(?:\.\d+)?)\s*%',line))
+        for m in matches:
+            name=m.group('name').strip(' :-–—')
+            # Remove leading table noise/numbers.
+            name=re.sub(r'^\d+(?:\.\d+)?\s+','',name).strip()
+            try: weight=float(m.group('weight'))
+            except Exception: continue
+            if not name or weight<=0 or weight>100: continue
+            lower=name.lower()
+            if any(x in lower for x in ['minimum','at least','must earn','passing grade','overall grade','attendance requirement']): continue
+            key=re.sub(r'\W+','',lower)
+            if key in seen: continue
+            seen.add(key)
+            category='final' if 'final' in lower else 'midterm' if 'midterm' in lower else 'lab' if 'lab' in lower else 'assignment' if 'assign' in lower else 'quiz' if 'quiz' in lower else 'project' if 'project' in lower else 'assessment'
+            components.append({'name':name[:120],'weight':round(weight,2),'category':category,'notes':''})
+    # Prefer a plausible complete scheme if duplicates/noise were found.
+    total=sum(c['weight'] for c in components)
+    if total>130:
+        # Keep the most course-like labels until a near-100 scheme is formed.
+        ranked=sorted(components,key=lambda c:(0 if c['category']!='assessment' else 1,len(c['name'])))
+        chosen=[]; running=0
+        for c in ranked:
+            if running+c['weight']<=105:
+                chosen.append(c); running+=c['weight']
+        if 80<=running<=105: components=chosen; total=running
+    pass_mark=50.0
+    for pat in [r'(?:pass(?:ing)?\s+(?:mark|grade)|minimum\s+overall(?:\s+grade)?)\D{0,25}(\d{1,3}(?:\.\d+)?)\s*%',r'(\d{1,3}(?:\.\d+)?)\s*%\s+(?:is\s+)?required\s+to\s+pass\s+the\s+course']:
+        m=re.search(pat,text_value,re.I)
+        if m:
+            try: pass_mark=float(m.group(1)); break
+            except Exception: pass
+    minimums=[]; final_minimum=None; rules=[]
+    rule_patterns=[
+        (r'(?:must|required\s+to)\s+(?:pass|obtain|earn|achieve).{0,70}?final(?:\s+exam|\s+examination)?.{0,35}?(\d{1,3}(?:\.\d+)?)\s*%', 'Final Exam'),
+        (r'(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%.{0,70}?final(?:\s+exam|\s+examination)?', 'Final Exam'),
+        (r'(?:must|required\s+to)\s+(?:pass|obtain|earn|achieve).{0,70}?lab(?:s|oratory)?.{0,35}?(\d{1,3}(?:\.\d+)?)\s*%', 'Labs'),
+    ]
+    for pat,name in rule_patterns:
+        m=re.search(pat,text_value,re.I|re.S)
+        if m:
+            try: minimum=float(m.group(1))
+            except Exception: continue
+            minimums.append({'name':name,'minimum':minimum,'consequence':f'Must meet the {name} minimum to pass the course'})
+            rules.append(f'Must earn at least {minimum:g}% in {name} to pass the course.')
+            if name=='Final Exam': final_minimum=minimum
+    return {'course_title':course,'pass_mark':pass_mark,'final_minimum':final_minimum,'components':components,'component_minimums':minimums,'rules':rules,'important_dates':[],'confidence':'medium' if components else 'low','total_weight':round(sum(c['weight'] for c in components),2)}
+
+
+def _outline_rule_minimums(parsed):
+    minimums={}
+    if not isinstance(parsed,dict): return minimums
+    raw=parsed.get('component_minimums') or parsed.get('minimums') or []
+    if isinstance(raw,dict):
+        raw=[{'name':k,'minimum':v} for k,v in raw.items()]
+    if isinstance(raw,list):
+        for item in raw:
+            if not isinstance(item,dict): continue
+            name=str(item.get('name') or item.get('component') or '').strip()
+            try: minimum=float(item.get('minimum'))
+            except Exception: continue
+            if name: minimums[name.lower()]=minimum
+    return minimums
+
 def _outline_request(row):
     return {
         "source_uid": row.source_uid,
@@ -1856,50 +2030,103 @@ def course_grades(course_code):
 def grade_outcomes(course_code):
     course = _normalize_course_code(course_code)
     data = request.get_json(silent=True) or {}
-    try:
-        target = float(data.get("target", 50))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Enter a valid target percentage."}), 400
-    rows = GradeEntry.query.filter_by(user_id=current_user.id, course_full=course).all()
-    profile = CourseOutlineProfile.query.filter_by(user_id=current_user.id, course_full=course).first()
-    earned = 0.0; completed_weight = 0.0
-    final_row = None
+    try: target = max(0.0,min(100.0,float(data.get("target",50))))
+    except (TypeError,ValueError): return jsonify({"error":"Enter a valid target percentage."}),400
+    rows=GradeEntry.query.filter_by(user_id=current_user.id,course_full=course).all()
+    profile=CourseOutlineProfile.query.filter_by(user_id=current_user.id,course_full=course).first()
+    try: analysis=json.loads(profile.grading_json or '{}') if profile else {}
+    except Exception: analysis={}
+    scheme_total=sum(max(0.0,float(r.weight or 0)) for r in rows) or float(analysis.get('total_weight') or 100)
+    earned=0.0; completed_weight=0.0; final_row=None
     for r in rows:
-        if re.search(r'\bfinal\b', r.name or '', re.I):
-            final_row = r
-        if r.score is not None and r.weight > 0:
-            earned += (r.score / r.max_score) * r.weight
-            completed_weight += r.weight
-    remaining = max(0.0, 100.0 - completed_weight)
-    current_on_completed = (earned / completed_weight * 100.0) if completed_weight else 0.0
-    needed_average = None if remaining <= 0 else (target - earned) / remaining * 100.0
-    pass_mark = float(profile.pass_mark if profile else 50.0)
-    final_minimum = profile.final_minimum if profile else None
-    final_weight = float(final_row.weight) if final_row else 0.0
-    other_remaining = max(0.0, remaining - final_weight)
-    required_final = None
-    if final_row and final_row.score is None and final_weight > 0:
-        assumed_other = data.get('assumed_other_average', 100)
-        try: assumed_other = max(0.0, min(100.0, float(assumed_other)))
-        except Exception: assumed_other = 100.0
-        required_final = (target - earned - (assumed_other/100.0)*other_remaining) / final_weight * 100.0
-        if final_minimum is not None:
-            required_final = max(required_final, float(final_minimum))
+        if re.search(r'\bfinal(?:\s+exam)?\b',r.name or '',re.I): final_row=r
+        if r.score is not None and r.weight>0:
+            earned+=(float(r.score)/max(float(r.max_score or 100),0.0001))*float(r.weight)
+            completed_weight+=float(r.weight)
+    remaining=max(0.0,scheme_total-completed_weight)
+    normalized_target=target/100.0*scheme_total
+    current_on_completed=(earned/completed_weight*100) if completed_weight else 0.0
+    needed_average=None if remaining<=0 else (normalized_target-earned)/remaining*100
+    pass_mark=float(profile.pass_mark if profile else 50.0)
+    final_minimum=profile.final_minimum if profile else None
+    minimums=_outline_rule_minimums(analysis)
+    if final_minimum is not None and not any('final' in k for k in minimums): minimums['final exam']=float(final_minimum)
+    final_weight=float(final_row.weight) if final_row else 0.0
+    other_remaining=max(0.0,remaining-final_weight)
+    try: assumed_other=max(0.0,min(100.0,float(data.get('assumed_other_average',100))))
+    except Exception: assumed_other=100.0
+    required_final=None
+    if final_row and final_row.score is None and final_weight>0:
+        required_final=(normalized_target-earned-(assumed_other/100)*other_remaining)/final_weight*100
+        for name,minimum in minimums.items():
+            if 'final' in name: required_final=max(required_final,minimum)
     outcomes=[]
     if final_row and final_row.score is None:
-        for final_score in (0, 40, 50, 60, 70, 80, 90, 100):
-            projected = earned + (final_score/100.0)*final_weight + other_remaining
-            passes_final_rule = final_minimum is None or final_score >= final_minimum
-            outcomes.append({"final_score":final_score,"course_grade":round(projected,2),"passes":projected>=pass_mark and passes_final_rule})
-    return jsonify({
-        "target": target, "pass_mark": pass_mark, "final_minimum": final_minimum,
-        "earned_course_points": round(earned,2), "completed_weight": round(completed_weight,2),
-        "remaining_weight": round(remaining,2), "current_on_completed": round(current_on_completed,2),
-        "needed_average": None if needed_average is None else round(needed_average,2),
-        "required_final": None if required_final is None else round(required_final,2),
-        "final_weight": final_weight, "best_possible": round(earned+remaining,2), "worst_possible": round(earned,2),
-        "outcomes": outcomes,
-    })
+        test_scores=sorted(set([0,40,50,60,70,80,90,100] + ([round(required_final,1)] if required_final is not None else [])))
+        for fs in test_scores:
+            projected_points=earned+(fs/100)*final_weight+(assumed_other/100)*other_remaining
+            projected_grade=projected_points/scheme_total*100 if scheme_total else 0
+            rules=[]; passes_rules=True
+            for name,minimum in minimums.items():
+                if 'final' in name:
+                    ok=fs>=minimum; rules.append(f'{name}: {"pass" if ok else "fail"} ({fs:.1f}% vs {minimum:.1f}% minimum)'); passes_rules &= ok
+            outcomes.append({'final_score':round(fs,2),'course_grade':round(projected_grade,2),'passes':projected_grade>=pass_mark and passes_rules,'rules':rules})
+    best=(earned+remaining)/scheme_total*100 if scheme_total else 0
+    worst=earned/scheme_total*100 if scheme_total else 0
+    possible=needed_average is None or needed_average<=100.0001
+    return jsonify({'target':target,'scheme_total':round(scheme_total,2),'pass_mark':pass_mark,'final_minimum':final_minimum,'component_minimums':minimums,'earned_course_points':round(earned,2),'completed_weight':round(completed_weight,2),'remaining_weight':round(remaining,2),'current_on_completed':round(current_on_completed,2),'needed_average':None if needed_average is None else round(needed_average,2),'required_final':None if required_final is None else round(required_final,2),'final_weight':round(final_weight,2),'best_possible':round(best,2),'worst_possible':round(worst,2),'possible':possible,'outcomes':outcomes})
+
+
+@app.route('/api/course/<course_code>/outline/upload', methods=['POST'])
+@login_required
+def upload_course_outline(course_code):
+    course=_normalize_course_code(course_code)
+    upload=request.files.get('file')
+    if not upload or not upload.filename:
+        return jsonify({'error':'Choose a PDF, PPTX, DOCX, TXT, MD, CSV, or HTML course outline.'}),400
+    try:
+        filename, extracted, file_hash, size=_extract_uploaded_course_file(upload)
+        extracted=_sanitize_extracted_text(extracted)
+    except ValueError as exc:
+        return jsonify({'error':str(exc)}),422
+    except Exception:
+        app.logger.exception('Course outline upload failed')
+        return jsonify({'error':'Nexora could not read this outline file. Use PDF, PPTX, DOCX, TXT, MD, CSV, or HTML.'}),422
+    source_uid='manual-outline:'+hashlib.sha256(f'{current_user.id}:{course}:{file_hash}'.encode()).hexdigest()[:40]
+    row=CourseContent.query.filter_by(user_id=current_user.id,course_full=course,source_uid=source_uid).first()
+    if not row:
+        row=CourseContent(id=uuid4().hex,user_id=current_user.id,course_full=course,source_uid=source_uid)
+        db.session.add(row)
+    row.title=filename; row.content_type='outline'; row.source_url=''; row.module_name='Uploaded Course Outline'; row.content_text=extracted
+    row.content_hash=_content_payload_hash({'title':filename,'content_type':'outline','source_url':'','content_text':extracted,'module_name':'Uploaded Course Outline','published_at':''})
+    row.updated_at=datetime.utcnow(); db.session.commit()
+    return jsonify({'ok':True,'source_uid':source_uid,'title':filename,'characters':len(extracted),'file_size':size})
+
+
+@app.route('/api/course/<course_code>/material/upload', methods=['POST'])
+@login_required
+def upload_course_material(course_code):
+    course=_normalize_course_code(course_code)
+    upload=request.files.get('file')
+    if not upload or not upload.filename:
+        return jsonify({'error':'Choose a supported lecture file.'}),400
+    try:
+        filename, extracted, file_hash, size=_extract_uploaded_course_file(upload)
+        extracted=_sanitize_extracted_text(extracted)
+    except ValueError as exc:
+        return jsonify({'error':str(exc)}),422
+    except Exception:
+        app.logger.exception('Course material upload failed')
+        return jsonify({'error':'Nexora could not read this file.'}),422
+    source_uid='manual-material:'+hashlib.sha256(f'{current_user.id}:{course}:{file_hash}'.encode()).hexdigest()[:40]
+    row=CourseContent.query.filter_by(user_id=current_user.id,course_full=course,source_uid=source_uid).first()
+    if not row:
+        row=CourseContent(id=uuid4().hex,user_id=current_user.id,course_full=course,source_uid=source_uid)
+        db.session.add(row)
+    row.title=filename; row.content_type='lecture'; row.source_url=''; row.module_name='Uploaded Material'; row.content_text=extracted
+    row.content_hash=_content_payload_hash({'title':filename,'content_type':'lecture','source_url':'','content_text':extracted,'module_name':'Uploaded Material','published_at':''})
+    row.updated_at=datetime.utcnow(); db.session.commit()
+    return jsonify({'ok':True,'source_uid':source_uid,'title':filename,'characters':len(extracted),'file_size':size})
 
 
 @app.route("/api/course/<course_code>/outline/analyze", methods=["POST"])
@@ -1917,15 +2144,18 @@ def analyze_course_outline(course_code):
     if len((row.content_text or '').strip()) < 200:
         return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":"Reading the course outline from Brightspace…"}),409
     prompt = f"""Analyze this course outline for {course}. Return strict JSON with this schema:
-{{"course_title":"", "pass_mark":50, "final_minimum":null, "components":[{{"name":"Assignments","weight":20,"category":"assignments","notes":""}}], "rules":[""], "important_dates":[], "confidence":"high|medium|low"}}
-Extract every grading component and its exact weight. Merge repeated items only when the outline clearly defines a category total. Detect rules such as needing to pass the final exam, labs, or both to pass the course. Weights should total 100 when the outline provides a complete scheme. Never invent missing values.
+{{"course_title":"", "pass_mark":50, "final_minimum":null, "components":[{{"name":"Assignments","weight":20,"category":"assignments","notes":""}}], "component_minimums":[{{"name":"Final Exam","minimum":50,"consequence":"Must pass final to pass course"}}], "rules":[""], "important_dates":[], "confidence":"high|medium|low"}}
+Extract every grading component and its exact weight. Merge repeated items only when the outline clearly defines a category total. Detect every special rule, including minimum scores on the final exam, labs, midterms, projects, attendance, or mandatory completion requirements. Put numeric component thresholds in component_minimums. Weights should total 100 when the outline provides a complete scheme. Never invent missing values.
 OUTLINE:
 {_sanitize_extracted_text(row.content_text)[:120000]}"""
+    used_fallback=False
     try:
         parsed = _gemini_json("You are a precise university course-outline parser. Output only valid JSON.", prompt, 5000, 0.1)
+        if not isinstance(parsed,dict): raise ValueError('Invalid outline response')
     except Exception as exc:
-        app.logger.exception('Outline analysis failed')
-        return jsonify({"error":"Nexora could not analyze the outline right now. Try again in a moment.","detail":str(exc)}),502
+        app.logger.warning('Gemini outline analysis failed; using local parser: %s', exc)
+        parsed=_local_outline_analysis(row.content_text,course)
+        used_fallback=True
     components = parsed.get('components') if isinstance(parsed,dict) else []
     if not isinstance(components,list): components=[]
     clean=[]; total=0.0
@@ -1956,7 +2186,7 @@ OUTLINE:
         else:
             existing.weight=comp['weight']; existing.category=comp['category']
     db.session.commit()
-    return jsonify({"ok":True,"analysis":parsed,"pass_mark":profile.pass_mark,"final_minimum":profile.final_minimum})
+    return jsonify({"ok":True,"fallback":used_fallback,"analysis":parsed,"pass_mark":profile.pass_mark,"final_minimum":profile.final_minimum})
 
 
 @app.route("/api/course/<course_code>/study-tools/generate", methods=["POST"])
@@ -1980,18 +2210,22 @@ def generate_study_tool(course_code):
       'summary':'{"title":"","overview":"","key_concepts":[{"concept":"","explanation":"","source":"Slide 1"}],"takeaways":[]}'
     }
     instruction=f"Create a high-quality {artifact_type.replace('_',' ')} from the supplied university material. Return strict JSON matching: {schemas[artifact_type]}. Ground every item in the source, preserve slide/page references when available, cover the whole source, and do not invent facts."
+    used_fallback = False
     try:
         parsed=_gemini_json(instruction, _sanitize_extracted_text(row.content_text)[:120000], 7000, 0.35)
+        if not isinstance(parsed, dict):
+            raise ValueError('Invalid study-tool response')
     except Exception as exc:
-        app.logger.exception('Study tool generation failed')
-        return jsonify({"error":"Nexora could not generate this study tool right now. Try again.","detail":str(exc)}),502
+        app.logger.warning('Gemini study tool generation failed; using deterministic fallback: %s', exc)
+        parsed=_local_study_artifact(artifact_type, row.title, row.content_text)
+        used_fallback = True
     existing=StudyArtifact.query.filter_by(user_id=current_user.id,course_full=course,source_uid=row.source_uid,artifact_type=artifact_type).first()
     if not existing:
         existing=StudyArtifact(id=uuid4().hex,user_id=current_user.id,course_full=course,source_uid=row.source_uid,artifact_type=artifact_type)
         db.session.add(existing)
     existing.source_title=row.title; existing.title=str(parsed.get('title') or f"{row.title} {artifact_type}")[:500]; existing.data_json=json.dumps(parsed,ensure_ascii=False); existing.updated_at=datetime.utcnow()
     db.session.commit()
-    return jsonify({"ok":True,"artifact":{"id":existing.id,"type":artifact_type,"title":existing.title,"data":parsed}})
+    return jsonify({"ok":True,"fallback":used_fallback,"artifact":{"id":existing.id,"type":artifact_type,"title":existing.title,"data":parsed}})
 
 
 @app.route("/api/course/<course_code>/study-tools", methods=["GET"])
