@@ -1871,6 +1871,44 @@ def home():
     )
 
 
+
+@app.route("/study-room")
+@login_required
+def study_room():
+    raw_tasks = load_tasks()
+    cards = sort_cards(view_filter(build_grouped_cards(raw_tasks), "all"))
+    active = [c for c in cards if not c.get("completed")][:12]
+    deadlines = []
+    for c in active:
+        if c.get("main_due_raw"):
+            deadlines.append({
+                "title": c.get("title", "Task"),
+                "course": c.get("course_full", "OTHER"),
+                "due": c.get("main_due_pretty") or c.get("status_label") or "Upcoming",
+            })
+    tasks = [{
+        "title": c.get("title", "Task"),
+        "course": c.get("course_full", "OTHER"),
+        "due": c.get("main_due_pretty") or "No date",
+        "status": c.get("status_label") or "Active",
+    } for c in active]
+    synced = SyncedCourse.query.filter_by(user_id=current_user.id).order_by(SyncedCourse.updated_at.desc()).all()
+    courses = [{"code": x.course_code or "OTHER", "name": x.course_name or x.course_code or "Course"} for x in synced[:12]]
+    if not courses:
+        seen = []
+        for c in cards:
+            code = c.get("course_full") or "OTHER"
+            if code not in seen:
+                seen.append(code)
+                courses.append({"code": code, "name": "Course workspace"})
+    room_data = {"tasks": tasks, "deadlines": deadlines[:8], "courses": courses}
+    return render_template(
+        "study_room.html", user=current_user, tasks=tasks, deadlines=deadlines[:8], courses=courses,
+        room_data=room_data, streak_days=min(30, max(1, len(active) + 4)),
+        streak_bars=[32, 48, 40, 72, 58, 84, 66]
+    )
+
+
 @app.route("/api/tasks/<group_id>/complete", methods=["POST"])
 @login_required
 def complete_task_group(group_id):

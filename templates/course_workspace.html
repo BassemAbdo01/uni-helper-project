@@ -33,6 +33,7 @@
       <a href="{{ url_for('calendar_page') }}">Calendar</a>
       <a class="active" href="#">Course Workspace</a>
       <a href="{{ url_for('connect_brightspace') }}">Nexora Sync</a>
+      <a href="/study-room">Study Room</a>
       <a href="{{ url_for('settings') }}">Settings</a>
     </nav>
   </aside>
@@ -58,21 +59,16 @@
       <div class="stat"><small>Course updates</small><strong>{{ updates|length }}</strong></div>
     </section>
 
-    <div class="tabs">
-      <button class="tab active" data-tab="overview">Overview</button>
-      <button class="tab" data-tab="lectures">Lectures</button>
-      <button class="tab" data-tab="assignments">Assignments</button>
-      <button class="tab" data-tab="resources">Resources</button>
-      <button class="tab" data-tab="quizzes">Quizzes</button>
-      <button class="tab" data-tab="announcements">Announcements</button>
-      <button class="tab" data-tab="outline">Course Outline</button>
-      <button class="tab" data-tab="grades">Grade Intelligence</button>
-      <button class="tab" data-tab="study">Study Tools</button>
+    {% set active_tab = request.args.get('tab', 'overview') %}
+    <div class="tabs" id="workspace-tabs">
+      {% for key, label in [('overview','Overview'),('lectures','Lectures'),('assignments','Assignments'),('resources','Resources'),('quizzes','Quizzes'),('announcements','Announcements'),('outline','Course Outline'),('grades','Grade Intelligence'),('study','Study Tools')] %}
+      <a class="tab{% if active_tab == key %} active{% endif %}" data-tab="{{ key }}" href="?tab={{ key }}#workspace-tabs">{{ label }}</a>
+      {% endfor %}
     </div>
 
     <section class="grid">
       <div>
-        <article class="panel tab-panel" data-panel="overview">
+        <article class="panel tab-panel" data-panel="overview" {% if active_tab != 'overview' %}hidden{% endif %}>
           <h3>Course overview</h3>
           <div class="list">
             {% for item in contents[:8] %}
@@ -80,22 +76,22 @@
             {% else %}<div class="empty">No structured content has been synced yet.</div>{% endfor %}
           </div>
         </article>
-        <article class="panel tab-panel" data-panel="lectures" hidden><h3>Lectures</h3>
+        <article class="panel tab-panel" data-panel="lectures" {% if active_tab != 'lectures' %}hidden{% endif %}><h3>Lectures</h3>
           {% for module, module_items in lectures|groupby('module_name') %}
           <div style="margin:18px 0 9px;font-weight:800;color:#c4b5fd">{{ module or 'Course lectures' }}</div><div class="list">
           {% for item in module_items %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">{% if '/static/nexora_uploads/' in item.source_url %}Copied privately to Nexora{% else %}Brightspace source{% endif %}</div></div><span class="type">lecture</span></a>{% endfor %}</div>
           {% else %}<div class="empty">No lectures synced yet.</div>{% endfor %}
         </article>
-        <article class="panel tab-panel" data-panel="assignments" hidden><h3>Assignments and deadlines</h3><div class="list">
+        <article class="panel tab-panel" data-panel="assignments" {% if active_tab != 'assignments' %}hidden{% endif %}><h3>Assignments and deadlines</h3><div class="list">
           {% for item in assignments %}<div class="item"><div><strong>{{ item.title }}</strong><div class="meta">Due {{ item.main_due_pretty or 'No date' }}</div></div><span class="type">{{ item.status_label }}</span></div>{% endfor %}
           {% for item in synced_assignments %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">Imported from Brightspace</div></div><span class="type">assignment</span></a>{% endfor %}
           {% if not assignments and not synced_assignments %}<div class="empty">No assignments found for this course.</div>{% endif %}</div></article>
-        <article class="panel tab-panel" data-panel="resources" hidden><h3>Resources</h3>
+        <article class="panel tab-panel" data-panel="resources" {% if active_tab != 'resources' %}hidden{% endif %}><h3>Resources</h3>
           {% for module, module_items in resources|groupby('module_name') %}<div style="margin:18px 0 9px;font-weight:800;color:#c4b5fd">{{ module or 'General resources' }}</div><div class="list">{% for item in module_items %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">{% if '/static/nexora_uploads/' in item.source_url %}Copied privately to Nexora{% else %}External or Brightspace resource{% endif %}</div></div><span class="type">{{ item.content_type }}</span></a>{% endfor %}</div>{% else %}<div class="empty">No resources synced yet.</div>{% endfor %}</article>
-        <article class="panel tab-panel" data-panel="quizzes" hidden><h3>Quizzes</h3><div class="list">{% for item in quizzes %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">Imported from Brightspace</div></div><span class="type">quiz</span></a>{% else %}<div class="empty">No quizzes synced yet.</div>{% endfor %}</div></article>
-        <article class="panel tab-panel" data-panel="announcements" hidden><h3>Announcements</h3><div class="list">{% for item in announcements %}<div class="item" style="align-items:flex-start"><div><strong>{{ item.title }}</strong><div class="meta" style="line-height:1.55;margin-top:8px">{{ item.content_text[:420] }}</div></div><span class="type">announcement</span></div>{% else %}<div class="empty">No announcements synced yet.</div>{% endfor %}</div></article>
+        <article class="panel tab-panel" data-panel="quizzes" {% if active_tab != 'quizzes' %}hidden{% endif %}><h3>Quizzes</h3><div class="list">{% for item in quizzes %}<a class="item" href="{{ item.source_url or '#' }}" target="_blank"><div><strong>{{ item.title }}</strong><div class="meta">Imported from Brightspace</div></div><span class="type">quiz</span></a>{% else %}<div class="empty">No quizzes synced yet.</div>{% endfor %}</div></article>
+        <article class="panel tab-panel" data-panel="announcements" {% if active_tab != 'announcements' %}hidden{% endif %}><h3>Announcements</h3><div class="list">{% for item in announcements %}<div class="item" style="align-items:flex-start"><div><strong>{{ item.title }}</strong><div class="meta" style="line-height:1.55;margin-top:8px">{{ item.content_text[:420] }}</div></div><span class="type">announcement</span></div>{% else %}<div class="empty">No announcements synced yet.</div>{% endfor %}</div></article>
 
-        <article class="panel tab-panel" data-panel="outline" hidden><h3>Course Outline Intelligence</h3>
+        <article class="panel tab-panel" data-panel="outline" {% if active_tab != 'outline' %}hidden{% endif %}><h3>Course Outline Intelligence</h3>
           <p class="meta">Nexora detects the official outline automatically. When Brightspace blocks it or labels it unusually, upload the PDF/PPTX/DOCX here and Nexora will analyze the real grading scheme.</p>
           <form class="upload-box" id="outlineUploadForm"><strong>Upload course outline</strong><div class="meta">Supported: PDF, PPTX, DOCX, TXT, MD, CSV, HTML · maximum 30 MB</div><div class="upload-row" style="margin-top:12px"><input id="outlineFile" type="file" accept=".pdf,.pptx,.docx,.txt,.md,.csv,.html" required><button class="action" type="submit">Upload & analyze</button></div><div id="outlineUploadStatus" class="meta"></div></form>
           {% for item in course_outlines %}
@@ -105,14 +101,14 @@
           <div id="outlineStatus" class="outline-status meta"></div>
           {% if outline_profile %}<div class="smart-box"><h4>Detected grading rules</h4><div>Pass mark: <strong>{{ outline_profile.pass_mark }}%</strong>{% if outline_profile.final_minimum is not none %} · Final exam minimum: <strong>{{ outline_profile.final_minimum }}%</strong>{% endif %}</div>{% if outline_profile.analysis_notes %}<p class="meta">{{ outline_profile.analysis_notes }}</p>{% endif %}<div class="scheme-grid">{% for c in outline_analysis.get('components',[]) %}<div class="scheme-card"><strong>{{ c.name }} · {{ c.weight }}%</strong><small>{{ c.notes or c.category }}</small></div>{% endfor %}</div></div>{% endif %}
         </article>
-        <article class="panel tab-panel" data-panel="grades" hidden><h3>Grade Intelligence</h3>
+        <article class="panel tab-panel" data-panel="grades" {% if active_tab != 'grades' %}hidden{% endif %}><h3>Grade Intelligence</h3>
           <p class="meta">The official course-outline weights appear automatically after outline analysis. Enter your achieved marks and Nexora calculates every possible outcome, including final-exam pass rules.</p>
           {% if not outline_profile %}<div class="smart-box"><strong>Analyze the Course Outline first</strong><p class="meta">This prevents incorrect weights and makes the calculator course-specific.</p></div>{% endif %}
           <form class="grade-form" id="gradeForm"><input id="gName" placeholder="Assessment or category" required><input id="gScore" type="number" step="0.01" placeholder="Your score"><input id="gMax" type="number" step="0.01" value="100" placeholder="Out of"><input id="gWeight" type="number" step="0.01" placeholder="Weight %" required><button class="action">Save</button></form>
           <table class="grade-table"><thead><tr><th>Component</th><th>Score</th><th>Weight</th><th>Save</th><th></th></tr></thead><tbody id="gradeRows">{% for g in grade_entries %}<tr data-id="{{ g.id }}"><td><input class="grade-input edit-name" value="{{ g.name }}" style="width:180px"></td><td><input class="grade-input edit-score" type="number" step="0.01" value="{{ g.score if g.score is not none else '' }}"> / <input class="grade-input edit-max" type="number" step="0.01" value="{{ g.max_score }}"></td><td><input class="grade-input edit-weight" type="number" step="0.01" value="{{ g.weight }}">%</td><td><button class="action save-grade" type="button">Save</button></td><td><button class="action delete-grade" type="button">Remove</button></td></tr>{% endfor %}</tbody></table>
           <div class="outcome"><strong>Target outcome calculator</strong><div class="grade-form" style="grid-template-columns:1fr 1fr auto;margin-top:10px"><input id="targetGrade" type="number" step="0.01" value="50" placeholder="Target course grade"><input id="assumedOther" type="number" step="0.01" value="100" placeholder="Expected average on other remaining work"><button class="action" id="calcTarget" type="button">Calculate</button></div><div class="quick-targets"><button type="button" data-target="50">Pass</button><button type="button" data-target="70">70%</button><button type="button" data-target="80">80%</button><button type="button" data-target="91">91%</button></div><div id="gradeOutcome" class="meta" style="margin-top:12px;line-height:1.7">Choose a target such as pass, 80%, or 91%.</div><div id="outcomeTable"></div></div>
         </article>
-        <article class="panel tab-panel" data-panel="study" hidden><h3>AI Study Tools</h3><p class="meta">Turn any synced lecture into grounded flashcards, quizzes, summaries or a complete study guide. The source is fetched from Brightspace only when needed.</p>
+        <article class="panel tab-panel" data-panel="study" {% if active_tab != 'study' %}hidden{% endif %}><h3>AI Study Tools</h3><p class="meta">Turn any synced lecture into grounded flashcards, quizzes, summaries or a complete study guide. The source is fetched from Brightspace only when needed.</p>
           <form class="upload-box" id="materialUploadForm"><strong>Upload a lecture manually</strong><div class="meta">Use this only when Brightspace blocks a file. The extracted text is cached, not the original file.</div><div class="upload-row" style="margin-top:12px"><input id="materialFile" type="file" accept=".pdf,.pptx,.docx,.txt,.md,.csv,.html,.py,.java,.c,.cpp,.js" required><button class="action" type="submit">Upload lecture</button></div><div id="materialUploadStatus" class="meta"></div></form><div class="tool-picker"><select id="studySource"><option value="">Choose a lecture or resource</option>{% for item in lectures + resources %}<option value="{{ item.source_uid }}">{{ item.title }}</option>{% endfor %}</select><button class="action make-tool" data-type="flashcards">Flashcards</button><button class="action make-tool" data-type="quiz">Quiz</button><button class="action make-tool" data-type="study_guide">Study guide</button><button class="action make-tool" data-type="summary">Summary</button></div>
           <div id="studyStatus" class="meta" style="margin-top:12px"></div><div id="studyArtifacts"></div>
         </article>
@@ -141,10 +137,14 @@
 </div>
 
 <script>
-  document.querySelectorAll('.tab').forEach(btn=>btn.addEventListener('click',()=>{
+  document.querySelectorAll('.tab').forEach(link=>link.addEventListener('click',e=>{
+    const panel=document.querySelector(`[data-panel="${link.dataset.tab}"]`);
+    if(!panel) return;
+    e.preventDefault();
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
     document.querySelectorAll('.tab-panel').forEach(x=>x.hidden=true);
-    btn.classList.add('active'); document.querySelector(`[data-panel="${btn.dataset.tab}"]`).hidden=false;
+    link.classList.add('active'); panel.hidden=false;
+    history.replaceState(null,'',link.href);
   }));
   const COURSE={{ course|tojson }};
 
