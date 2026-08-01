@@ -103,11 +103,6 @@ class CourseContent(db.Model):
     title = db.Column(db.Text, nullable=False)
     content_type = db.Column(db.String(30), default="resource")
     source_url = db.Column(db.Text, default="")
-    download_url = db.Column(db.Text, default="")
-    file_name = db.Column(db.Text, default="")
-    file_ext = db.Column(db.String(20), default="")
-    api_version = db.Column(db.String(30), default="")
-    topic_id = db.Column(db.String(80), default="")
     source_uid = db.Column(db.String(255), default="", index=True)
     content_text = db.Column(db.Text, default="")
     module_name = db.Column(db.Text, default="")
@@ -116,6 +111,19 @@ class CourseContent(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
+
+class GradeEntry(db.Model):
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    course_full = db.Column(db.String(40), default="OTHER", index=True)
+    name = db.Column(db.String(255), nullable=False)
+    weight = db.Column(db.Float, default=0.0)
+    score = db.Column(db.Float, nullable=True)
+    max_score = db.Column(db.Float, default=100.0)
+    category = db.Column(db.String(80), default="assessment")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class SyncedFile(db.Model):
@@ -174,13 +182,6 @@ def ensure_schema_columns():
             "sync_status": "VARCHAR(30) DEFAULT 'never'",
             "sync_message": "TEXT DEFAULT 'Not synchronized yet.'",
             "extension_token": "VARCHAR(128) DEFAULT ''",
-        },
-        "course_content": {
-            "download_url": "TEXT DEFAULT ''",
-            "file_name": "TEXT DEFAULT ''",
-            "file_ext": "VARCHAR(20) DEFAULT ''",
-            "api_version": "VARCHAR(30) DEFAULT ''",
-            "topic_id": "VARCHAR(80) DEFAULT ''",
         },
         "task": {
             "source_uid": "VARCHAR(255) DEFAULT ''",
@@ -1013,6 +1014,7 @@ def process_course_content_file():
             'detail': type(exc).__name__,
         }), 422
     try:
+        extracted = _sanitize_extracted_text(extracted)
         row.content_text = extracted
         row.content_hash = _content_payload_hash({
             'title': row.title, 'content_type': row.content_type, 'source_url': row.source_url,
@@ -1123,12 +1125,9 @@ def copilot():
             "content_request": {
                 "source_uid": primary.source_uid,
                 "source_url": primary.source_url,
-                "download_url": primary.download_url or primary.source_url,
+                "download_url": primary.source_url,
                 "title": primary.title,
-                "file_name": primary.file_name or primary.title,
-                "file_ext": primary.file_ext or "",
-                "api_version": primary.api_version or "",
-                "topic_id": primary.topic_id or "",
+                "file_name": primary.title,
                 "course": primary.course_full,
             },
         }), 409
@@ -1169,11 +1168,8 @@ def copilot():
         "You are Nexora AI, a high-quality conversational academic tutor for university students. "
         "Answer naturally, directly, and intelligently. Explain academic topics, brainstorm, write, reason, "
         "and help plan the student's semester. Use the supplied semester context only when relevant. Never "
-        "invent course dates, deadlines, grades, or facts that are absent from the context. When the student asks to "
-        "explain a lecture, teach the complete lecture in depth rather than summarizing it: follow the source order, "
-        "cover every major concept, equation, example, diagram description, and code idea available in the extracted material; "
-        "use clear headings, step-by-step explanations, worked examples, common mistakes, key takeaways, and practice questions. "
-        "Do not stop after one paragraph. For ordinary questions, match the depth requested. Do not repeat a canned introduction. The current version "
+        "invent course dates, deadlines, grades, or facts that are absent from the context. For ordinary questions, be direct. "
+        "When the student asks to explain, teach, summarize, quiz, or create flashcards from a lecture, give a complete university-tutor response: follow the source order, cover every major concept, equation, example, diagram description and common mistake, and finish with takeaways and practice questions. Never reduce a full lecture explanation to one paragraph. Do not repeat a canned introduction. The current version "
         "does not have live web search, so clearly say when a question requires current information rather "
         "than pretending it is up to date.\n\n"
         "FORMATTING: Respond in Markdown. Use `##`/`###` headers to break up multi-part explanations, "
@@ -1197,7 +1193,7 @@ def copilot():
         "contents": contents,
         "generationConfig": {
             "temperature": 0.7,
-            "maxOutputTokens": 8192 if lecture_intent else 4096,
+            "maxOutputTokens": 8192 if lecture_intent else 2200,
         },
     }).encode("utf-8")
     endpoint = (
@@ -1646,15 +1642,21 @@ def _content_payload_hash(payload):
         "title": payload.get("title", ""),
         "type": payload.get("content_type", "resource"),
         "url": payload.get("source_url", ""),
-        "download_url": payload.get("download_url", ""),
-        "file_name": payload.get("file_name", ""),
-        "api_version": payload.get("api_version", ""),
-        "topic_id": payload.get("topic_id", ""),
         "text": payload.get("content_text", ""),
         "module": payload.get("module_name", ""),
         "published": payload.get("published_at", ""),
     }, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
+
+
+def _sanitize_extracted_text(value):
+    """Make extracted document text safe for PostgreSQL and Gemini."""
+    if value is None:
+        return ""
+    value = str(value).replace("\x00", "")
+    # Keep normal whitespace while removing other control characters.
+    value = "".join(ch for ch in value if ch in "\n\r\t" or ord(ch) >= 32)
+    return value.strip()
 
 
 def _extension_user_from_request():
@@ -1681,6 +1683,8 @@ def course_workspace(course_code):
     resources = [c for c in contents if c.content_type in ("file", "resource", "link", "practice", "page")]
     quizzes = [c for c in contents if c.content_type == "quiz"]
     announcements = [c for c in contents if c.content_type == "announcement"]
+    course_outlines = [c for c in contents if c.content_type == "outline" or re.search(r'course\s*outline|syllabus', c.title or '', re.I)]
+    grade_entries = GradeEntry.query.filter_by(user_id=current_user.id, course_full=course).order_by(GradeEntry.created_at.asc()).all()
 
     next_assignment = assignments[0] if assignments else None
     return render_template(
@@ -1695,9 +1699,66 @@ def course_workspace(course_code):
         resources=resources,
         quizzes=quizzes,
         announcements=announcements,
+        course_outlines=course_outlines,
+        grade_entries=grade_entries,
         updates=updates,
         next_assignment=next_assignment,
     )
+
+
+@app.route("/api/course/<course_code>/grades", methods=["GET", "POST", "DELETE"])
+@login_required
+def course_grades(course_code):
+    course = _normalize_course_code(course_code)
+    if request.method == "GET":
+        rows = GradeEntry.query.filter_by(user_id=current_user.id, course_full=course).order_by(GradeEntry.created_at.asc()).all()
+        return jsonify({"grades": [{"id": r.id, "name": r.name, "weight": r.weight, "score": r.score, "max_score": r.max_score, "category": r.category} for r in rows]})
+    data = request.get_json(silent=True) or {}
+    if request.method == "DELETE":
+        row = GradeEntry.query.filter_by(id=str(data.get("id") or ""), user_id=current_user.id, course_full=course).first()
+        if row:
+            db.session.delete(row); db.session.commit()
+        return jsonify({"ok": True})
+    name = str(data.get("name") or "Assessment").strip()[:255]
+    try:
+        weight = max(0.0, min(100.0, float(data.get("weight") or 0)))
+        score = data.get("score")
+        score = None if score in (None, "") else max(0.0, float(score))
+        max_score = max(0.0001, float(data.get("max_score") or 100))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Use valid numbers for score, maximum, and weight."}), 400
+    row = GradeEntry(id=uuid4().hex, user_id=current_user.id, course_full=course, name=name, weight=weight, score=score, max_score=max_score, category=str(data.get("category") or "assessment")[:80])
+    db.session.add(row); db.session.commit()
+    return jsonify({"ok": True, "id": row.id})
+
+
+@app.route("/api/course/<course_code>/grade-outcomes", methods=["POST"])
+@login_required
+def grade_outcomes(course_code):
+    course = _normalize_course_code(course_code)
+    data = request.get_json(silent=True) or {}
+    try:
+        target = float(data.get("target"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Enter a valid target percentage."}), 400
+    rows = GradeEntry.query.filter_by(user_id=current_user.id, course_full=course).all()
+    earned = 0.0; completed_weight = 0.0
+    for r in rows:
+        if r.score is not None and r.weight > 0:
+            earned += (r.score / r.max_score) * r.weight
+            completed_weight += r.weight
+    remaining = max(0.0, 100.0 - completed_weight)
+    current_on_completed = (earned / completed_weight * 100.0) if completed_weight else 0.0
+    needed = None if remaining <= 0 else (target - earned) / remaining * 100.0
+    possible = needed is not None and 0 <= needed <= 100
+    best = earned + remaining
+    worst = earned
+    return jsonify({
+        "target": target, "earned_course_points": round(earned, 2), "completed_weight": round(completed_weight, 2),
+        "remaining_weight": round(remaining, 2), "current_on_completed": round(current_on_completed, 2),
+        "needed_average": None if needed is None else round(needed, 2), "possible": possible,
+        "best_possible": round(best, 2), "worst_possible": round(worst, 2)
+    })
 
 
 @app.route("/api/sync/extension-key", methods=["GET", "POST"])
@@ -1830,11 +1891,6 @@ def sync_course_content():
             "title": title,
             "content_type": str(item.get("content_type") or "resource")[:30],
             "source_url": source_url,
-            "download_url": str(item.get("download_url") or "")[:4000],
-            "file_name": str(item.get("file_name") or title)[:1000],
-            "file_ext": str(item.get("file_ext") or "")[:20],
-            "api_version": str(item.get("api_version") or "")[:30],
-            "topic_id": str(item.get("topic_id") or "")[:80],
             "content_text": str(item.get("content_text") or "")[:120000],
             "module_name": str(item.get("module_name") or "")[:1000],
             "published_at": str(item.get("published_at") or "")[:80],
@@ -1849,11 +1905,6 @@ def sync_course_content():
             existing.title = title
             existing.content_type = item_data["content_type"]
             existing.source_url = source_url
-            existing.download_url = item_data["download_url"]
-            existing.file_name = item_data["file_name"]
-            existing.file_ext = item_data["file_ext"]
-            existing.api_version = item_data["api_version"]
-            existing.topic_id = item_data["topic_id"]
             existing.content_text = item_data["content_text"]
             existing.module_name = item_data["module_name"]
             existing.published_at = item_data["published_at"]
@@ -1870,9 +1921,7 @@ def sync_course_content():
             db.session.add(CourseContent(
                 id=uuid4().hex, user_id=user.id, course_full=course,
                 title=title, content_type=item_data["content_type"],
-                source_url=source_url, download_url=item_data["download_url"],
-                file_name=item_data["file_name"], file_ext=item_data["file_ext"],
-                api_version=item_data["api_version"], topic_id=item_data["topic_id"], source_uid=source_uid,
+                source_url=source_url, source_uid=source_uid,
                 content_text=item_data["content_text"], module_name=item_data["module_name"],
                 published_at=item_data["published_at"], content_hash=fingerprint,
             ))

@@ -205,18 +205,18 @@ function absolute(origin, href) {
   try { return new URL(href, origin).href; } catch (_) { return ''; }
 }
 
-function classifyContent(title, url, activityType, moduleName = '') {
-  const text = `${title} ${url} ${activityType || ''} ${moduleName || ''}`.toLowerCase();
+function classifyContent(title, url, activityType) {
+  const text = `${title} ${url} ${activityType || ''}`.toLowerCase();
   const ext = ((title.match(/\.([a-z0-9]{1,8})\b/i) || url.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
+  if (/course\s*outline|syllabus|grading scheme|evaluation scheme/.test(text)) return 'outline';
+  if (/practice|sample question|review question|worksheet|problem set/.test(text)) return 'practice';
   if (/assignment|dropbox/.test(text)) return 'assignment';
   if (/quiz|quizzing/.test(text)) return 'quiz';
   if (/announcement|news/.test(text)) return 'announcement';
-  if (/practice|sample question|review question|worksheet|problem set|tutorial question/.test(text)) return 'practice';
-  if (['py','c','cpp','h','java','js','ts','ipynb','zip','rar','7z','csv','xlsx','xls'].includes(ext)) return 'resource';
-  const lectureContext = /lecture notes?|lectures?|slides?|class notes?|lesson|week\s*\d+|module\s*\d+|chapter\s*\d+|unit\s*\d+|course content/.test(text);
-  if (lectureContext && ['pdf','ppt','pptx','doc','docx',''].includes(ext)) return 'lecture';
+  if (['py', 'c', 'cpp', 'h', 'java', 'js', 'ts', 'ipynb', 'zip', 'rar', '7z', 'csv', 'xlsx', 'xls'].includes(ext)) return 'resource';
+  if (['pdf', 'ppt', 'pptx'].includes(ext) && /(?:lecture|lec|slides?|week|module|chapter|lesson|unit)\s*[-_#:]?\s*\d+|\b(?:l|lec|wk|ch)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
   if (/(?:lecture|lec|slides?|lesson)\s*[-_#:]?\s*\d+|\b(?:l|lec)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
-  if (['pdf','ppt','pptx','doc','docx'].includes(ext)) return /notes?|slides?|lecture/i.test(text) ? 'lecture' : 'resource';
+  if (['pdf', 'ppt', 'pptx', 'doc', 'docx'].includes(ext)) return 'resource';
   return 'page';
 }
 
@@ -231,7 +231,7 @@ function fileInfoFromTopic(topic, course, version, origin) {
   const extension = ((title.match(/\.([a-z0-9]{1,8})\b/i) || absoluteUrl.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
   const topicId = topic.Id || topic.TopicId || topic.Identifier || '';
   const downloadUrl = topicId ? `${origin}/d2l/api/le/${version}/${course.source_uid}/content/topics/${topicId}/file` : '';
-  return { source_url: absoluteUrl || downloadUrl, download_url: downloadUrl, file_name: title, file_ext: extension, topic_id: String(topicId || ''), api_version: String(version || '') };
+  return { source_url: absoluteUrl || downloadUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
 }
 
 function flattenToc(toc, course, version, origin) {
@@ -254,13 +254,11 @@ function flattenToc(toc, course, version, origin) {
         course: course.code,
         source_uid: itemUid(course.source_uid, 'content', id, file.source_url || title),
         title,
-        content_type: classifyContent(title, file.source_url, activity, parentPath.join(" › ")),
-        source_url: file.source_url || file.download_url,
+        content_type: classifyContent(title, file.source_url, activity),
+        source_url: file.download_url || file.source_url,
         download_url: file.download_url,
         file_name: file.file_name,
         file_ext: file.file_ext,
-        topic_id: file.topic_id,
-        api_version: file.api_version,
         module_name: parentPath.join(' › '),
         content_text: htmlToText(node.Description || node.Body || node.Instructions || ''),
         published_at: dateValue(node.StartDate || node.LastModifiedDate || node.ModifiedDate),
@@ -524,73 +522,56 @@ async function responseLooksLikeLogin(blob, finalUrl = '') {
 function extractDownloadCandidates(html, baseUrl) {
   const candidates = [];
   const patterns = [
-    /(?:href|src)=["']([^"']+(?:download|file|content\/topics|viewContent)[^"']*)["']/gi,
+    /(?:href|src)=["']([^"']+(?:download|file|content\/topics)[^"']*)["']/gi,
     /["'](\/d2l\/api\/le\/[^"']+\/content\/topics\/[^"']+\/file)["']/gi,
     /["'](\/d2l\/common\/dialogues\/quickLink\/quickLink\.d2l[^"']+)["']/gi
   ];
   for (const pattern of patterns) {
     let match;
-    while ((match = pattern.exec(html)) && candidates.length < 30) {
+    while ((match = pattern.exec(html)) && candidates.length < 12) {
       try { candidates.push(new URL(match[1].replace(/&amp;/g, '&'), baseUrl).href); } catch (_) {}
     }
   }
   return [...new Set(candidates)];
 }
 
-async function topicMetadataCandidates(request, cfg) {
-  const courseId = clean(request.course_id || request.course_source_uid || (String(request.source_uid || '').split('|')[0]));
-  const topicId = clean(request.topic_id || (String(request.source_uid || '').match(/\|content\|(\d+)/)?.[1] || ''));
-  if (!courseId || !topicId) return [];
-  const versions = [...new Set([request.api_version, ...(await detectApiVersions(cfg.brightspaceOrigin))].filter(Boolean))];
-  const out = [];
-  for (const v of versions.slice(0, 12)) {
+async function downloadLectureBlob(request, cfg) {
+  const urls = [...new Set([request.download_url, request.source_url].filter(Boolean))];
+  let lastError = null;
+  for (const url of urls) {
     try {
-      const meta = await brightspaceJson(`/d2l/api/le/${v}/${courseId}/content/topics/${topicId}`, cfg.brightspaceOrigin);
-      for (const value of [meta?.Url, meta?.URL, meta?.ContentUrl, meta?.ContentURL, meta?.Location]) {
-        if (value) out.push(absolute(cfg.brightspaceOrigin, value));
+      const fetched = await brightspaceFetch(url, {
+        origin: cfg.brightspaceOrigin,
+        accept: 'application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,*/*'
+      });
+      let blob = await fetched.response.blob();
+      if (!blob.size) throw new Error('Brightspace returned an empty file.');
+      if (/text\/html/i.test(fetched.contentType)) {
+        if (await responseLooksLikeLogin(blob, fetched.finalUrl)) {
+          const error = new Error('Brightspace connection expired. Open Brightspace and sign in again.');
+          error.code = 'AUTH_EXPIRED';
+          throw error;
+        }
+        const html = await blob.text();
+        const candidates = extractDownloadCandidates(html, fetched.finalUrl);
+        for (const candidate of candidates) {
+          try {
+            const nested = await brightspaceFetch(candidate, { origin: cfg.brightspaceOrigin, accept: '*/*' });
+            const nestedBlob = await nested.response.blob();
+            if (nestedBlob.size && !/text\/html/i.test(nested.contentType)) {
+              return { ...nested, blob: nestedBlob };
+            }
+          } catch (_) {}
+        }
+        throw new Error('Brightspace returned a page instead of the file. Run “Scan every course now” using Nexora Sync v1.0 so the direct file link is refreshed.');
       }
-      out.push(`${cfg.brightspaceOrigin}/d2l/api/le/${v}/${courseId}/content/topics/${topicId}/file`);
-    } catch (_) {
-      // Metadata can be unavailable even when the topic viewer URL works.
-      out.push(`${cfg.brightspaceOrigin}/d2l/api/le/${v}/${courseId}/content/topics/${topicId}/file`);
+      return { ...fetched, blob };
+    } catch (error) {
+      if (error.code === 'AUTH_EXPIRED') throw error;
+      lastError = error;
     }
   }
-  return [...new Set(out.filter(Boolean))];
-}
-
-async function tryDownloadUrl(url, cfg, visited = new Set()) {
-  if (!url || visited.has(url)) return null;
-  visited.add(url);
-  let fetched;
-  try {
-    fetched = await brightspaceFetch(url, { origin: cfg.brightspaceOrigin, accept: 'application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,*/*' });
-  } catch (error) {
-    if (error.code === 'AUTH_EXPIRED') throw error;
-    return null;
-  }
-  const blob = await fetched.response.blob();
-  if (!blob.size) return null;
-  if (!/text\/html|application\/xhtml/i.test(fetched.contentType)) return { ...fetched, blob };
-  if (await responseLooksLikeLogin(blob, fetched.finalUrl)) {
-    const error = new Error('Brightspace connection expired. Open Brightspace and sign in again.');
-    error.code = 'AUTH_EXPIRED'; throw error;
-  }
-  const html = await blob.text();
-  for (const candidate of extractDownloadCandidates(html, fetched.finalUrl)) {
-    const nested = await tryDownloadUrl(candidate, cfg, visited);
-    if (nested) return nested;
-  }
-  return null;
-}
-
-async function downloadLectureBlob(request, cfg) {
-  const metadataUrls = await topicMetadataCandidates(request, cfg);
-  const urls = [...new Set([request.source_url, request.download_url, ...metadataUrls].filter(Boolean))];
-  for (const url of urls) {
-    const result = await tryDownloadUrl(url, cfg);
-    if (result) return result;
-  }
-  throw new Error('Nexora found the lecture, but Brightspace did not expose a readable PDF/PPTX file. Open the lecture once in Brightspace, run Smart Sync again, then retry.');
+  throw lastError || new Error('No downloadable Brightspace file URL was available for this lecture.');
 }
 
 async function fetchAndProcessLecture(request) {
