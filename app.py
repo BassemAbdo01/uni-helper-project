@@ -7,6 +7,7 @@ import json
 import hashlib
 import secrets
 import io
+import time
 import zipfile
 from datetime import datetime, date, timedelta
 import calendar as calendar_module
@@ -122,6 +123,33 @@ class GradeEntry(db.Model):
     score = db.Column(db.Float, nullable=True)
     max_score = db.Column(db.Float, default=100.0)
     category = db.Column(db.String(80), default="assessment")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CourseOutlineProfile(db.Model):
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    course_full = db.Column(db.String(40), default="OTHER", index=True)
+    source_uid = db.Column(db.String(255), default="")
+    outline_title = db.Column(db.Text, default="")
+    grading_json = db.Column(db.Text, default="{}")
+    pass_mark = db.Column(db.Float, default=50.0)
+    final_minimum = db.Column(db.Float, nullable=True)
+    analysis_notes = db.Column(db.Text, default="")
+    analyzed_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class StudyArtifact(db.Model):
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    course_full = db.Column(db.String(40), default="OTHER", index=True)
+    source_uid = db.Column(db.String(255), default="", index=True)
+    source_title = db.Column(db.Text, default="")
+    artifact_type = db.Column(db.String(30), default="flashcards")
+    title = db.Column(db.Text, default="")
+    data_json = db.Column(db.Text, default="{}")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -849,6 +877,67 @@ def landing():
     return render_template("landing.html")
 
 
+
+
+def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2):
+    """Call Gemini for strict JSON with retries and a model fallback on transient 5xx errors."""
+    api_key = (os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip())
+    if not api_key:
+        raise RuntimeError("Gemini is not configured")
+    preferred = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    fallback = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite").strip()
+    models = []
+    for m in (preferred, fallback):
+        if m and m not in models:
+            models.append(m)
+    body = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+            "responseMimeType": "application/json",
+        },
+    }
+    last_error = None
+    for model in models:
+        endpoint = ("https://generativelanguage.googleapis.com/v1beta/models/" + urllib.parse.quote(model, safe='') + ":generateContent?key=" + urllib.parse.quote(api_key, safe=''))
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(endpoint, data=json.dumps(body).encode('utf-8'), headers={"Content-Type":"application/json"}, method='POST')
+                with urllib.request.urlopen(req, timeout=90) as response:
+                    result = json.loads(response.read().decode('utf-8'))
+                parts = ((((result.get('candidates') or [{}])[0].get('content') or {}).get('parts')) or [])
+                text_value = "\n".join(p.get('text','') for p in parts if isinstance(p,dict)).strip()
+                if not text_value:
+                    raise ValueError('Gemini returned no JSON')
+                text_value = re.sub(r'^```(?:json)?\s*|\s*```$', '', text_value, flags=re.I|re.S).strip()
+                return json.loads(text_value)
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                if exc.code in (429, 500, 502, 503, 504) and attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                break
+            except (urllib.error.URLError, TimeoutError) as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                break
+    raise RuntimeError(f"Gemini could not complete the request: {type(last_error).__name__ if last_error else 'unknown error'}")
+
+
+def _outline_request(row):
+    return {
+        "source_uid": row.source_uid,
+        "source_url": row.source_url,
+        "download_url": row.source_url,
+        "title": row.title,
+        "file_name": row.title,
+        "course": row.course_full,
+    }
+
 @app.route("/api/copilot/status", methods=["GET"])
 @login_required
 def copilot_status():
@@ -1209,8 +1298,21 @@ def copilot():
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=45) as response:
-            result = json.loads(response.read().decode("utf-8"))
+        result = None
+        last_http_error = None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=90) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as retry_exc:
+                last_http_error = retry_exc
+                if retry_exc.code in (429, 500, 502, 503, 504) and attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise
+        if result is None and last_http_error:
+            raise last_http_error
 
         candidates = result.get("candidates") or []
         if not candidates:
@@ -1685,6 +1787,12 @@ def course_workspace(course_code):
     announcements = [c for c in contents if c.content_type == "announcement"]
     course_outlines = [c for c in contents if c.content_type == "outline" or re.search(r'course\s*outline|syllabus', c.title or '', re.I)]
     grade_entries = GradeEntry.query.filter_by(user_id=current_user.id, course_full=course).order_by(GradeEntry.created_at.asc()).all()
+    outline_profile = CourseOutlineProfile.query.filter_by(user_id=current_user.id, course_full=course).first()
+    study_artifacts = StudyArtifact.query.filter_by(user_id=current_user.id, course_full=course).order_by(StudyArtifact.updated_at.desc()).limit(30).all()
+    try:
+        outline_analysis = json.loads(outline_profile.grading_json or "{}") if outline_profile else {}
+    except Exception:
+        outline_analysis = {}
 
     next_assignment = assignments[0] if assignments else None
     return render_template(
@@ -1701,6 +1809,9 @@ def course_workspace(course_code):
         announcements=announcements,
         course_outlines=course_outlines,
         grade_entries=grade_entries,
+        outline_profile=outline_profile,
+        study_artifacts=study_artifacts,
+        outline_analysis=outline_analysis,
         updates=updates,
         next_assignment=next_assignment,
     )
@@ -1727,8 +1838,16 @@ def course_grades(course_code):
         max_score = max(0.0001, float(data.get("max_score") or 100))
     except (TypeError, ValueError):
         return jsonify({"error": "Use valid numbers for score, maximum, and weight."}), 400
-    row = GradeEntry(id=uuid4().hex, user_id=current_user.id, course_full=course, name=name, weight=weight, score=score, max_score=max_score, category=str(data.get("category") or "assessment")[:80])
-    db.session.add(row); db.session.commit()
+    row_id = str(data.get("id") or "")
+    row = GradeEntry.query.filter_by(id=row_id, user_id=current_user.id, course_full=course).first() if row_id else None
+    if not row:
+        row = GradeEntry.query.filter_by(user_id=current_user.id, course_full=course, name=name).first()
+    if not row:
+        row = GradeEntry(id=uuid4().hex, user_id=current_user.id, course_full=course)
+        db.session.add(row)
+    row.name=name; row.weight=weight; row.score=score; row.max_score=max_score; row.category=str(data.get("category") or row.category or "assessment")[:80]
+    row.updated_at=datetime.utcnow()
+    db.session.commit()
     return jsonify({"ok": True, "id": row.id})
 
 
@@ -1738,27 +1857,154 @@ def grade_outcomes(course_code):
     course = _normalize_course_code(course_code)
     data = request.get_json(silent=True) or {}
     try:
-        target = float(data.get("target"))
+        target = float(data.get("target", 50))
     except (TypeError, ValueError):
         return jsonify({"error": "Enter a valid target percentage."}), 400
     rows = GradeEntry.query.filter_by(user_id=current_user.id, course_full=course).all()
+    profile = CourseOutlineProfile.query.filter_by(user_id=current_user.id, course_full=course).first()
     earned = 0.0; completed_weight = 0.0
+    final_row = None
     for r in rows:
+        if re.search(r'\bfinal\b', r.name or '', re.I):
+            final_row = r
         if r.score is not None and r.weight > 0:
             earned += (r.score / r.max_score) * r.weight
             completed_weight += r.weight
     remaining = max(0.0, 100.0 - completed_weight)
     current_on_completed = (earned / completed_weight * 100.0) if completed_weight else 0.0
-    needed = None if remaining <= 0 else (target - earned) / remaining * 100.0
-    possible = needed is not None and 0 <= needed <= 100
-    best = earned + remaining
-    worst = earned
+    needed_average = None if remaining <= 0 else (target - earned) / remaining * 100.0
+    pass_mark = float(profile.pass_mark if profile else 50.0)
+    final_minimum = profile.final_minimum if profile else None
+    final_weight = float(final_row.weight) if final_row else 0.0
+    other_remaining = max(0.0, remaining - final_weight)
+    required_final = None
+    if final_row and final_row.score is None and final_weight > 0:
+        assumed_other = data.get('assumed_other_average', 100)
+        try: assumed_other = max(0.0, min(100.0, float(assumed_other)))
+        except Exception: assumed_other = 100.0
+        required_final = (target - earned - (assumed_other/100.0)*other_remaining) / final_weight * 100.0
+        if final_minimum is not None:
+            required_final = max(required_final, float(final_minimum))
+    outcomes=[]
+    if final_row and final_row.score is None:
+        for final_score in (0, 40, 50, 60, 70, 80, 90, 100):
+            projected = earned + (final_score/100.0)*final_weight + other_remaining
+            passes_final_rule = final_minimum is None or final_score >= final_minimum
+            outcomes.append({"final_score":final_score,"course_grade":round(projected,2),"passes":projected>=pass_mark and passes_final_rule})
     return jsonify({
-        "target": target, "earned_course_points": round(earned, 2), "completed_weight": round(completed_weight, 2),
-        "remaining_weight": round(remaining, 2), "current_on_completed": round(current_on_completed, 2),
-        "needed_average": None if needed is None else round(needed, 2), "possible": possible,
-        "best_possible": round(best, 2), "worst_possible": round(worst, 2)
+        "target": target, "pass_mark": pass_mark, "final_minimum": final_minimum,
+        "earned_course_points": round(earned,2), "completed_weight": round(completed_weight,2),
+        "remaining_weight": round(remaining,2), "current_on_completed": round(current_on_completed,2),
+        "needed_average": None if needed_average is None else round(needed_average,2),
+        "required_final": None if required_final is None else round(required_final,2),
+        "final_weight": final_weight, "best_possible": round(earned+remaining,2), "worst_possible": round(earned,2),
+        "outcomes": outcomes,
     })
+
+
+@app.route("/api/course/<course_code>/outline/analyze", methods=["POST"])
+@login_required
+def analyze_course_outline(course_code):
+    course = _normalize_course_code(course_code)
+    data = request.get_json(silent=True) or {}
+    source_uid = str(data.get('source_uid') or '')
+    query = CourseContent.query.filter_by(user_id=current_user.id, course_full=course)
+    row = query.filter_by(source_uid=source_uid).first() if source_uid else None
+    if not row:
+        row = query.filter(CourseContent.content_type=='outline').order_by(CourseContent.updated_at.desc()).first()
+    if not row:
+        return jsonify({"error":"No course outline has been detected for this course yet."}),404
+    if len((row.content_text or '').strip()) < 200:
+        return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":"Reading the course outline from Brightspace…"}),409
+    prompt = f"""Analyze this course outline for {course}. Return strict JSON with this schema:
+{{"course_title":"", "pass_mark":50, "final_minimum":null, "components":[{{"name":"Assignments","weight":20,"category":"assignments","notes":""}}], "rules":[""], "important_dates":[], "confidence":"high|medium|low"}}
+Extract every grading component and its exact weight. Merge repeated items only when the outline clearly defines a category total. Detect rules such as needing to pass the final exam, labs, or both to pass the course. Weights should total 100 when the outline provides a complete scheme. Never invent missing values.
+OUTLINE:
+{_sanitize_extracted_text(row.content_text)[:120000]}"""
+    try:
+        parsed = _gemini_json("You are a precise university course-outline parser. Output only valid JSON.", prompt, 5000, 0.1)
+    except Exception as exc:
+        app.logger.exception('Outline analysis failed')
+        return jsonify({"error":"Nexora could not analyze the outline right now. Try again in a moment.","detail":str(exc)}),502
+    components = parsed.get('components') if isinstance(parsed,dict) else []
+    if not isinstance(components,list): components=[]
+    clean=[]; total=0.0
+    for comp in components:
+        if not isinstance(comp,dict): continue
+        try: weight=float(comp.get('weight',0))
+        except Exception: continue
+        if weight <= 0 or weight > 100: continue
+        clean.append({"name":str(comp.get('name') or 'Assessment')[:120],"weight":round(weight,2),"category":str(comp.get('category') or 'assessment')[:50],"notes":str(comp.get('notes') or '')[:500]})
+        total += weight
+    parsed['components']=clean; parsed['total_weight']=round(total,2)
+    profile = CourseOutlineProfile.query.filter_by(user_id=current_user.id, course_full=course).first()
+    if not profile:
+        profile=CourseOutlineProfile(id=uuid4().hex,user_id=current_user.id,course_full=course)
+        db.session.add(profile)
+    profile.source_uid=row.source_uid; profile.outline_title=row.title; profile.grading_json=json.dumps(parsed,ensure_ascii=False)
+    try: profile.pass_mark=float(parsed.get('pass_mark') or 50)
+    except Exception: profile.pass_mark=50.0
+    try: profile.final_minimum=None if parsed.get('final_minimum') in (None,'') else float(parsed.get('final_minimum'))
+    except Exception: profile.final_minimum=None
+    profile.analysis_notes='; '.join(str(x) for x in (parsed.get('rules') or []))[:4000]
+    profile.updated_at=datetime.utcnow()
+    # Create/update one editable grade row per outline component.
+    for comp in clean:
+        existing=GradeEntry.query.filter_by(user_id=current_user.id,course_full=course,name=comp['name']).first()
+        if not existing:
+            db.session.add(GradeEntry(id=uuid4().hex,user_id=current_user.id,course_full=course,name=comp['name'],weight=comp['weight'],score=None,max_score=100,category=comp['category']))
+        else:
+            existing.weight=comp['weight']; existing.category=comp['category']
+    db.session.commit()
+    return jsonify({"ok":True,"analysis":parsed,"pass_mark":profile.pass_mark,"final_minimum":profile.final_minimum})
+
+
+@app.route("/api/course/<course_code>/study-tools/generate", methods=["POST"])
+@login_required
+def generate_study_tool(course_code):
+    course=_normalize_course_code(course_code)
+    data=request.get_json(silent=True) or {}
+    source_uid=str(data.get('source_uid') or '')
+    artifact_type=str(data.get('artifact_type') or 'flashcards').lower()
+    if artifact_type not in {'flashcards','quiz','study_guide','summary'}:
+        return jsonify({"error":"Unsupported study tool."}),400
+    row=CourseContent.query.filter_by(user_id=current_user.id,course_full=course,source_uid=source_uid).first()
+    if not row:
+        return jsonify({"error":"Choose a synced lecture or resource first."}),404
+    if len((row.content_text or '').strip()) < 120:
+        return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":f"Reading {row.title} from Brightspace…"}),409
+    schemas={
+      'flashcards':'{"title":"","cards":[{"front":"","back":"","source":"Slide 1"}]}',
+      'quiz':'{"title":"","questions":[{"question":"","options":["A","B","C","D"],"answer":0,"explanation":"","source":"Slide 1"}]}',
+      'study_guide':'{"title":"","sections":[{"heading":"","content":"","source":"Slide 1"}],"key_takeaways":[],"practice_prompts":[]}',
+      'summary':'{"title":"","overview":"","key_concepts":[{"concept":"","explanation":"","source":"Slide 1"}],"takeaways":[]}'
+    }
+    instruction=f"Create a high-quality {artifact_type.replace('_',' ')} from the supplied university material. Return strict JSON matching: {schemas[artifact_type]}. Ground every item in the source, preserve slide/page references when available, cover the whole source, and do not invent facts."
+    try:
+        parsed=_gemini_json(instruction, _sanitize_extracted_text(row.content_text)[:120000], 7000, 0.35)
+    except Exception as exc:
+        app.logger.exception('Study tool generation failed')
+        return jsonify({"error":"Nexora could not generate this study tool right now. Try again.","detail":str(exc)}),502
+    existing=StudyArtifact.query.filter_by(user_id=current_user.id,course_full=course,source_uid=row.source_uid,artifact_type=artifact_type).first()
+    if not existing:
+        existing=StudyArtifact(id=uuid4().hex,user_id=current_user.id,course_full=course,source_uid=row.source_uid,artifact_type=artifact_type)
+        db.session.add(existing)
+    existing.source_title=row.title; existing.title=str(parsed.get('title') or f"{row.title} {artifact_type}")[:500]; existing.data_json=json.dumps(parsed,ensure_ascii=False); existing.updated_at=datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok":True,"artifact":{"id":existing.id,"type":artifact_type,"title":existing.title,"data":parsed}})
+
+
+@app.route("/api/course/<course_code>/study-tools", methods=["GET"])
+@login_required
+def list_study_tools(course_code):
+    course=_normalize_course_code(course_code)
+    rows=StudyArtifact.query.filter_by(user_id=current_user.id,course_full=course).order_by(StudyArtifact.updated_at.desc()).all()
+    out=[]
+    for r in rows:
+        try: payload=json.loads(r.data_json or '{}')
+        except Exception: payload={}
+        out.append({"id":r.id,"type":r.artifact_type,"title":r.title,"source_title":r.source_title,"data":payload})
+    return jsonify({"artifacts":out})
 
 
 @app.route("/api/sync/extension-key", methods=["GET", "POST"])
@@ -1932,6 +2178,20 @@ def sync_course_content():
                 detail=item_data["module_name"] or "Imported from Brightspace.",
                 related_uid=source_uid,
             ))
+            if item_data["content_type"] == "lecture":
+                db.session.add(AcademicUpdate(
+                    id=uuid4().hex, user_id=user.id, course_full=course,
+                    update_type="ai_recommendation", title=f"Review recommended: {title}",
+                    detail="Nexora detected a new lecture. Open Study Tools to create flashcards, a quiz, or a study guide, and schedule a 30–45 minute review.",
+                    related_uid=source_uid,
+                ))
+            elif item_data["content_type"] == "outline":
+                db.session.add(AcademicUpdate(
+                    id=uuid4().hex, user_id=user.id, course_full=course,
+                    update_type="outline_detected", title="Course outline ready for analysis",
+                    detail="Analyze it once to build the official grading scheme and course-specific outcome calculator.",
+                    related_uid=source_uid,
+                ))
     # Keep course cards aware of how much content was imported.
     touched_courses = { _normalize_course_code((item or {}).get("course") or (item or {}).get("course_full") or "OTHER") for item in items if isinstance(item, dict) }
     for code in touched_courses:

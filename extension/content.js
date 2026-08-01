@@ -441,7 +441,7 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '1.1.0' }); return false; }
+    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '1.4.0' }); return false; }
     if (message?.type === 'NEXORA_SESSION_CHECK') { sessionCheck().then(sendResponse); return true; }
     if (message?.type === 'NEXORA_DISCOVER_COURSES') {
       (async () => {

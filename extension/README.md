@@ -1,4 +1,4 @@
-# Nexora Sync 1.1
+# Nexora Sync 1.4
 
 Production-hardening update for Smart Sync and Course Intelligence Bridge.
 
