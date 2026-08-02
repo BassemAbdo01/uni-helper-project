@@ -1031,9 +1031,56 @@ def _local_study_artifact(artifact_type, title, text_value):
 
 
 
+def _strip_bonus_sections(text_value):
+    """Drop paragraphs about bonus marks / extra credit before grading-table extraction.
+
+    These are the single biggest source of false positives: a sentence like "complete the
+    quiz to earn your 1%" matches the same "label ... N%" shape as a real grading line, but
+    it isn't a graded component at all. Cut the whole bonus section out before scanning.
+    """
+    lines = text_value.splitlines()
+    out = []
+    skipping = False
+    bonus_start = re.compile(r'\bbonus\b|\bextra\s+credit\b', re.I)
+    # A bonus section is short-lived; once we hit a clear new heading (a line that itself
+    # looks like a real grading/administrative heading) we stop skipping.
+    section_end = re.compile(r'^(evaluation|grading|assessment|schedule|course\s+policies|academic\s+integrity|notes?:)\b', re.I)
+    for line in lines:
+        stripped = line.strip()
+        if not skipping and bonus_start.search(stripped) and len(stripped) < 200:
+            skipping = True
+            continue
+        if skipping:
+            if section_end.match(stripped) or not stripped:
+                skipping = False
+            else:
+                continue
+        out.append(line)
+    return '\n'.join(out)
+
+
+_JUNK_FRAGMENT_STARTS = re.compile(
+    r'^(to|your|you|the|and|but|each|that|which|complete|earn|claim|receive|awarded|if|when|please|will|this|these|it|we|so|for|regardless|log|select|contact)\b',
+    re.I,
+)
+
+
+def _looks_like_grading_label(name):
+    """Reject sentence-fragment matches that only accidentally look like 'Label ... N%'."""
+    lower = name.strip().lower()
+    if not lower or len(lower.split()) > 8:
+        return False
+    if _JUNK_FRAGMENT_STARTS.match(lower):
+        return False
+    if any(x in lower for x in ['bonus', 'mentorship', 'claim your', 'awarded the', 'earn your', 'quiz to earn']):
+        return False
+    return True
+
+
 def _local_outline_analysis(text_value, course=''):
     """Conservative deterministic parser for common course-outline grading tables."""
     text_value=_sanitize_extracted_text(text_value)
+    text_value=_strip_bonus_sections(text_value)
     components=[]; seen=set()
     # Capture lines/cells such as "Assignments 20%", "Final Exam: 50 %", and table rows.
     for raw_line in text_value.splitlines():
@@ -1047,6 +1094,7 @@ def _local_outline_analysis(text_value, course=''):
             try: weight=float(m.group('weight'))
             except Exception: continue
             if not name or weight<=0 or weight>100: continue
+            if not _looks_like_grading_label(name): continue
             lower=name.lower()
             if any(x in lower for x in ['minimum','at least','must earn','passing grade','overall grade','attendance requirement']): continue
             key=re.sub(r'\W+','',lower)
@@ -1064,6 +1112,7 @@ def _local_outline_analysis(text_value, course=''):
             if running+c['weight']<=105:
                 chosen.append(c); running+=c['weight']
         if 80<=running<=105: components=chosen; total=running
+    multi_option=bool(re.search(r'\boption\s*[1-4]\s*:', text_value, re.I))
     pass_mark=50.0
     for pat in [r'(?:pass(?:ing)?\s+(?:mark|grade)|minimum\s+overall(?:\s+grade)?)\D{0,25}(\d{1,3}(?:\.\d+)?)\s*%',r'(\d{1,3}(?:\.\d+)?)\s*%\s+(?:is\s+)?required\s+to\s+pass\s+the\s+course']:
         m=re.search(pat,text_value,re.I)
@@ -1084,6 +1133,8 @@ def _local_outline_analysis(text_value, course=''):
             minimums.append({'name':name,'minimum':minimum,'consequence':f'Must meet the {name} minimum to pass the course'})
             rules.append(f'Must earn at least {minimum:g}% in {name} to pass the course.')
             if name=='Final Exam': final_minimum=minimum
+    if multi_option:
+        rules.append('This outline defines multiple alternative grading options; Nexora selected the most detailed one. Check the outline for other options.')
     return {'course_title':course,'pass_mark':pass_mark,'final_minimum':final_minimum,'components':components,'component_minimums':minimums,'rules':rules,'important_dates':[],'confidence':'medium' if components else 'low','total_weight':round(sum(c['weight'] for c in components),2)}
 
 
@@ -2181,9 +2232,16 @@ def analyze_course_outline(course_code):
         return jsonify({"error":"No course outline has been detected for this course yet."}),404
     if len((row.content_text or '').strip()) < 200:
         return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":"Reading the course outline from Brightspace…"}),409
-    prompt = f"""Analyze this course outline for {course}. Return strict JSON with this schema:
-{{"course_title":"", "pass_mark":50, "final_minimum":null, "components":[{{"name":"Assignments","weight":20,"category":"assignments","notes":""}}], "component_minimums":[{{"name":"Final Exam","minimum":50,"consequence":"Must pass final to pass course"}}], "rules":[""], "important_dates":[], "confidence":"high|medium|low"}}
-Extract every grading component and its exact weight. Merge repeated items only when the outline clearly defines a category total. Detect every special rule, including minimum scores on the final exam, labs, midterms, projects, attendance, or mandatory completion requirements. Put numeric component thresholds in component_minimums. Weights should total 100 when the outline provides a complete scheme. Never invent missing values.
+    prompt = f"""Analyze this university course outline for {course}. Return strict JSON with this schema:
+{{"course_title":"", "pass_mark":50, "final_minimum":null, "components":[{{"name":"Assignments","weight":20,"category":"assignments","notes":""}}], "component_minimums":[{{"name":"Final Exam","minimum":50,"consequence":"Must pass final to pass course"}}], "rules":[""], "grading_options":[{{"option_name":"Option 1","components":[{{"name":"Final Exam","weight":100,"category":"final","notes":""}}]}}], "important_dates":[], "confidence":"high|medium|low"}}
+
+IMPORTANT — read the whole outline before extracting anything:
+1. Some outlines define ONE fixed grading scheme (a single components list). If so, leave grading_options empty and put everything in components; weights should total 100.
+2. Some outlines define MULTIPLE ALTERNATIVE grading schemes (e.g. "Option 1: Final exam 100%", "Option 2: best test 15% + tutorials 5% + final 80%") where the student's final grade is whichever option gives them the best result. If you see this pattern, put EACH option as its own entry in grading_options (each with its own components list summing to 100), and set the top-level `components` to the most detailed/informative option (usually the one with the most components) as the default shown to the student. Add a rule noting that alternate options exist and the best one is applied automatically.
+3. IGNORE bonus marks, extra-credit quizzes, optional mentorship-meeting bonuses, or any "1% bonus" style paragraphs — these are not part of the graded weighting scheme and must never appear in components or grading_options. A percentage inside a sentence like "complete the quiz to earn your 1%" is a bonus incentive, not a graded component; do not extract it.
+4. Only extract an item as a component if it is a genuine named grading category from a grading breakdown/table (e.g. "Midterm", "Labs", "Assignments", "Final Exam", "Tutorial attendance", "Term Tests") — never a sentence fragment.
+5. Detect every special pass/fail rule (minimum score on the final exam, labs, midterms, tutorial attendance requirements, overall minimum grade) and put numeric thresholds in component_minimums. Never invent missing values.
+
 OUTLINE:
 {_sanitize_extracted_text(row.content_text)[:120000]}"""
     used_fallback=False

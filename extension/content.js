@@ -124,6 +124,36 @@
     return response.json();
   }
 
+  function withBookmark(path, bookmark) {
+    const url = new URL(path, location.origin);
+    url.searchParams.set('bookmark', bookmark);
+    return url.pathname + url.search;
+  }
+
+  // D2L's dropbox/quiz/news list endpoints page results behind a `PagingInfo.Bookmark` +
+  // `HasMoreItems` cursor. A single fetchJson() call only ever returns page one, which is
+  // exactly why large courses were quietly losing items past the first page. This follows
+  // the cursor until Brightspace reports there's nothing left, or we hit a sane hard cap.
+  async function fetchAllPages(path, { maxPages = 40 } = {}) {
+    const merged = [];
+    let nextPath = path;
+    let pages = 0;
+    let lastPageInfo = null;
+    while (nextPath && pages < maxPages) {
+      const data = await fetchJson(nextPath);
+      pages++;
+      const pageItems = listFromPaged(data);
+      merged.push(...pageItems);
+      const pagingInfo = data?.PagingInfo || data?.pagingInfo || null;
+      lastPageInfo = pagingInfo;
+      const hasMore = !!(pagingInfo && (pagingInfo.HasMoreItems || pagingInfo.hasMoreItems));
+      const bookmark = pagingInfo && (pagingInfo.Bookmark || pagingInfo.bookmark);
+      nextPath = hasMore && bookmark ? withBookmark(path, bookmark) : null;
+      if (hasMore && bookmark && pageItems.length === 0) break;
+    }
+    return { items: merged, pages, truncated: pages >= maxPages, lastPageInfo };
+  }
+
   async function detectApiVersions() {
     const candidates = [];
     try {
@@ -154,6 +184,20 @@
     throw new Error(errors.slice(-4).join(' | ') || 'No compatible endpoint found');
   }
 
+  async function firstWorkingPaged(builders, versions) {
+    const errors = [];
+    for (const version of versions) {
+      for (const build of builders) {
+        const path = build(version);
+        try {
+          const paged = await fetchAllPages(path);
+          return { ...paged, version, path };
+        } catch (error) { errors.push(`${path}: ${error.message}`); }
+      }
+    }
+    throw new Error(errors.slice(-4).join(' | ') || 'No compatible endpoint found');
+  }
+
   function htmlToText(value) {
     if (!value) return '';
     const html = typeof value === 'string' ? value : value.Html || value.Text || value.html || value.text || '';
@@ -178,18 +222,32 @@
     return { source_url: absoluteUrl || downloadUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
   }
 
-  function classifyContent(title, url, activityType) {
-    const text = `${title} ${url} ${activityType || ''}`.toLowerCase();
+  // moduleContext is the module/folder breadcrumb the item lives under (e.g. "Week 5 › Lecture 12").
+  // Brightspace courses very often number the *folder*, not every file inside it — a recording or
+  // slide deck named just "Recording" or "Slides" is still clearly lecture material if it's filed
+  // under "Lecture 12". Checking only the item's own title (as before) missed all of these.
+  function classifyContent(title, url, activityType, moduleContext) {
+    const ownText = `${title} ${url} ${activityType || ''}`.toLowerCase();
+    const fullText = `${ownText} ${moduleContext || ''}`.toLowerCase();
     const ext = ((title.match(/\.([a-z0-9]{1,8})\b/i) || url.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
-    if (/course\s*(?:outline|syllabus|information|guide)|syllabus|grading\s*(?:scheme|breakdown|policy)|evaluation\s*(?:scheme|breakdown)|marking\s*scheme|assessment\s*(?:scheme|breakdown)|course\s*policies/.test(text)) return 'outline';
-  if (/practice|sample question|review question|worksheet|problem set/.test(text)) return 'practice';
-    if (/assignment|dropbox/.test(text)) return 'assignment';
-    if (/quiz|quizzing/.test(text)) return 'quiz';
-    if (/announcement|news/.test(text)) return 'announcement';
+    const numberedLecturePattern = /(?:lecture|lec|slides?|week|module|chapter|lesson|unit)\s*[-_#:]?\s*\d+|\b(?:l|lec|wk|ch)\s*[-_#]?\s*\d+\b/i;
+
+    if (/course\s*(?:outline|syllabus|information|guide)|syllabus|grading\s*(?:scheme|breakdown|policy)|evaluation\s*(?:scheme|breakdown)|marking\s*scheme|assessment\s*(?:scheme|breakdown)|course\s*policies/.test(ownText)) return 'outline';
+    if (/practice|sample question|review question|worksheet|problem set/.test(ownText)) return 'practice';
+
+    // Real, gradeable assignments and quizzes already come from their own dedicated Brightspace
+    // endpoints (dropbox/folders, quizzes/). A content-page merely *mentioning* "assignment" or
+    // "quiz" (instructions, rubric, answer key, prep guide) shouldn't duplicate into those tabs —
+    // route it to Resources instead so Assignments/Quizzes only show the real, tracked items.
+    const isSupportingDoc = /instructions?|guideline|rubric|handout|answer key|solutions?|prep\b/.test(ownText);
+    if (/assignment|dropbox/.test(ownText) && !isSupportingDoc) return 'assignment';
+    if (/\bquiz(zing)?\b/.test(ownText) && !isSupportingDoc) return 'quiz';
+    if (/announcement|news/.test(ownText)) return 'announcement';
+
+    if (numberedLecturePattern.test(fullText)) return 'lecture';
+    if (['mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav'].includes(ext) && /lecture|lec|recording|class|week|module/.test(fullText)) return 'lecture';
     if (['py', 'c', 'cpp', 'h', 'java', 'js', 'ts', 'ipynb', 'zip', 'rar', '7z', 'csv', 'xlsx', 'xls'].includes(ext)) return 'resource';
-    if (['pdf', 'ppt', 'pptx'].includes(ext) && /(?:lecture|lec|slides?|week|module|chapter|lesson|unit)\s*[-_#:]?\s*\d+|\b(?:l|lec|wk|ch)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
-    if (/(?:lecture|lec|slides?|lesson)\s*[-_#:]?\s*\d+|\b(?:l|lec)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
-    if (['pdf', 'ppt', 'pptx', 'doc', 'docx'].includes(ext)) return 'resource';
+    if (['pdf', 'ppt', 'pptx', 'doc', 'docx', 'mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav'].includes(ext)) return 'resource';
     return 'page';
   }
 
@@ -214,7 +272,8 @@
         }
         const file = fileInfoFromTopic(node, orgUnitId, version);
         const activity = node.ActivityType || node.TypeIdentifier || node.Type || '';
-        const type = classifyContent(title, file.source_url, activity);
+        const moduleContext = parentPath.join(' › ');
+        const type = classifyContent(title, file.source_url, activity, moduleContext);
         items.push({
           course: course.course_code,
           source_uid: itemUid(orgUnitId, 'content', id, file.source_url || title),
@@ -224,7 +283,7 @@
           download_url: file.download_url,
           file_name: file.file_name,
           file_ext: file.file_ext,
-          module_name: parentPath.join(' › '),
+          module_name: moduleContext,
           content_text: htmlToText(node.Description || node.Body || node.Instructions || ''),
           published_at: dateValue(node.StartDate || node.LastModifiedDate || node.ModifiedDate),
           smart_sync: true
@@ -299,7 +358,7 @@
 
   async function apiScanCourse(course) {
     const versions = await detectApiVersions();
-    const diagnostics = { versionsTried: versions.slice(0, 8), endpoints: {}, errors: {} };
+    const diagnostics = { versionsTried: versions.slice(0, 8), endpoints: {}, errors: {}, truncated: {} };
     const items = [];
     let successfulSections = 0;
 
@@ -315,33 +374,36 @@
     } catch (error) { diagnostics.errors.content = error.message; }
 
     try {
-      const result = await firstWorking([
+      const result = await firstWorkingPaged([
         v => `/d2l/api/le/${v}/${course.source_uid}/dropbox/folders/`
       ], versions);
       diagnostics.endpoints.assignments = result.path;
-      const assignments = assignmentItems(result.data, course);
+      diagnostics.truncated.assignments = result.truncated;
+      const assignments = assignmentItems(result.items, course);
       items.push(...assignments);
       successfulSections++;
       diagnostics.assignmentCount = assignments.length;
     } catch (error) { diagnostics.errors.assignments = error.message; }
 
     try {
-      const result = await firstWorking([
+      const result = await firstWorkingPaged([
         v => `/d2l/api/le/${v}/${course.source_uid}/quizzes/`
       ], versions);
       diagnostics.endpoints.quizzes = result.path;
-      const quizzes = quizItems(result.data, course);
+      diagnostics.truncated.quizzes = result.truncated;
+      const quizzes = quizItems(result.items, course);
       items.push(...quizzes);
       successfulSections++;
       diagnostics.quizCount = quizzes.length;
     } catch (error) { diagnostics.errors.quizzes = error.message; }
 
     try {
-      const result = await firstWorking([
+      const result = await firstWorkingPaged([
         v => `/d2l/api/le/${v}/${course.source_uid}/news/`
       ], versions);
       diagnostics.endpoints.announcements = result.path;
-      const announcements = announcementItems(result.data, course);
+      diagnostics.truncated.announcements = result.truncated;
+      const announcements = announcementItems(result.items, course);
       items.push(...announcements);
       successfulSections++;
       diagnostics.announcementCount = announcements.length;
@@ -364,20 +426,32 @@
     let clicks = 0;
     let stableRounds = 0;
     let previousCount = -1;
-    for (let round = 0; round < 30; round++) {
+    let cutOffWithButtonRemaining = false;
+    const maxRounds = 60;
+    for (let round = 0; round < maxRounds; round++) {
       const button = queryAll('button,a,[role="button"]').find(element => {
         const text = clean(element.textContent || element.getAttribute?.('aria-label') || '').toLowerCase();
         const visible = !!(element.offsetWidth || element.offsetHeight || element.getClientRects?.().length);
-        return visible && !element.disabled && /load more|show more|view more|more results/.test(text);
+        return visible && !element.disabled && /load more|show more|view more|more results|next page/.test(text);
       });
-      if (button) { button.click(); clicks++; await sleep(900); }
-      else { window.scrollTo(0, document.body.scrollHeight); await sleep(650); }
+      if (button) {
+        button.click();
+        clicks++;
+        // D2L's own lazy-loaded lists can take a beat longer than a plain scroll reveal.
+        await sleep(1200);
+      } else {
+        window.scrollTo(0, document.body.scrollHeight);
+        await sleep(900);
+      }
       const count = queryAll('a[href],article,li,[role="listitem"]').length;
       stableRounds = count === previousCount ? stableRounds + 1 : 0;
       previousCount = count;
-      if (!button && stableRounds >= 3) break;
+      // Require more consecutive stable rounds before declaring done, since a slow network
+      // response can look "stable" for a round or two right before new items land.
+      if (!button && stableRounds >= 4) break;
+      if (round === maxRounds - 1 && button) cutOffWithButtonRemaining = true;
     }
-    return clicks;
+    return { clicks, cutOffWithButtonRemaining };
   }
 
   async function domFallbackCourse(course) {
@@ -385,7 +459,7 @@
     if (currentOu !== String(course.source_uid)) {
       return { ok: false, authenticated: true, complete: false, method: 'dom-fallback', items: [], error: 'DOM fallback requires the course page to be open.' };
     }
-    const expanded = await expandDynamicPage();
+    const { clicks: expanded, cutOffWithButtonRemaining } = await expandDynamicPage();
     const map = new Map();
     for (const element of queryAll('a[href],[role="link"][href],d2l-link[href]')) {
       const url = absolute(element.getAttribute?.('href') || '');
@@ -410,9 +484,9 @@
     return {
       ok: map.size > 0,
       authenticated: true,
-      complete: false,
+      complete: !cutOffWithButtonRemaining,
       method: 'dom-fallback',
-      diagnostics: { expanded, found: map.size },
+      diagnostics: { clicks: expanded, found: map.size, possiblyTruncated: cutOffWithButtonRemaining },
       items: [...map.values()],
       error: map.size ? '' : 'No usable items found in the open course page.'
     };
@@ -420,13 +494,39 @@
 
   async function smartScanCourse(course) {
     const apiResult = await apiScanCourse(course);
-    if (apiResult.ok && apiResult.items.length) return apiResult;
+    const contentFailed = !!apiResult.diagnostics?.errors?.content || !apiResult.diagnostics?.contentCount;
+    const anythingTruncated = Object.values(apiResult.diagnostics?.truncated || {}).some(Boolean);
+    // Previously: any successful API section short-circuited straight past DOM fallback,
+    // even when the content/toc call (i.e. lectures) itself had failed. That's exactly how
+    // a course could come back with assignments/quizzes intact but zero lectures, silently.
+    if (apiResult.ok && apiResult.items.length && !contentFailed && !anythingTruncated) return apiResult;
+
     const fallback = await domFallbackCourse(course);
-    if (fallback.ok) {
-      fallback.diagnostics = { ...(fallback.diagnostics || {}), apiErrors: apiResult.diagnostics?.errors || {} };
-      return fallback;
+    if (!fallback.ok) {
+      apiResult.diagnostics = { ...(apiResult.diagnostics || {}), domFallbackError: fallback.error };
+      return apiResult;
     }
-    return apiResult;
+
+    // Merge rather than replace: API results for assignments/quizzes/announcements are more
+    // structured than DOM-scraped ones, so keep them and only use the DOM fallback to fill in
+    // whatever the API missed (lectures/content most commonly).
+    const merged = new Map();
+    for (const item of apiResult.items || []) merged.set(item.source_uid, item);
+    for (const item of fallback.items || []) if (!merged.has(item.source_uid)) merged.set(item.source_uid, item);
+
+    return {
+      ok: true,
+      authenticated: true,
+      complete: apiResult.complete || fallback.complete,
+      method: apiResult.ok ? 'hybrid-api-dom' : fallback.method,
+      diagnostics: {
+        ...(apiResult.diagnostics || {}),
+        domFallback: { clicks: fallback.diagnostics?.clicks, itemsAdded: [...merged.values()].length - (apiResult.items?.length || 0) },
+        apiErrors: apiResult.diagnostics?.errors || {},
+      },
+      items: [...merged.values()],
+      error: '',
+    };
   }
 
   async function sessionCheck() {

@@ -105,6 +105,32 @@ async function brightspaceJson(path, origin) {
   return response.json();
 }
 
+function withBookmark(path, bookmark) {
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}bookmark=${encodeURIComponent(bookmark)}`;
+}
+
+// Mirrors content.js's fetchAllPages: the background/direct-session sync path hits the same
+// bookmark-paginated dropbox/quiz/news endpoints, so it needs the same cursor-following fix
+// or large courses silently lose everything past page one here too.
+async function brightspaceJsonAllPages(path, origin, { maxPages = 40 } = {}) {
+  const merged = [];
+  let nextPath = path;
+  let pages = 0;
+  while (nextPath && pages < maxPages) {
+    const data = await brightspaceJson(nextPath, origin);
+    pages++;
+    const pageItems = listFromPaged(data);
+    merged.push(...pageItems);
+    const pagingInfo = data?.PagingInfo || data?.pagingInfo || null;
+    const hasMore = !!(pagingInfo && (pagingInfo.HasMoreItems || pagingInfo.hasMoreItems));
+    const bookmark = pagingInfo && (pagingInfo.Bookmark || pagingInfo.bookmark);
+    nextPath = hasMore && bookmark ? withBookmark(path, bookmark) : null;
+    if (hasMore && bookmark && pageItems.length === 0) break;
+  }
+  return { items: merged, pages, truncated: pages >= maxPages };
+}
+
 async function findBrightspaceTab() {
   const tabs = await chrome.tabs.query({ url: BRIGHTSPACE_PATTERNS });
   return tabs.find(t => /\/d2l\//i.test(t.url || '')) || tabs[0] || null;
@@ -205,18 +231,28 @@ function absolute(origin, href) {
   try { return new URL(href, origin).href; } catch (_) { return ''; }
 }
 
-function classifyContent(title, url, activityType) {
-  const text = `${title} ${url} ${activityType || ''}`.toLowerCase();
+// moduleContext is the module/folder breadcrumb the item lives under. See content.js for the
+// full rationale — the item's own title alone was missing lecture material filed under a
+// numbered folder, and loose "assignment"/"quiz" keyword matches were duplicating real
+// dropbox/quiz entries with unrelated instructions/rubric pages.
+function classifyContent(title, url, activityType, moduleContext) {
+  const ownText = `${title} ${url} ${activityType || ''}`.toLowerCase();
+  const fullText = `${ownText} ${moduleContext || ''}`.toLowerCase();
   const ext = ((title.match(/\.([a-z0-9]{1,8})\b/i) || url.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
-  if (/course\s*(?:outline|syllabus|information|guide)|syllabus|grading\s*(?:scheme|breakdown|policy)|evaluation\s*(?:scheme|breakdown)|marking\s*scheme|assessment\s*(?:scheme|breakdown)|course\s*policies/.test(text)) return 'outline';
-  if (/practice|sample question|review question|worksheet|problem set/.test(text)) return 'practice';
-  if (/assignment|dropbox/.test(text)) return 'assignment';
-  if (/quiz|quizzing/.test(text)) return 'quiz';
-  if (/announcement|news/.test(text)) return 'announcement';
+  const numberedLecturePattern = /(?:lecture|lec|slides?|week|module|chapter|lesson|unit)\s*[-_#:]?\s*\d+|\b(?:l|lec|wk|ch)\s*[-_#]?\s*\d+\b/i;
+
+  if (/course\s*(?:outline|syllabus|information|guide)|syllabus|grading\s*(?:scheme|breakdown|policy)|evaluation\s*(?:scheme|breakdown)|marking\s*scheme|assessment\s*(?:scheme|breakdown)|course\s*policies/.test(ownText)) return 'outline';
+  if (/practice|sample question|review question|worksheet|problem set/.test(ownText)) return 'practice';
+
+  const isSupportingDoc = /instructions?|guideline|rubric|handout|answer key|solutions?|prep\b/.test(ownText);
+  if (/assignment|dropbox/.test(ownText) && !isSupportingDoc) return 'assignment';
+  if (/\bquiz(zing)?\b/.test(ownText) && !isSupportingDoc) return 'quiz';
+  if (/announcement|news/.test(ownText)) return 'announcement';
+
+  if (numberedLecturePattern.test(fullText)) return 'lecture';
+  if (['mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav'].includes(ext) && /lecture|lec|recording|class|week|module/.test(fullText)) return 'lecture';
   if (['py', 'c', 'cpp', 'h', 'java', 'js', 'ts', 'ipynb', 'zip', 'rar', '7z', 'csv', 'xlsx', 'xls'].includes(ext)) return 'resource';
-  if (['pdf', 'ppt', 'pptx'].includes(ext) && /(?:lecture|lec|slides?|week|module|chapter|lesson|unit)\s*[-_#:]?\s*\d+|\b(?:l|lec|wk|ch)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
-  if (/(?:lecture|lec|slides?|lesson)\s*[-_#:]?\s*\d+|\b(?:l|lec)\s*[-_#]?\s*\d+\b/i.test(text)) return 'lecture';
-  if (['pdf', 'ppt', 'pptx', 'doc', 'docx'].includes(ext)) return 'resource';
+  if (['pdf', 'ppt', 'pptx', 'doc', 'docx', 'mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav'].includes(ext)) return 'resource';
   return 'page';
 }
 
@@ -250,16 +286,17 @@ function flattenToc(toc, course, version, origin) {
       }
       const file = fileInfoFromTopic(node, course, version, origin);
       const activity = node.ActivityType || node.TypeIdentifier || node.Type || '';
+      const moduleContext = parentPath.join(' › ');
       items.push({
         course: course.code,
         source_uid: itemUid(course.source_uid, 'content', id, file.source_url || title),
         title,
-        content_type: classifyContent(title, file.source_url, activity),
+        content_type: classifyContent(title, file.source_url, activity, moduleContext),
         source_url: file.download_url || file.source_url,
         download_url: file.download_url,
         file_name: file.file_name,
         file_ext: file.file_ext,
-        module_name: parentPath.join(' › '),
+        module_name: moduleContext,
         content_text: htmlToText(node.Description || node.Body || node.Instructions || ''),
         published_at: dateValue(node.StartDate || node.LastModifiedDate || node.ModifiedDate),
         smart_sync: true
@@ -365,25 +402,52 @@ async function firstWorking(builders, versions, origin) {
 
 async function scanCourseDirect(course, origin) {
   const versions = await detectApiVersions(origin);
-  const diagnostics = { versionsTried: versions.slice(0, 10), endpoints: {}, errors: {} };
+  const diagnostics = { versionsTried: versions.slice(0, 10), endpoints: {}, errors: {}, truncated: {} };
   const items = [];
   let successfulSections = 0;
 
+  // 'content' (lectures) is a single-shot fetch — D2L's TOC endpoint returns the whole module
+  // tree in one response. The other three are bookmark-paginated list endpoints, so they need
+  // to follow the cursor via brightspaceJsonAllPages or courses with more than one page of
+  // assignments/quizzes/announcements quietly lose everything past page one.
   const sections = [
-    ['content', [v => `/d2l/api/le/${v}/${course.source_uid}/content/toc`], (data, v) => flattenToc(data, course, v, origin)],
-    ['assignments', [v => `/d2l/api/le/${v}/${course.source_uid}/dropbox/folders/`], data => assignmentItems(data, course, origin)],
-    ['quizzes', [v => `/d2l/api/le/${v}/${course.source_uid}/quizzes/`], data => quizItems(data, course, origin)],
-    ['announcements', [v => `/d2l/api/le/${v}/${course.source_uid}/news/`], data => announcementItems(data, course, origin)]
+    ['content', [v => `/d2l/api/le/${v}/${course.source_uid}/content/toc`], (data, v) => flattenToc(data, course, v, origin), false],
+    ['assignments', [v => `/d2l/api/le/${v}/${course.source_uid}/dropbox/folders/`], items => assignmentItems(items, course, origin), true],
+    ['quizzes', [v => `/d2l/api/le/${v}/${course.source_uid}/quizzes/`], items => quizItems(items, course, origin), true],
+    ['announcements', [v => `/d2l/api/le/${v}/${course.source_uid}/news/`], items => announcementItems(items, course, origin), true]
   ];
 
-  for (const [name, builders, transform] of sections) {
+  for (const [name, builders, transform, paginated] of sections) {
     try {
-      const result = await firstWorking(builders, versions, origin);
-      diagnostics.endpoints[name] = result.path;
-      const rows = transform(result.data, result.version);
-      items.push(...rows);
-      successfulSections++;
-      diagnostics[`${name}Count`] = rows.length;
+      if (paginated) {
+        let result = null;
+        const errors = [];
+        for (const version of versions) {
+          for (const build of builders) {
+            const path = build(version);
+            try { result = { ...(await brightspaceJsonAllPages(path, origin)), path }; break; }
+            catch (error) {
+              if (error.code === 'AUTH_EXPIRED') throw error;
+              errors.push(`${path}: ${error.message}`);
+            }
+          }
+          if (result) break;
+        }
+        if (!result) throw new Error(errors.slice(-4).join(' | ') || 'No compatible endpoint found');
+        diagnostics.endpoints[name] = result.path;
+        diagnostics.truncated[name] = result.truncated;
+        const rows = transform(result.items);
+        items.push(...rows);
+        successfulSections++;
+        diagnostics[`${name}Count`] = rows.length;
+      } else {
+        const result = await firstWorking(builders, versions, origin);
+        diagnostics.endpoints[name] = result.path;
+        const rows = transform(result.data, result.version);
+        items.push(...rows);
+        successfulSections++;
+        diagnostics[`${name}Count`] = rows.length;
+      }
     } catch (error) {
       if (error.code === 'AUTH_EXPIRED') throw error;
       diagnostics.errors[name] = error.message;
@@ -392,10 +456,12 @@ async function scanCourseDirect(course, origin) {
 
   const deduped = new Map();
   for (const item of items) deduped.set(item.source_uid, item);
+  const contentOk = !diagnostics.errors.content;
+  const nothingTruncated = !Object.values(diagnostics.truncated).some(Boolean);
   return {
     ok: successfulSections > 0,
     authenticated: true,
-    complete: successfulSections >= 3,
+    complete: successfulSections >= 3 && contentOk && nothingTruncated,
     method: 'background-session-api',
     diagnostics: { ...diagnostics, successfulSections },
     items: [...deduped.values()],
