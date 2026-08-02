@@ -2216,13 +2216,24 @@ OUTLINE:
     except Exception: profile.final_minimum=None
     profile.analysis_notes='; '.join(str(x) for x in (parsed.get('rules') or []))[:4000]
     profile.updated_at=datetime.utcnow()
-    # Create/update one editable grade row per outline component.
+    # Synchronize the grade calculator with the analyzed outline while preserving marks.
+    existing_rows=GradeEntry.query.filter_by(user_id=current_user.id,course_full=course).all()
+    def _grade_key(value):
+        return re.sub(r'[^a-z0-9]+',' ',str(value or '').lower()).strip()
+    by_key={_grade_key(r.name):r for r in existing_rows}
+    analyzed_keys=set()
     for comp in clean:
-        existing=GradeEntry.query.filter_by(user_id=current_user.id,course_full=course,name=comp['name']).first()
+        key=_grade_key(comp['name']); analyzed_keys.add(key)
+        existing=by_key.get(key)
         if not existing:
-            db.session.add(GradeEntry(id=uuid4().hex,user_id=current_user.id,course_full=course,name=comp['name'],weight=comp['weight'],score=None,max_score=100,category=comp['category']))
+            existing=GradeEntry(id=uuid4().hex,user_id=current_user.id,course_full=course,name=comp['name'],weight=comp['weight'],score=None,max_score=100,category=comp['category'])
+            db.session.add(existing)
         else:
-            existing.weight=comp['weight']; existing.category=comp['category']
+            existing.name=comp['name']; existing.weight=comp['weight']; existing.category=comp['category']; existing.updated_at=datetime.utcnow()
+    # Remove obsolete auto-created rows only when they have no student mark.
+    for old_row in existing_rows:
+        if _grade_key(old_row.name) not in analyzed_keys and old_row.score is None:
+            db.session.delete(old_row)
     db.session.commit()
     return jsonify({"ok":True,"fallback":used_fallback,"analysis":parsed,"pass_mark":profile.pass_mark,"final_minimum":profile.final_minimum})
 
