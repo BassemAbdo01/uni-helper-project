@@ -187,6 +187,14 @@ class SyncedCourse(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class HiddenCourse(db.Model):
+    """A per-user tombstone so manually removed courses stay removed after sync."""
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    course_code = db.Column(db.String(40), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class AcademicUpdate(db.Model):
     id = db.Column(db.String(64), primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
@@ -1807,7 +1815,8 @@ def home():
 
     all_synced_courses = SyncedCourse.query.filter_by(user_id=current_user.id).order_by(SyncedCourse.updated_at.desc()).all()
     hidden_course_codes = {c.course_code for c in all_synced_courses if bool(getattr(c, "is_hidden", False))}
-    synced_courses = [c for c in all_synced_courses if not bool(getattr(c, "is_hidden", False))]
+    hidden_course_codes.update({h.course_code for h in HiddenCourse.query.filter_by(user_id=current_user.id).all()})
+    synced_courses = [c for c in all_synced_courses if not bool(getattr(c, "is_hidden", False)) and c.course_code not in hidden_course_codes]
     for hidden_code in hidden_course_codes:
         course_map.pop(hidden_code, None)
     for synced in synced_courses:
@@ -2273,6 +2282,17 @@ OUTLINE:
         if weight <= 0 or weight > 100: continue
         clean.append({"name":str(comp.get('name') or 'Assessment')[:120],"weight":round(weight,2),"category":str(comp.get('category') or 'assessment')[:50],"notes":str(comp.get('notes') or '')[:500]})
         total += weight
+    # Validate AI extraction against a deterministic parser. Prefer the result that looks like a complete grading scheme.
+    local_parsed = _local_outline_analysis(row.content_text, course)
+    local_components = local_parsed.get('components') or []
+    local_total = sum(float(c.get('weight') or 0) for c in local_components if isinstance(c, dict))
+    ai_plausible = bool(clean) and 90 <= total <= 110
+    local_plausible = bool(local_components) and 90 <= local_total <= 110
+    if (not ai_plausible and local_plausible) or (not clean and local_components):
+        parsed = local_parsed
+        clean = local_components
+        total = local_total
+        used_fallback = True
     parsed['components']=clean; parsed['total_weight']=round(total,2)
     profile = CourseOutlineProfile.query.filter_by(user_id=current_user.id, course_full=course).first()
     if not profile:
@@ -2371,17 +2391,38 @@ def extension_key():
 @app.route("/api/course/<course_code>/visibility", methods=["POST"])
 @login_required
 def course_visibility(course_code):
-    """Hide/remove a course from Nexora without modifying the university LMS."""
+    """Remove a course and all of its Nexora data, while keeping a tombstone so sync cannot re-add it."""
     course = _normalize_course_code(course_code)
     data = request.get_json(silent=True) or {}
     action = str(data.get("action") or "hide").lower()
-    row = SyncedCourse.query.filter_by(user_id=current_user.id, course_code=course).first()
-    if not row:
-        return jsonify({"error": "Course not found."}), 404
-    row.is_hidden = action != "restore"
-    row.updated_at = datetime.utcnow()
+
+    if action == "restore":
+        HiddenCourse.query.filter_by(user_id=current_user.id, course_code=course).delete(synchronize_session=False)
+        rows = SyncedCourse.query.filter_by(user_id=current_user.id, course_code=course).all()
+        for row in rows:
+            row.is_hidden = False
+        db.session.commit()
+        return jsonify({"ok": True, "hidden": False, "course": course})
+
+    tombstone = HiddenCourse.query.filter_by(user_id=current_user.id, course_code=course).first()
+    if not tombstone:
+        db.session.add(HiddenCourse(id=uuid4().hex, user_id=current_user.id, course_code=course))
+
+    deleted = {}
+    for model, name, field in [
+        (SyncedCourse, "courses", SyncedCourse.course_code),
+        (CourseContent, "content", CourseContent.course_full),
+        (AcademicUpdate, "updates", AcademicUpdate.course_full),
+        (GradeEntry, "grades", GradeEntry.course_full),
+        (CourseOutlineProfile, "outline_profiles", CourseOutlineProfile.course_full),
+        (StudyArtifact, "study_artifacts", StudyArtifact.course_full),
+        (SyncedFile, "files", SyncedFile.course_full),
+        (Task, "tasks", Task.course_full),
+    ]:
+        deleted[name] = model.query.filter(model.user_id == current_user.id, field == course).delete(synchronize_session=False)
+
     db.session.commit()
-    return jsonify({"ok": True, "hidden": bool(row.is_hidden), "course": course})
+    return jsonify({"ok": True, "hidden": True, "course": course, "deleted": deleted})
 
 
 @app.route("/api/sync/courses", methods=["POST"])
@@ -2401,6 +2442,9 @@ def sync_courses():
         url = str(item.get("brightspace_url") or item.get("url") or "").strip()[:4000]
         raw_code = str(item.get("course_code") or item.get("code") or item.get("title") or "OTHER")
         code = _normalize_course_code(raw_code)
+        if HiddenCourse.query.filter_by(user_id=user.id, course_code=code).first():
+            counts["unchanged"] += 1
+            continue
         name = str(item.get("course_name") or item.get("name") or item.get("title") or code).strip()[:1000]
         # Defensive cleanup for raw Brightspace cross-list/section metadata.
         name = re.sub(r"^\s*(Merge|Crosslist)\s+", "", name, flags=re.I)
@@ -2464,8 +2508,9 @@ def extension_sync_status():
     user = _extension_user_from_request()
     if not user:
         return jsonify({"error": "Invalid or missing extension token."}), 401
-    courses = SyncedCourse.query.filter_by(user_id=user.id).order_by(SyncedCourse.updated_at.desc()).all()
-    content_total = CourseContent.query.filter_by(user_id=user.id).count()
+    hidden_codes = {h.course_code for h in HiddenCourse.query.filter_by(user_id=user.id).all()}
+    courses = [c for c in SyncedCourse.query.filter_by(user_id=user.id).order_by(SyncedCourse.updated_at.desc()).all() if c.course_code not in hidden_codes]
+    content_total = CourseContent.query.filter_by(user_id=user.id).filter(~CourseContent.course_full.in_(hidden_codes) if hidden_codes else True).count()
     return jsonify({
         "ok": True,
         "course_count": len(courses),
@@ -2488,7 +2533,9 @@ def sync_course_content():
     if not isinstance(items, list):
         return jsonify({"error": "items must be a list."}), 400
 
+    hidden_codes = {h.course_code for h in HiddenCourse.query.filter_by(user_id=user.id).all()}
     replace_courses = [_normalize_course_code(c) for c in (payload.get("replace_courses") or [])]
+    replace_courses = [c for c in replace_courses if c not in hidden_codes]
     if replace_courses:
         CourseContent.query.filter(CourseContent.user_id == user.id, CourseContent.course_full.in_(replace_courses)).delete(synchronize_session=False)
         # Smart Sync refreshes metadata only; preserve any user-requested cached files.
@@ -2499,6 +2546,9 @@ def sync_course_content():
         if not title:
             continue
         course = _normalize_course_code(item.get("course") or item.get("course_full") or "OTHER")
+        if course in hidden_codes:
+            counts["unchanged"] += 1
+            continue
         source_url = str(item.get("source_url") or "")[:4000]
         source_uid = str(item.get("source_uid") or source_url or f"{course}|{title}")[:255]
         item_data = {

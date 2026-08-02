@@ -328,8 +328,8 @@ const theme=$('#themeToggle');theme.onclick=()=>{document.body.classList.toggle(
       event.preventDefault(); event.stopPropagation();
       const card = button.closest('.nxv2-course-card');
       const course = card?.dataset.course;
-      if (!course || !confirm(`Remove ${course} from Nexora? This does not delete anything from Brightspace.`)) return;
-      button.disabled = true; button.textContent = 'Removing…';
+      if (!course || !confirm(`Delete ${course} from Nexora? This removes its imported content, grades, outline analysis, and tasks from Nexora. Nothing is deleted from Brightspace.`)) return;
+      button.disabled = true; button.textContent = 'Deleting…';
       try {
         const response = await fetch(`/api/course/${encodeURIComponent(course)}/visibility`, {
           method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'hide'})
