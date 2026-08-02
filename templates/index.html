@@ -137,26 +137,32 @@
         <article class="nxv2-courses" id="courses">
           <header class="nxv2-section-head">
             <div><span>COURSE INTELLIGENCE</span><h3>Your Courses</h3><p>Real courses, workload signals, and next actions.</p></div>
-            <a href="/dashboard?view=all">View all courses <span>→</span></a>
+            <a href="/dashboard?view=all#courses">{% if show_all_courses %}Showing all {{ course_cards|length }} courses{% else %}View all courses{% endif %} <span>→</span></a>
           </header>
           <div class="nxv2-course-track">
             {% if course_cards %}
               {% for c in course_cards %}
-              <a class="nxv2-course-card course-{{ loop.index }}" href="{{ url_for('course_workspace', course_code=c.course) }}">
-                <div class="nxv2-course-cover"{% if c.image_url %} style="background-image:linear-gradient(180deg,rgba(7,10,25,.12),rgba(7,10,25,.82)),url('{{ c.image_url|e }}');background-size:cover;background-position:center"{% endif %}>
-                  <span class="course-code">{{ c.course }}</span>
-                  <button type="button" aria-label="Course options">•••</button>
-                  <div class="course-emblem"><i></i><b>{{ c.course[:1] }}</b></div>
-                  <div class="course-grid-lines"></div>
+              <article class="nxv2-course-card course-{{ loop.index }}" data-course="{{ c.course }}">
+                <a class="nxv2-course-main" href="{{ url_for('course_workspace', course_code=c.course) }}" aria-label="Open {{ c.course }} workspace">
+                  <div class="nxv2-course-cover"{% if c.image_url %} style="background-image:linear-gradient(180deg,rgba(7,10,25,.12),rgba(7,10,25,.82)),url('{{ c.image_url|e }}');background-size:cover;background-position:center"{% endif %}>
+                    <span class="course-code">{{ c.course }}</span>
+                    <div class="course-emblem"><i></i><b>{{ c.course[:1] }}</b></div>
+                    <div class="course-grid-lines"></div>
+                  </div>
+                  <div class="nxv2-course-body">
+                    <div class="nxv2-course-title"><strong>{{ c.title }}</strong><span>{{ c.course }}</span></div>
+                    <div class="nxv2-course-progress-row"><b>{{ c.progress }}%</b><div class="nxv2-progress"><span style="width:{{ c.progress }}%"></span></div></div>
+                    <small>{% if c.next_title %}NEXT: {{ c.next_title }}{% else %}{{ c.content_count or c.total }} imported item{% if (c.content_count or c.total) != 1 %}s{% endif %}{% endif %}</small>
+                    <p>{{ c.due_status }}</p>
+                    <footer><span>Open Workspace</span><b>→</b></footer>
+                  </div>
+                </a>
+                <button class="nxv2-course-menu-button" type="button" aria-label="Options for {{ c.course }}" aria-expanded="false">•••</button>
+                <div class="nxv2-course-menu" hidden>
+                  <a href="{{ url_for('course_workspace', course_code=c.course) }}">Open workspace</a>
+                  <button type="button" class="nxv2-remove-course">Remove from Nexora</button>
                 </div>
-                <div class="nxv2-course-body">
-                  <div class="nxv2-course-title"><strong>{{ c.title }}</strong><span>{{ c.course }}</span></div>
-                  <div class="nxv2-course-progress-row"><b>{{ c.progress }}%</b><div class="nxv2-progress"><span style="width:{{ c.progress }}%"></span></div></div>
-                  <small>{% if c.next_title %}NEXT: {{ c.next_title }}{% else %}{{ c.content_count or c.total }} imported item{% if (c.content_count or c.total) != 1 %}s{% endif %}{% endif %}</small>
-                  <p>{{ c.due_status }}</p>
-                  <footer><span>Open Workspace</span><b>→</b></footer>
-                </div>
-              </a>
+              </article>
               {% endfor %}
             {% else %}
               <div class="nxv2-course-empty"><span>▣</span><h4>Your courses will appear here</h4><p>Connect Brightspace or add your first task.</p><a href="{{ url_for('connect_brightspace') }}">Connect Brightspace</a></div>
@@ -299,6 +305,44 @@ $('#commandSearch').onclick=openPalette;palette.onclick=e=>{if(e.target===palett
 addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openPalette()}if(e.key==='Escape'){closePalette();dayModal.classList.remove('open');cp.classList.remove('open')}});
 
 const theme=$('#themeToggle');theme.onclick=()=>{document.body.classList.toggle('nxv2-light');theme.textContent=document.body.classList.contains('nxv2-light')?'☀':'☾';localStorage.setItem('nx-theme-v2',document.body.classList.contains('nxv2-light')?'light':'dark')};if(localStorage.getItem('nx-theme-v2')==='light')theme.click();
+</script>
+
+<script>
+(() => {
+  const closeMenus = (except = null) => document.querySelectorAll('.nxv2-course-menu').forEach(menu => {
+    if (menu !== except) { menu.hidden = true; menu.previousElementSibling?.setAttribute('aria-expanded','false'); }
+  });
+  document.querySelectorAll('.nxv2-course-menu-button').forEach(button => {
+    button.addEventListener('click', event => {
+      event.preventDefault(); event.stopPropagation();
+      const menu = button.nextElementSibling;
+      const willOpen = menu.hidden;
+      closeMenus(menu);
+      menu.hidden = !willOpen;
+      button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+  });
+  document.addEventListener('click', () => closeMenus());
+  document.querySelectorAll('.nxv2-remove-course').forEach(button => {
+    button.addEventListener('click', async event => {
+      event.preventDefault(); event.stopPropagation();
+      const card = button.closest('.nxv2-course-card');
+      const course = card?.dataset.course;
+      if (!course || !confirm(`Remove ${course} from Nexora? This does not delete anything from Brightspace.`)) return;
+      button.disabled = true; button.textContent = 'Removing…';
+      try {
+        const response = await fetch(`/api/course/${encodeURIComponent(course)}/visibility`, {
+          method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'hide'})
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Could not remove course.');
+        card.animate([{opacity:1,transform:'scale(1)'},{opacity:0,transform:'scale(.96)'}],{duration:240,easing:'ease'}).onfinish=()=>card.remove();
+      } catch (error) {
+        button.disabled = false; button.textContent = 'Remove from Nexora'; alert(error.message);
+      }
+    });
+  });
+})();
 </script>
 </body>
 </html>

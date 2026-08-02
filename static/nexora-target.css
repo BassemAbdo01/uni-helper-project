@@ -28,3 +28,14 @@ linear-gradient(180deg,#040710 0%,#050814 100%)!important}
 @media(max-width:1380px){.nxv2-update-strip-four{grid-template-columns:repeat(2,minmax(0,1fr))}.nxv2-layout{grid-template-columns:minmax(0,1fr) 300px}.nxv2-hero{grid-template-columns:minmax(330px,.8fr) minmax(470px,1.2fr)}.nxv2-course-track{grid-template-columns:repeat(2,minmax(0,1fr))}.nxv2-bottom-grid{grid-template-columns:1fr 1fr}.nxv2-streak{grid-column:1/-1!important}}
 @media(max-width:1040px){.nxv2-update-strip-four{grid-template-columns:1fr 1fr}.nxv2-layout{grid-template-columns:1fr}.nxv2-right{grid-template-columns:repeat(2,minmax(0,1fr))}.nxv2-hero{grid-template-columns:minmax(310px,.75fr) minmax(420px,1.25fr)}.nxv2-course-track{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.nxv2-main{padding:12px}.nxv2-topbar{align-items:flex-start}.nxv2-top-actions .nxv2-icon{display:none}.nxv2-update-strip-four{grid-template-columns:1fr}.nxv2-hero{grid-template-columns:1fr}.nxv2-hero-copy{background:linear-gradient(180deg,rgba(7,11,24,.99),rgba(7,11,24,.82));padding:23px 20px}.nxv2-hero-visual{min-height:260px}.nxv2-course-track,.nxv2-bottom-grid,.nxv2-right{grid-template-columns:1fr}.nxv2-streak{grid-column:auto!important}}
+
+/* Course card actions and full-course gallery */
+.nxv2-course-card{position:relative;overflow:visible!important}
+.nxv2-course-main{display:block;color:inherit;text-decoration:none;height:100%;border-radius:inherit;overflow:hidden}
+.nxv2-course-menu-button{position:absolute;z-index:8;top:12px;right:12px;width:36px;height:32px;border:1px solid rgba(255,255,255,.16);border-radius:10px;background:rgba(7,10,25,.72);backdrop-filter:blur(12px);color:#fff;font-weight:800;letter-spacing:2px;cursor:pointer}
+.nxv2-course-menu-button:hover,.nxv2-course-menu-button[aria-expanded="true"]{background:#6d28d9;border-color:#a78bfa;transform:translateY(-1px)}
+.nxv2-course-menu{position:absolute;z-index:30;top:50px;right:12px;min-width:190px;padding:7px;border:1px solid #35305c;border-radius:13px;background:#0b0d1a;box-shadow:0 20px 60px rgba(0,0,0,.55)}
+.nxv2-course-menu[hidden]{display:none!important}
+.nxv2-course-menu a,.nxv2-course-menu button{display:block;width:100%;box-sizing:border-box;border:0;border-radius:9px;padding:10px 11px;background:transparent;color:#e9e8ff;text-align:left;text-decoration:none;cursor:pointer;font:inherit}
+.nxv2-course-menu a:hover{background:#1b1734}.nxv2-course-menu button:hover{background:#3a1423;color:#ffb4c1}
+.nxv2-course-track{overflow:visible!important}

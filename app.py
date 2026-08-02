@@ -181,6 +181,7 @@ class SyncedCourse(db.Model):
     image_url = db.Column(db.Text, default="")
     brightspace_url = db.Column(db.Text, default="")
     content_count = db.Column(db.Integer, default=0)
+    is_hidden = db.Column(db.Boolean, default=False, nullable=False)
     source_hash = db.Column(db.String(64), default="")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -210,6 +211,9 @@ def ensure_schema_columns():
             "sync_status": "VARCHAR(30) DEFAULT 'never'",
             "sync_message": "TEXT DEFAULT 'Not synchronized yet.'",
             "extension_token": "VARCHAR(128) DEFAULT ''",
+        },
+        "synced_course": {
+            "is_hidden": "BOOLEAN DEFAULT FALSE",
         },
         "task": {
             "source_uid": "VARCHAR(255) DEFAULT ''",
@@ -1801,7 +1805,11 @@ def home():
             course_map[course]["next_title"] = c.get("title", "Task")
             course_map[course]["next_due"] = c.get("main_due_pretty", "")
 
-    synced_courses = SyncedCourse.query.filter_by(user_id=current_user.id).order_by(SyncedCourse.updated_at.desc()).all()
+    all_synced_courses = SyncedCourse.query.filter_by(user_id=current_user.id).order_by(SyncedCourse.updated_at.desc()).all()
+    hidden_course_codes = {c.course_code for c in all_synced_courses if bool(getattr(c, "is_hidden", False))}
+    synced_courses = [c for c in all_synced_courses if not bool(getattr(c, "is_hidden", False))]
+    for hidden_code in hidden_course_codes:
+        course_map.pop(hidden_code, None)
     for synced in synced_courses:
         code = synced.course_code or "OTHER"
         if code not in course_map:
@@ -1815,7 +1823,9 @@ def home():
         course_map[code]["term"] = synced.term or ""
         course_map[code]["content_count"] = synced.content_count or 0
 
-    course_cards = list(course_map.values())[:8]
+    all_course_cards = list(course_map.values())
+    show_all_courses = request.args.get("view") == "all"
+    course_cards = all_course_cards if show_all_courses else all_course_cards[:8]
 
     course_titles = {
         "SYSC2004": "Object-Oriented Programming",
@@ -1919,6 +1929,7 @@ def home():
         month_title=month_title,
         month_days=month_days,
         academic_updates=academic_updates,
+        show_all_courses=show_all_courses,
     )
 
 
@@ -2355,6 +2366,22 @@ def extension_key():
         current_user.extension_token = secrets.token_urlsafe(32)
         db.session.commit()
     return jsonify({"token": current_user.extension_token})
+
+
+@app.route("/api/course/<course_code>/visibility", methods=["POST"])
+@login_required
+def course_visibility(course_code):
+    """Hide/remove a course from Nexora without modifying the university LMS."""
+    course = _normalize_course_code(course_code)
+    data = request.get_json(silent=True) or {}
+    action = str(data.get("action") or "hide").lower()
+    row = SyncedCourse.query.filter_by(user_id=current_user.id, course_code=course).first()
+    if not row:
+        return jsonify({"error": "Course not found."}), 404
+    row.is_hidden = action != "restore"
+    row.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, "hidden": bool(row.is_hidden), "course": course})
 
 
 @app.route("/api/sync/courses", methods=["POST"])
