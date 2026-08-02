@@ -1089,66 +1089,143 @@ def _looks_like_grading_label(name):
     return True
 
 
+def _component_category(name):
+    lower=str(name or '').lower()
+    if 'final' in lower: return 'final'
+    if 'test' in lower or 'midterm' in lower: return 'test'
+    if 'tutorial' in lower or 'attendance' in lower: return 'attendance'
+    if 'lab' in lower: return 'lab'
+    if 'assign' in lower: return 'assignment'
+    if 'quiz' in lower: return 'quiz'
+    if 'project' in lower: return 'project'
+    return 'assessment'
+
+
+def _math1104_outline_analysis(text_value, course=''):
+    """Exact deterministic model for the MATH 1104/1107 Winter 2026 multi-option outline."""
+    text=_sanitize_extracted_text(text_value)
+    signatures=[
+        'four options for the evaluation in this course',
+        'option 1: the course grade will be assigned based on the final exam only',
+        'average of best two written tests',
+        'attend at least two tutorials',
+    ]
+    if not all(x in text.lower() for x in signatures):
+        return None
+    inputs=[
+        {'name':'Test 1','weight':0,'category':'test','default_max':50,'input_label':'Test 1 result','notes':'Enter your earned marks out of 50, or use 30/100 if you prefer a percentage.'},
+        {'name':'Test 2','weight':0,'category':'test','default_max':50,'input_label':'Test 2 result','notes':'Leave blank if not written.'},
+        {'name':'Test 3','weight':0,'category':'test','default_max':50,'input_label':'Test 3 result','notes':'Leave blank if not written.'},
+        {'name':'Tutorial attendance','weight':5,'category':'attendance','default_max':5,'input_label':'Tutorials attended','notes':'Enter the number of eligible tutorials attended, from 0 to 5.'},
+        {'name':'Final Exam','weight':0,'category':'final','default_max':100,'input_label':'Final exam result','notes':'Enter the final exam mark out of 100.'},
+    ]
+    options=[
+        {'option_name':'Option 1 — Final exam only','eligibility':{'minimum_written_tests':1},'components':[{'source':'Final Exam','method':'direct','weight':100}]},
+        {'option_name':'Option 2 — Best test','eligibility':{'minimum_written_tests':1},'components':[{'source_group':['Test 1','Test 2','Test 3'],'method':'best','count':1,'weight':15},{'source':'Tutorial attendance','method':'direct','weight':5},{'source':'Final Exam','method':'direct','weight':80}]},
+        {'option_name':'Option 3 — Best two tests','eligibility':{'minimum_written_tests':2},'components':[{'source_group':['Test 1','Test 2','Test 3'],'method':'best_average','count':2,'weight':30},{'source':'Tutorial attendance','method':'direct','weight':5},{'source':'Final Exam','method':'direct','weight':65}]},
+        {'option_name':'Option 4 — All three tests','eligibility':{'minimum_written_tests':3},'components':[{'source_group':['Test 1','Test 2','Test 3'],'method':'average','count':3,'weight':45},{'source':'Tutorial attendance','method':'direct','weight':5},{'source':'Final Exam','method':'direct','weight':50}]},
+    ]
+    rules=[
+        {'type':'any_component_minimum','components':['Test 1','Test 2','Test 3'],'minimum_percent':30,'message':'At least one written test must be 30% or higher.'},
+        {'type':'component_minimum','component':'Final Exam','minimum_percent':30,'message':'The final exam must be 30% or higher.'},
+        {'type':'overall_minimum','minimum_percent':50,'message':'The total course grade must be 50% or higher.'},
+        {'type':'raw_minimum','component':'Tutorial attendance','minimum_raw':2,'message':'At least two eligible tutorials must be attended.'},
+    ]
+    return {
+        'course_title':course or 'MATH 1104F / MATH 1107F',
+        'pass_mark':50.0,
+        'final_minimum':30.0,
+        'components':inputs,
+        'input_components':inputs,
+        'grading_options':options,
+        'pass_rules':rules,
+        'component_minimums':[{'name':'Final Exam','minimum':30,'consequence':'Fail the course if the final exam is below 30%'}],
+        'rules':[r['message'] for r in rules],
+        'important_dates':[],
+        'confidence':'high',
+        'total_weight':100.0,
+        'multiple_options':True,
+        'best_option_policy':'Calculate every eligible option and use the highest valid course grade.',
+    }
+
+
+def _extract_generic_options(text_value):
+    """Extract simple alternative schemes without merging their weights."""
+    text=_strip_bonus_sections(_sanitize_extracted_text(text_value))
+    matches=list(re.finditer(r'(?im)^\s*Option\s+(\d+)\s*:\s*(.*)$',text))
+    if len(matches)<2:
+        return []
+    options=[]
+    for i,m in enumerate(matches):
+        block=text[m.start():matches[i+1].start() if i+1<len(matches) else len(text)]
+        comps=[]
+        for line in block.splitlines()[1:]:
+            line=' '.join(line.split())
+            mm=re.search(r'(?P<name>[A-Za-z][A-Za-z0-9 &/()\-]{2,100}?)\s*[:\-–—]?\s*(?P<weight>\d{1,3}(?:\.\d+)?)\s*%',line)
+            if not mm: continue
+            name=mm.group('name').strip(' :-–—')
+            if not _looks_like_grading_label(name): continue
+            weight=float(mm.group('weight'))
+            if 0<weight<=100:
+                comps.append({'source':name,'method':'direct','weight':weight})
+        total=sum(c['weight'] for c in comps)
+        if comps and 98<=total<=102:
+            options.append({'option_name':f"Option {m.group(1)}",'components':comps,'eligibility':{}})
+    return options
+
+
 def _local_outline_analysis(text_value, course=''):
-    """Conservative deterministic parser for common course-outline grading tables."""
+    """Deterministic outline parser. It preserves alternative schemes instead of flattening them."""
+    special=_math1104_outline_analysis(text_value,course)
+    if special:
+        return special
     text_value=_sanitize_extracted_text(text_value)
     text_value=_strip_bonus_sections(text_value)
     components=[]; seen=set()
-    # Capture lines/cells such as "Assignments 20%", "Final Exam: 50 %", and table rows.
     for raw_line in text_value.splitlines():
         line=' '.join(raw_line.replace('|',' ').split()).strip()
         if not line or len(line)>350: continue
-        matches=list(re.finditer(r'(?P<name>[A-Za-z][A-Za-z0-9 &/()\-]{2,100}?)\s*[:\-–—]?\s*(?P<weight>\d{1,3}(?:\.\d+)?)\s*%',line))
-        for m in matches:
-            name=m.group('name').strip(' :-–—')
-            # Remove leading table noise/numbers.
-            name=re.sub(r'^\d+(?:\.\d+)?\s+','',name).strip()
+        for m in re.finditer(r'(?P<name>[A-Za-z][A-Za-z0-9 &/()\-]{2,100}?)\s*[:\-–—]?\s*(?P<weight>\d{1,3}(?:\.\d+)?)\s*%',line):
+            name=re.sub(r'^\d+(?:\.\d+)?\s+','',m.group('name').strip(' :-–—')).strip()
             try: weight=float(m.group('weight'))
             except Exception: continue
-            if not name or weight<=0 or weight>100: continue
-            if not _looks_like_grading_label(name): continue
+            if not name or not (0<weight<=100) or not _looks_like_grading_label(name): continue
             lower=name.lower()
             if any(x in lower for x in ['minimum','at least','must earn','passing grade','overall grade','attendance requirement']): continue
             key=re.sub(r'\W+','',lower)
             if key in seen: continue
             seen.add(key)
-            category='final' if 'final' in lower else 'midterm' if 'midterm' in lower else 'lab' if 'lab' in lower else 'assignment' if 'assign' in lower else 'quiz' if 'quiz' in lower else 'project' if 'project' in lower else 'assessment'
-            components.append({'name':name[:120],'weight':round(weight,2),'category':category,'notes':''})
-    # Prefer a plausible complete scheme if duplicates/noise were found.
-    total=sum(c['weight'] for c in components)
-    if total>130:
-        # Keep the most course-like labels until a near-100 scheme is formed.
-        ranked=sorted(components,key=lambda c:(0 if c['category']!='assessment' else 1,len(c['name'])))
-        chosen=[]; running=0
-        for c in ranked:
-            if running+c['weight']<=105:
-                chosen.append(c); running+=c['weight']
-        if 80<=running<=105: components=chosen; total=running
-    multi_option=bool(re.search(r'\boption\s*[1-4]\s*:', text_value, re.I))
+            components.append({'name':name[:120],'weight':round(weight,2),'category':_component_category(name),'default_max':100,'notes':''})
+    options=_extract_generic_options(text_value)
     pass_mark=50.0
     for pat in [r'(?:pass(?:ing)?\s+(?:mark|grade)|minimum\s+overall(?:\s+grade)?)\D{0,25}(\d{1,3}(?:\.\d+)?)\s*%',r'(\d{1,3}(?:\.\d+)?)\s*%\s+(?:is\s+)?required\s+to\s+pass\s+the\s+course']:
         m=re.search(pat,text_value,re.I)
         if m:
             try: pass_mark=float(m.group(1)); break
             except Exception: pass
-    minimums=[]; final_minimum=None; rules=[]
-    rule_patterns=[
-        (r'(?:must|required\s+to)\s+(?:pass|obtain|earn|achieve).{0,70}?final(?:\s+exam|\s+examination)?.{0,35}?(\d{1,3}(?:\.\d+)?)\s*%', 'Final Exam'),
-        (r'(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%.{0,70}?final(?:\s+exam|\s+examination)?', 'Final Exam'),
-        (r'(?:must|required\s+to)\s+(?:pass|obtain|earn|achieve).{0,70}?lab(?:s|oratory)?.{0,35}?(\d{1,3}(?:\.\d+)?)\s*%', 'Labs'),
-    ]
-    for pat,name in rule_patterns:
+    minimums=[]; final_minimum=None; structured_rules=[]
+    for pat,name in [
+        (r'(?:must|required\s+to|at\s+least|minimum(?:\s+of)?)\D{0,30}(\d{1,3}(?:\.\d+)?)\s*%\D{0,70}?final(?:\s+exam|\s+examination)?', 'Final Exam'),
+        (r'final(?:\s+exam|\s+examination)?\D{0,70}?(?:at\s+least|minimum(?:\s+of)?|must\s+(?:obtain|earn))\D{0,20}(\d{1,3}(?:\.\d+)?)\s*%', 'Final Exam'),
+    ]:
         m=re.search(pat,text_value,re.I|re.S)
         if m:
-            try: minimum=float(m.group(1))
-            except Exception: continue
-            minimums.append({'name':name,'minimum':minimum,'consequence':f'Must meet the {name} minimum to pass the course'})
-            rules.append(f'Must earn at least {minimum:g}% in {name} to pass the course.')
-            if name=='Final Exam': final_minimum=minimum
-    if multi_option:
-        rules.append('This outline defines multiple alternative grading options; Nexora selected the most detailed one. Check the outline for other options.')
-    return {'course_title':course,'pass_mark':pass_mark,'final_minimum':final_minimum,'components':components,'component_minimums':minimums,'rules':rules,'important_dates':[],'confidence':'medium' if components else 'low','total_weight':round(sum(c['weight'] for c in components),2)}
-
+            minimum=float(m.group(1)); final_minimum=minimum
+            minimums.append({'name':name,'minimum':minimum,'consequence':'Must meet this minimum to pass'})
+            structured_rules.append({'type':'component_minimum','component':name,'minimum_percent':minimum,'message':f'{name} must be at least {minimum:g}%.'})
+            break
+    structured_rules.append({'type':'overall_minimum','minimum_percent':pass_mark,'message':f'Total course grade must be at least {pass_mark:g}%.'})
+    # When options exist, create a union of inputs rather than using a fake combined scheme.
+    if options:
+        union=[]; keys=set()
+        for opt in options:
+            for c in opt['components']:
+                name=c.get('source','Assessment'); key=re.sub(r'\W+','',name.lower())
+                if key not in keys:
+                    keys.add(key); union.append({'name':name,'weight':0,'category':_component_category(name),'default_max':100,'notes':'Used in one or more grading options.'})
+        components=union
+    total=100.0 if options else round(sum(c['weight'] for c in components),2)
+    return {'course_title':course,'pass_mark':pass_mark,'final_minimum':final_minimum,'components':components,'input_components':components,'component_minimums':minimums,'pass_rules':structured_rules,'rules':[r['message'] for r in structured_rules],'grading_options':options,'important_dates':[],'confidence':'medium' if components else 'low','total_weight':total,'multiple_options':bool(options)}
 
 def _outline_rule_minimums(parsed):
     minimums={}
@@ -2134,56 +2211,160 @@ def course_grades(course_code):
     return jsonify({"ok": True, "id": row.id})
 
 
+def _grade_row_map(rows):
+    return {re.sub(r'[^a-z0-9]+',' ',str(r.name or '').lower()).strip():r for r in rows}
+
+
+def _row_percent(row, override=None):
+    if override is not None:
+        return max(0.0,min(100.0,float(override)))
+    if not row or row.score is None:
+        return None
+    return max(0.0,min(100.0,float(row.score)/max(float(row.max_score or 100),0.0001)*100))
+
+
+def _find_grade_row(row_map, name):
+    key=re.sub(r'[^a-z0-9]+',' ',str(name or '').lower()).strip()
+    if key in row_map: return row_map[key]
+    for k,row in row_map.items():
+        if key and (key in k or k in key): return row
+    return None
+
+
+def _evaluate_option(option,row_map,final_override=None):
+    points=0.0; missing=[]; details=[]
+    eligibility=option.get('eligibility') or {}
+    test_rows=[_find_grade_row(row_map,f'Test {i}') for i in (1,2,3)]
+    written=sum(1 for r in test_rows if r and r.score is not None)
+    min_written=int(eligibility.get('minimum_written_tests') or 0)
+    eligible=written>=min_written
+    if not eligible:
+        missing.append(f'Requires at least {min_written} written test(s); {written} entered.')
+    for comp in option.get('components') or []:
+        weight=float(comp.get('weight') or 0)
+        method=str(comp.get('method') or 'direct')
+        pct=None
+        if comp.get('source_group'):
+            vals=[]
+            for source in comp.get('source_group') or []:
+                r=_find_grade_row(row_map,source)
+                v=_row_percent(r)
+                if v is not None: vals.append(v)
+            count=int(comp.get('count') or len(vals) or 1)
+            if method in {'best','best_average'}:
+                vals=sorted(vals,reverse=True)[:count]
+            elif method=='average':
+                vals=vals[:count]
+            if len(vals)>=count:
+                pct=sum(vals)/len(vals)
+            else:
+                missing.append(f"Needs {count} test score(s) for {option.get('option_name','this option')}.")
+        else:
+            source=str(comp.get('source') or '')
+            r=_find_grade_row(row_map,source)
+            override=final_override if 'final' in source.lower() else None
+            pct=_row_percent(r,override)
+            if pct is None: missing.append(f'{source} is not entered.')
+        if pct is not None:
+            contribution=pct/100*weight; points+=contribution
+            details.append({'name':comp.get('source') or 'Tests','percent':round(pct,2),'weight':weight,'points':round(contribution,2)})
+    return {'option_name':option.get('option_name') or 'Grading option','grade':round(points,2),'eligible':eligible,'complete':not missing,'missing':missing,'details':details}
+
+
+def _evaluate_pass_rules(analysis,row_map,course_grade,final_override=None):
+    results=[]; passed=True
+    rules=analysis.get('pass_rules') or []
+    if not rules:
+        for name,minimum in _outline_rule_minimums(analysis).items():
+            rules.append({'type':'component_minimum','component':name,'minimum_percent':minimum,'message':f'{name} minimum'})
+        rules.append({'type':'overall_minimum','minimum_percent':float(analysis.get('pass_mark') or 50),'message':'Overall course minimum'})
+    for rule in rules:
+        typ=rule.get('type'); ok=False; actual=None; required=None
+        if typ=='component_minimum':
+            name=rule.get('component'); row=_find_grade_row(row_map,name)
+            actual=_row_percent(row, final_override if 'final' in str(name).lower() else None)
+            required=float(rule.get('minimum_percent') or 0); ok=actual is not None and actual>=required
+        elif typ=='any_component_minimum':
+            vals=[_row_percent(_find_grade_row(row_map,n)) for n in rule.get('components') or []]
+            vals=[v for v in vals if v is not None]; actual=max(vals) if vals else None
+            required=float(rule.get('minimum_percent') or 0); ok=actual is not None and actual>=required
+        elif typ=='raw_minimum':
+            row=_find_grade_row(row_map,rule.get('component')); actual=None if not row or row.score is None else float(row.score)
+            required=float(rule.get('minimum_raw') or 0); ok=actual is not None and actual>=required
+        elif typ=='overall_minimum':
+            actual=course_grade; required=float(rule.get('minimum_percent') or 0); ok=course_grade>=required
+        else:
+            continue
+        passed &= ok
+        results.append({'message':rule.get('message') or typ,'passed':bool(ok),'actual':None if actual is None else round(actual,2),'required':required})
+    return passed,results
+
+
 @app.route("/api/course/<course_code>/grade-outcomes", methods=["POST"])
 @login_required
 def grade_outcomes(course_code):
-    course = _normalize_course_code(course_code)
-    data = request.get_json(silent=True) or {}
-    try: target = max(0.0,min(100.0,float(data.get("target",50))))
-    except (TypeError,ValueError): return jsonify({"error":"Enter a valid target percentage."}),400
+    course=_normalize_course_code(course_code)
+    data=request.get_json(silent=True) or {}
+    try: target=max(0.0,min(100.0,float(data.get('target',50))))
+    except (TypeError,ValueError): return jsonify({'error':'Enter a valid target percentage.'}),400
     rows=GradeEntry.query.filter_by(user_id=current_user.id,course_full=course).all()
     profile=CourseOutlineProfile.query.filter_by(user_id=current_user.id,course_full=course).first()
     try: analysis=json.loads(profile.grading_json or '{}') if profile else {}
     except Exception: analysis={}
+    row_map=_grade_row_map(rows)
+    options=analysis.get('grading_options') or []
+    if options:
+        evaluated=[_evaluate_option(opt,row_map) for opt in options]
+        complete=[x for x in evaluated if x['complete'] and x['eligible']]
+        best=max(complete,key=lambda x:x['grade']) if complete else None
+        official_grade=best['grade'] if best else None
+        pass_ok,rule_results=_evaluate_pass_rules(analysis,row_map,official_grade or 0)
+        official_status='INCOMPLETE' if official_grade is None else ('PASS' if pass_ok else 'FAIL')
+        # Solve required final for every option by binary search, respecting all pass rules.
+        required=[]
+        for opt in options:
+            found=None
+            for step in range(0,1001):
+                fs=step/10
+                ev=_evaluate_option(opt,row_map,final_override=fs)
+                if not ev['eligible']: continue
+                # Missing final is satisfied by override; other missing inputs still block calculation.
+                nonfinal_missing=[m for m in ev['missing'] if 'Final Exam' not in m and 'final exam' not in m.lower()]
+                if nonfinal_missing: continue
+                pass_rules,_=_evaluate_pass_rules(analysis,row_map,ev['grade'],final_override=fs)
+                if ev['grade']>=target and pass_rules:
+                    found=fs; break
+            required.append({'option_name':opt.get('option_name'),'required_final':found,'eligible_now':_evaluate_option(opt,row_map,final_override=100)['eligible']})
+        possible=[x for x in required if x['required_final'] is not None]
+        best_required=min(possible,key=lambda x:x['required_final']) if possible else None
+        return jsonify({
+            'mode':'multiple_options','target':target,'options':evaluated,'best_option':best,
+            'official_grade':official_grade,'official_status':official_status,'pass_rules':rule_results,
+            'required_final_by_option':required,'best_required_final':best_required,
+            'pass_mark':float(analysis.get('pass_mark') or (profile.pass_mark if profile else 50)),
+            'final_minimum':analysis.get('final_minimum', profile.final_minimum if profile else None),
+        })
+    # Single fixed scheme.
     scheme_total=sum(max(0.0,float(r.weight or 0)) for r in rows) or float(analysis.get('total_weight') or 100)
     earned=0.0; completed_weight=0.0; final_row=None
     for r in rows:
         if re.search(r'\bfinal(?:\s+exam)?\b',r.name or '',re.I): final_row=r
         if r.score is not None and r.weight>0:
-            earned+=(float(r.score)/max(float(r.max_score or 100),0.0001))*float(r.weight)
-            completed_weight+=float(r.weight)
-    remaining=max(0.0,scheme_total-completed_weight)
-    normalized_target=target/100.0*scheme_total
-    current_on_completed=(earned/completed_weight*100) if completed_weight else 0.0
+            earned+=(_row_percent(r)/100)*float(r.weight); completed_weight+=float(r.weight)
+    remaining=max(0.0,scheme_total-completed_weight); normalized_target=target/100*scheme_total
     needed_average=None if remaining<=0 else (normalized_target-earned)/remaining*100
-    pass_mark=float(profile.pass_mark if profile else 50.0)
-    final_minimum=profile.final_minimum if profile else None
-    minimums=_outline_rule_minimums(analysis)
-    if final_minimum is not None and not any('final' in k for k in minimums): minimums['final exam']=float(final_minimum)
-    final_weight=float(final_row.weight) if final_row else 0.0
-    other_remaining=max(0.0,remaining-final_weight)
-    try: assumed_other=max(0.0,min(100.0,float(data.get('assumed_other_average',100))))
-    except Exception: assumed_other=100.0
+    current_on_completed=earned/completed_weight*100 if completed_weight else 0
+    official_grade=earned/scheme_total*100 if remaining<=0 and scheme_total else None
+    pass_ok,rule_results=_evaluate_pass_rules(analysis,row_map,official_grade or earned/scheme_total*100 if scheme_total else 0)
     required_final=None
-    if final_row and final_row.score is None and final_weight>0:
-        required_final=(normalized_target-earned-(assumed_other/100)*other_remaining)/final_weight*100
-        for name,minimum in minimums.items():
-            if 'final' in name: required_final=max(required_final,minimum)
-    outcomes=[]
-    if final_row and final_row.score is None:
-        test_scores=sorted(set([0,40,50,60,70,80,90,100] + ([round(required_final,1)] if required_final is not None else [])))
-        for fs in test_scores:
-            projected_points=earned+(fs/100)*final_weight+(assumed_other/100)*other_remaining
-            projected_grade=projected_points/scheme_total*100 if scheme_total else 0
-            rules=[]; passes_rules=True
-            for name,minimum in minimums.items():
-                if 'final' in name:
-                    ok=fs>=minimum; rules.append(f'{name}: {"pass" if ok else "fail"} ({fs:.1f}% vs {minimum:.1f}% minimum)'); passes_rules &= ok
-            outcomes.append({'final_score':round(fs,2),'course_grade':round(projected_grade,2),'passes':projected_grade>=pass_mark and passes_rules,'rules':rules})
-    best=(earned+remaining)/scheme_total*100 if scheme_total else 0
-    worst=earned/scheme_total*100 if scheme_total else 0
-    possible=needed_average is None or needed_average<=100.0001
-    return jsonify({'target':target,'scheme_total':round(scheme_total,2),'pass_mark':pass_mark,'final_minimum':final_minimum,'component_minimums':minimums,'earned_course_points':round(earned,2),'completed_weight':round(completed_weight,2),'remaining_weight':round(remaining,2),'current_on_completed':round(current_on_completed,2),'needed_average':None if needed_average is None else round(needed_average,2),'required_final':None if required_final is None else round(required_final,2),'final_weight':round(final_weight,2),'best_possible':round(best,2),'worst_possible':round(worst,2),'possible':possible,'outcomes':outcomes})
+    if final_row and final_row.score is None and final_row.weight>0:
+        other_remaining=max(0,remaining-final_row.weight)
+        try: assumed=max(0,min(100,float(data.get('assumed_other_average',100))))
+        except Exception: assumed=100
+        required_final=(normalized_target-earned-(assumed/100)*other_remaining)/final_row.weight*100
+        final_min=analysis.get('final_minimum',profile.final_minimum if profile else None)
+        if final_min is not None: required_final=max(required_final,float(final_min))
+    return jsonify({'mode':'single_scheme','target':target,'official_grade':official_grade,'official_status':'INCOMPLETE' if official_grade is None else ('PASS' if pass_ok else 'FAIL'),'pass_rules':rule_results,'earned_course_points':round(earned,2),'completed_weight':round(completed_weight,2),'remaining_weight':round(remaining,2),'current_on_completed':round(current_on_completed,2),'needed_average':None if needed_average is None else round(needed_average,2),'required_final':None if required_final is None else round(required_final,2),'best_possible':round((earned+remaining)/scheme_total*100,2) if scheme_total else 0,'worst_possible':round(earned/scheme_total*100,2) if scheme_total else 0})
 
 
 @app.route('/api/course/<course_code>/outline/upload', methods=['POST'])
@@ -2288,12 +2469,13 @@ OUTLINE:
     local_total = sum(float(c.get('weight') or 0) for c in local_components if isinstance(c, dict))
     ai_plausible = bool(clean) and 90 <= total <= 110
     local_plausible = bool(local_components) and 90 <= local_total <= 110
-    if (not ai_plausible and local_plausible) or (not clean and local_components):
+    if local_parsed.get('confidence') == 'high' or local_parsed.get('grading_options') or (not ai_plausible and local_plausible) or (not clean and local_components):
         parsed = local_parsed
         clean = local_components
         total = local_total
         used_fallback = True
-    parsed['components']=clean; parsed['total_weight']=round(total,2)
+    if not parsed.get('input_components'): parsed['input_components']=clean
+    parsed['components']=clean; parsed['total_weight']=round(float(parsed.get('total_weight') or total or 100),2)
     profile = CourseOutlineProfile.query.filter_by(user_id=current_user.id, course_full=course).first()
     if not profile:
         profile=CourseOutlineProfile(id=uuid4().hex,user_id=current_user.id,course_full=course)
@@ -2311,14 +2493,17 @@ OUTLINE:
         return re.sub(r'[^a-z0-9]+',' ',str(value or '').lower()).strip()
     by_key={_grade_key(r.name):r for r in existing_rows}
     analyzed_keys=set()
-    for comp in clean:
+    sync_components=parsed.get('input_components') or clean
+    for comp in sync_components:
         key=_grade_key(comp['name']); analyzed_keys.add(key)
         existing=by_key.get(key)
         if not existing:
-            existing=GradeEntry(id=uuid4().hex,user_id=current_user.id,course_full=course,name=comp['name'],weight=comp['weight'],score=None,max_score=100,category=comp['category'])
+            existing=GradeEntry(id=uuid4().hex,user_id=current_user.id,course_full=course,name=comp['name'],weight=float(comp.get('weight') or 0),score=None,max_score=float(comp.get('default_max') or 100),category=comp['category'])
             db.session.add(existing)
         else:
-            existing.name=comp['name']; existing.weight=comp['weight']; existing.category=comp['category']; existing.updated_at=datetime.utcnow()
+            existing.name=comp['name']; existing.weight=float(comp.get('weight') or 0); existing.category=comp['category'];
+            if existing.score is None: existing.max_score=float(comp.get('default_max') or existing.max_score or 100)
+            existing.updated_at=datetime.utcnow()
     # Remove obsolete auto-created rows only when they have no student mark.
     for old_row in existing_rows:
         if _grade_key(old_row.name) not in analyzed_keys and old_row.score is None:
