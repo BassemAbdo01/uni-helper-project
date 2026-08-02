@@ -560,3 +560,16 @@
     }
   });
 })();
+
+// Gemini-requested course-outline extractor. Kept alongside Nexora Smart Sync so
+// outline detection does not replace or weaken the existing course scanner.
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+  if (request?.action !== 'extract_outline') return;
+  try {
+    const text = String(document.body?.innerText || '').replace(/\u0000/g, '').trim();
+    sendResponse({ ok: true, text, url: location.href, title: document.title });
+  } catch (error) {
+    sendResponse({ ok: false, error: error?.message || 'Could not read this page.' });
+  }
+  return true;
+});

@@ -2749,6 +2749,89 @@ def sync_now():
     return redirect(url_for("connect_brightspace"))
 
 
+@app.route("/grade-calculator")
+@login_required
+def grade_calculator():
+    return render_template("grade_calculator.html")
+
+
+@app.route("/api/analyze-outline", methods=["POST"])
+@login_required
+def analyze_outline_generic():
+    """Analyze an uploaded or pasted course outline and return grade components."""
+    text = ""
+    filename = "Pasted course outline"
+    upload = request.files.get("file")
+    if upload and upload.filename:
+        try:
+            filename, text, _file_hash, _size = _extract_uploaded_course_file(upload)
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc), "components": []}), 422
+        except Exception:
+            app.logger.exception("Generic outline upload failed")
+            return jsonify({"success": False, "error": "Nexora could not read this outline file.", "components": []}), 422
+    else:
+        data = request.get_json(silent=True) or {}
+        text = str(data.get("text") or "")
+
+    text = _sanitize_extracted_text(text)
+    if len(text.strip()) < 20:
+        return jsonify({"success": False, "error": "The outline text is empty or too short.", "components": []}), 400
+
+    try:
+        prompt = (
+            "Analyze this university course outline and return strict JSON only:\n"
+            '{"pass_mark":50,"final_minimum":null,"components":[{"name":"Assignments","weight":20,"category":"assignments","notes":""}],"component_minimums":[],"rules":[]}\n'
+            "Extract only genuine grading categories and their weights. Ignore bonus marks. "
+            "Detect any rule requiring a minimum score on the final or another component.\n\n"
+            f"OUTLINE:\n{text[:120000]}"
+        )
+        parsed = _gemini_json(
+            "You are a precise university course-outline parser. Output only valid JSON.",
+            prompt,
+            4000,
+            0.1,
+        )
+    except Exception as exc:
+        app.logger.warning("Generic Gemini outline analysis failed; using local parser: %s", exc)
+        parsed = _local_outline_analysis(text, "COURSE")
+
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    components = []
+    total = 0.0
+    for comp in parsed.get("components") or []:
+        if not isinstance(comp, dict):
+            continue
+        try:
+            weight = float(comp.get("weight") or 0)
+        except (TypeError, ValueError):
+            continue
+        name = str(comp.get("name") or "Assessment").strip()
+        if not name or weight <= 0 or weight > 100:
+            continue
+        components.append({
+            "name": name[:120],
+            "weight": round(weight, 2),
+            "score": "",
+            "category": str(comp.get("category") or "assessment")[:50],
+            "notes": str(comp.get("notes") or "")[:500],
+        })
+        total += weight
+
+    return jsonify({
+        "success": bool(components),
+        "filename": filename,
+        "components": components,
+        "total_weight": round(total, 2),
+        "pass_mark": parsed.get("pass_mark", 50),
+        "final_minimum": parsed.get("final_minimum"),
+        "component_minimums": parsed.get("component_minimums") or [],
+        "rules": parsed.get("rules") or [],
+        "error": "" if components else "No clear grade components were detected.",
+    })
+
 if __name__ == "__main__":
     app.run(debug=True)
 

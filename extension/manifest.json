@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Nexora Sync",
-  "version": "2.0.0",
-  "description": "Nexora Smart Sync for the Nexora V2 academic operating system.",
+  "version": "2.1.0",
+  "description": "Nexora Smart Sync with automatic course-outline detection and Grade Intelligence.",
   "permissions": [
     "storage",
     "alarms",

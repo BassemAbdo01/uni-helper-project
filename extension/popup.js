@@ -41,3 +41,32 @@ $('import').onclick = async () => { await save(); await chrome.runtime.sendMessa
 $('scan').onclick = async () => { await save(); $('status').textContent = 'Scanning open Brightspace homepage…'; await chrome.runtime.sendMessage({type: 'NEXORA_SCAN_OPEN_TABS'}); await refresh(); };
 $('sync').onclick = async () => { await save(); $('status').textContent = 'Background Smart Sync is checking lectures, assignments, quizzes and announcements…'; chrome.runtime.sendMessage({type: 'NEXORA_SYNC_ALL_COURSES'}).then(refresh); setTimeout(refresh, 1500); };
 refresh();
+
+$('outline').onclick = async () => {
+  await save();
+  $('status').textContent = 'Reading the current LMS page for a course outline…';
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error('No active tab was found.');
+    let response;
+    try {
+      response = await chrome.tabs.sendMessage(tab.id, { action: 'extract_outline' });
+    } catch (_) {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+      response = await chrome.tabs.sendMessage(tab.id, { action: 'extract_outline' });
+    }
+    if (!response?.ok || !response.text) throw new Error(response?.error || 'No outline text was detected on this page.');
+    await chrome.storage.local.set({
+      pendingOutlineText: response.text,
+      pendingOutlineTitle: response.title || 'Detected course outline',
+      pendingOutlineSource: response.url || tab.url || ''
+    });
+    const cfg = await chrome.storage.sync.get(['apiBase']);
+    const base = String(cfg.apiBase || '').replace(/\/$/, '');
+    if (!base) throw new Error('Save your Nexora URL first.');
+    await chrome.tabs.create({ url: `${base}/grade-calculator` });
+    $('status').textContent = 'Outline detected. Opening Nexora Grade Intelligence…';
+  } catch (error) {
+    $('status').textContent = `Outline detection failed: ${error?.message || error}`;
+  }
+};

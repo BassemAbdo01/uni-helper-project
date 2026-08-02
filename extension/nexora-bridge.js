@@ -33,3 +33,19 @@
 
   window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '1.5.0' }, window.location.origin);
 })();
+
+// Deliver a course outline captured from an LMS tab to the standalone Grade Intelligence page.
+(async () => {
+  if (!/\/grade-calculator\/?$/.test(location.pathname)) return;
+  try {
+    const stored = await chrome.storage.local.get(['pendingOutlineText']);
+    if (!stored.pendingOutlineText) return;
+    const deliver = () => window.postMessage({
+      type: 'UNI_HELPER_COURSE_OUTLINE',
+      text: stored.pendingOutlineText
+    }, window.location.origin);
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(deliver, 100));
+    else setTimeout(deliver, 100);
+    await chrome.storage.local.remove(['pendingOutlineText','pendingOutlineTitle','pendingOutlineSource']);
+  } catch (_) {}
+})();
