@@ -202,6 +202,15 @@ class HiddenCourse(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+class UserGradingScale(db.Model):
+    """Persistent per-user university letter-grade mapping."""
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, unique=True, index=True)
+    university_name = db.Column(db.String(255), default="")
+    scale_json = db.Column(db.Text, default="[]")
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class AcademicUpdate(db.Model):
     id = db.Column(db.String(64), primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
@@ -1972,10 +1981,81 @@ def login():
 def profile():
     return render_template("profile.html", user=current_user)
 
+DEFAULT_GRADING_SCALE = [
+    {"letter":"A+","minimum":90.0},{"letter":"A","minimum":85.0},{"letter":"A-","minimum":80.0},
+    {"letter":"B+","minimum":77.0},{"letter":"B","minimum":73.0},{"letter":"B-","minimum":70.0},
+    {"letter":"C+","minimum":67.0},{"letter":"C","minimum":63.0},{"letter":"C-","minimum":60.0},
+    {"letter":"D+","minimum":57.0},{"letter":"D","minimum":53.0},{"letter":"D-","minimum":50.0},
+    {"letter":"F","minimum":0.0},
+]
+
+def _normalize_grading_scale(raw):
+    cleaned=[]
+    for item in raw or []:
+        if not isinstance(item,dict):
+            continue
+        letter=str(item.get("letter") or "").strip().upper()
+        try: minimum=float(item.get("minimum"))
+        except (TypeError,ValueError): continue
+        if not letter or not (0 <= minimum <= 100): continue
+        cleaned.append({"letter":letter[:12],"minimum":round(minimum,2)})
+    # Keep one threshold per letter and sort high-to-low.
+    dedup={x["letter"]:x for x in cleaned}
+    result=sorted(dedup.values(),key=lambda x:x["minimum"],reverse=True)
+    if not result or result[-1]["minimum"]>0:
+        result.append({"letter":"F","minimum":0.0})
+    return result
+
+def _get_user_grading_scale(user_id):
+    row=UserGradingScale.query.filter_by(user_id=user_id).first()
+    if not row:
+        return {"university_name":"","scale":DEFAULT_GRADING_SCALE,"configured":False}
+    try: scale=_normalize_grading_scale(json.loads(row.scale_json or "[]"))
+    except Exception: scale=[]
+    if not scale: scale=DEFAULT_GRADING_SCALE
+    return {"university_name":row.university_name or "","scale":scale,"configured":True}
+
+def _numeric_to_letter(user_id, grade):
+    if grade is None: return None
+    profile=_get_user_grading_scale(user_id)
+    for band in profile["scale"]:
+        if float(grade) >= float(band["minimum"]):
+            return band["letter"]
+    return profile["scale"][-1]["letter"] if profile["scale"] else None
+
+def _letter_requirement_result(user_id, grade, requirement):
+    profile=_get_user_grading_scale(user_id)
+    required=str(requirement.get("minimum_letter") or "").strip().upper()
+    threshold=next((float(x["minimum"]) for x in profile["scale"] if x["letter"].upper()==required),None)
+    actual_letter=_numeric_to_letter(user_id,grade)
+    if threshold is None:
+        return {"message":requirement.get("message") or f"Minimum {required}","scope":requirement.get("scope") or "course","passed":None,"actual_letter":actual_letter,"required_letter":required,"required_numeric":None,"needs_scale":True}
+    return {"message":requirement.get("message") or f"Minimum {required}","scope":requirement.get("scope") or "course","passed":grade is not None and float(grade)>=threshold,"actual_letter":actual_letter,"required_letter":required,"required_numeric":threshold,"needs_scale":False}
+
 @app.route("/settings")
 @login_required
 def settings():
-    return render_template("settings.html", user=current_user)
+    grading_scale=_get_user_grading_scale(current_user.id)
+    return render_template("settings.html", user=current_user, grading_scale=grading_scale)
+
+@app.route("/api/grading-scale", methods=["GET","POST"])
+@login_required
+def grading_scale_api():
+    if request.method=="GET":
+        return jsonify(_get_user_grading_scale(current_user.id))
+    data=request.get_json(silent=True) or {}
+    scale=_normalize_grading_scale(data.get("scale") or [])
+    if len(scale)<2:
+        return jsonify({"error":"Add at least two valid letter-grade bands."}),400
+    row=UserGradingScale.query.filter_by(user_id=current_user.id).first()
+    if not row:
+        row=UserGradingScale(id=uuid4().hex,user_id=current_user.id)
+        db.session.add(row)
+    row.university_name=str(data.get("university_name") or "")[:255]
+    row.scale_json=json.dumps(scale,ensure_ascii=False)
+    row.updated_at=datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok":True,"university_name":row.university_name,"scale":scale})
 
 
 @app.route("/feedback", methods=["GET", "POST"])
@@ -2524,6 +2604,14 @@ def _evaluate_pass_rules(analysis,row_map,course_grade,final_override=None):
     return passed,results
 
 
+def _decorate_grade_result(user_id, analysis, grade):
+    scale_profile=_get_user_grading_scale(user_id)
+    letter=_numeric_to_letter(user_id,grade)
+    letter_results=[_letter_requirement_result(user_id,grade,r) for r in (analysis.get('letter_requirements') or []) if isinstance(r,dict)]
+    course_pass_rules=[r for r in letter_results if r.get('scope')=='course_pass']
+    prerequisite_rules=[r for r in letter_results if r.get('scope')=='prerequisite']
+    return {"letter_grade":letter,"grading_scale_name":scale_profile.get("university_name") or "Your grading scale","grading_scale_configured":scale_profile.get("configured",False),"letter_rule_results":letter_results,"course_letter_rules_passed":all(r.get("passed") is True for r in course_pass_rules) if course_pass_rules else True,"prerequisite_eligibility":prerequisite_rules}
+
 @app.route("/api/course/<course_code>/grade-outcomes", methods=["POST"])
 @login_required
 def grade_outcomes(course_code):
@@ -2561,12 +2649,16 @@ def grade_outcomes(course_code):
             required.append({'option_name':opt.get('option_name'),'required_final':found,'eligible_now':_evaluate_option(opt,row_map,final_override=100)['eligible']})
         possible=[x for x in required if x['required_final'] is not None]
         best_required=min(possible,key=lambda x:x['required_final']) if possible else None
+        decorated=_decorate_grade_result(current_user.id,analysis,official_grade)
+        if official_grade is not None and not decorated['course_letter_rules_passed']:
+            official_status='FAIL'
         return jsonify({
             'mode':'multiple_options','target':target,'options':evaluated,'best_option':best,
             'official_grade':official_grade,'official_status':official_status,'pass_rules':rule_results,
             'required_final_by_option':required,'best_required_final':best_required,
             'pass_mark':float(analysis.get('pass_mark') or (profile.pass_mark if profile else 50)),
             'final_minimum':analysis.get('final_minimum', profile.final_minimum if profile else None),
+            **decorated,
         })
     # Single fixed scheme.
     scheme_total=sum(max(0.0,float(r.weight or 0)) for r in rows) or float(analysis.get('total_weight') or 100)
@@ -2588,33 +2680,47 @@ def grade_outcomes(course_code):
         required_final=(normalized_target-earned-(assumed/100)*other_remaining)/final_row.weight*100
         final_min=analysis.get('final_minimum',profile.final_minimum if profile else None)
         if final_min is not None: required_final=max(required_final,float(final_min))
-    return jsonify({'mode':'single_scheme','target':target,'official_grade':official_grade,'official_status':'INCOMPLETE' if official_grade is None else ('PASS' if pass_ok else 'FAIL'),'pass_rules':rule_results,'earned_course_points':round(earned,2),'completed_weight':round(completed_weight,2),'remaining_weight':round(remaining,2),'current_on_completed':round(current_on_completed,2),'needed_average':None if needed_average is None else round(needed_average,2),'required_final':None if required_final is None else round(required_final,2),'best_possible':round((earned+remaining)/scheme_total*100,2) if scheme_total else 0,'worst_possible':round(earned/scheme_total*100,2) if scheme_total else 0})
+    decorated=_decorate_grade_result(current_user.id,analysis,official_grade)
+    official_status='INCOMPLETE' if official_grade is None else ('PASS' if pass_ok and decorated['course_letter_rules_passed'] else 'FAIL')
+    return jsonify({'mode':'single_scheme','target':target,'official_grade':official_grade,'official_status':official_status,'pass_rules':rule_results,'earned_course_points':round(earned,2),'completed_weight':round(completed_weight,2),'remaining_weight':round(remaining,2),'current_on_completed':round(current_on_completed,2),'needed_average':None if needed_average is None else round(needed_average,2),'required_final':None if required_final is None else round(required_final,2),'best_possible':round((earned+remaining)/scheme_total*100,2) if scheme_total else 0,'worst_possible':round(earned/scheme_total*100,2) if scheme_total else 0,**decorated})
 
 
 @app.route('/api/course/<course_code>/outline/upload', methods=['POST'])
 @login_required
 def upload_course_outline(course_code):
     course=_normalize_course_code(course_code)
-    upload=request.files.get('file')
-    if not upload or not upload.filename:
-        return jsonify({'error':'Choose a PDF, DOCX, PPTX, PNG, JPG, WEBP, TXT, MD, CSV, or HTML course outline.'}),400
+    uploads=request.files.getlist('files') or request.files.getlist('file')
+    uploads=[u for u in uploads if u and u.filename]
+    if not uploads:
+        return jsonify({'error':'Choose one or more outline files or screenshots.'}),400
+    if len(uploads)>8:
+        return jsonify({'error':'Upload at most 8 screenshots/pages at once.'}),400
+    extracted_parts=[]; hashes=[]; total_size=0; names=[]
     try:
-        filename, extracted, file_hash, size=_extract_uploaded_course_file(upload)
-        extracted=_sanitize_extracted_text(extracted)
+        for index,upload in enumerate(uploads,1):
+            filename, extracted, file_hash, size=_extract_uploaded_course_file(upload)
+            extracted=_sanitize_extracted_text(extracted)
+            if not extracted:
+                raise ValueError(f'Nexora could not read visible text from {filename}. Try a clearer screenshot.')
+            names.append(filename); hashes.append(file_hash); total_size+=size
+            extracted_parts.append(f'\n===== UPLOAD {index}: {filename} =====\n{extracted}')
     except ValueError as exc:
         return jsonify({'error':str(exc)}),422
     except Exception:
         app.logger.exception('Course outline upload failed')
-        return jsonify({'error':'Nexora could not read this outline file. Use PDF, DOCX, PPTX, PNG, JPG, WEBP, TXT, MD, CSV, or HTML.'}),422
-    source_uid='manual-outline:'+hashlib.sha256(f'{current_user.id}:{course}:{file_hash}'.encode()).hexdigest()[:40]
+        return jsonify({'error':'Nexora could not read one of these outline files.'}),422
+    combined=_sanitize_extracted_text('\n'.join(extracted_parts))
+    combined_hash=hashlib.sha256(':'.join(hashes).encode()).hexdigest()
+    source_uid='manual-outline:'+hashlib.sha256(f'{current_user.id}:{course}:{combined_hash}'.encode()).hexdigest()[:40]
     row=CourseContent.query.filter_by(user_id=current_user.id,course_full=course,source_uid=source_uid).first()
     if not row:
         row=CourseContent(id=uuid4().hex,user_id=current_user.id,course_full=course,source_uid=source_uid)
         db.session.add(row)
-    row.title=filename; row.content_type='outline'; row.source_url=''; row.module_name='Uploaded Course Outline'; row.content_text=extracted
-    row.content_hash=_content_payload_hash({'title':filename,'content_type':'outline','source_url':'','content_text':extracted,'module_name':'Uploaded Course Outline','published_at':''})
+    row.title=names[0] if len(names)==1 else f'{len(names)} outline screenshots/pages'
+    row.content_type='outline'; row.source_url=''; row.module_name='Uploaded Course Outline'; row.content_text=combined
+    row.content_hash=_content_payload_hash({'title':row.title,'content_type':'outline','source_url':'','content_text':combined,'module_name':'Uploaded Course Outline','published_at':''})
     row.updated_at=datetime.utcnow(); db.session.commit()
-    return jsonify({'ok':True,'source_uid':source_uid,'title':filename,'characters':len(extracted),'file_size':size})
+    return jsonify({'ok':True,'source_uid':source_uid,'title':row.title,'characters':len(combined),'file_size':total_size,'files':names})
 
 
 @app.route('/api/course/<course_code>/material/upload', methods=['POST'])
@@ -2658,7 +2764,7 @@ def analyze_course_outline(course_code):
     if len((row.content_text or '').strip()) < 200:
         return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":"Reading the course outline from Brightspace…"}),409
     prompt = f"""Analyze this university course outline for {course}. Return strict JSON with this schema:
-{{"course_title":"", "pass_mark":50, "final_minimum":null, "components":[{{"name":"Assignments","weight":20,"category":"assignments","notes":""}}], "component_minimums":[{{"name":"Final Exam","minimum":50,"consequence":"Must pass final to pass course"}}], "rules":[""], "grading_options":[{{"option_name":"Option 1","components":[{{"name":"Final Exam","weight":100,"category":"final","notes":""}}]}}], "important_dates":[], "confidence":"high|medium|low"}}
+{{"course_title":"", "pass_mark":50, "final_minimum":null, "components":[{{"name":"Assignments","weight":20,"category":"assignments","notes":""}}], "component_minimums":[{{"name":"Final Exam","minimum":50,"consequence":"Must pass final to pass course"}}], "rules":[""], "grading_options":[{{"option_name":"Option 1","components":[{{"name":"Final Exam","weight":100,"category":"final","notes":""}}]}}], "important_dates":[], "letter_requirements":[{"minimum_letter":"C-","scope":"prerequisite","message":"C- or better required to use this course as a prerequisite"}], "confidence":"high|medium|low"}}
 
 IMPORTANT — read the whole outline before extracting anything:
 1. Some outlines define ONE fixed grading scheme (a single components list). If so, leave grading_options empty and put everything in components; weights should total 100.
@@ -2669,6 +2775,7 @@ IMPORTANT — read the whole outline before extracting anything:
 6. Grading tables may be headed Assessment Breakdown, Assessment Distribution, Grade Distribution, Evaluation, Marking Scheme, Basis of Grade, or similar. Treat all of these as equivalent.
 7. Ignore explanatory dates/descriptions between an assessment name and its weight. Example: 'Midterm Exam I Closed book (Weekend of Jan 31) 20%' means Midterm 1 = 20%.
 8. If there are several alternative options, never add their weights together. Return each option separately.
+9. Detect letter-grade rules such as "C- or better". Put them in letter_requirements. Distinguish scope: use "course_pass" only if the outline says the student fails the course below that letter; use "prerequisite" when it only controls prerequisite eligibility. Never turn a prerequisite requirement into a course FAIL rule.
 
 OUTLINE:
 {_sanitize_extracted_text(row.content_text)[:120000]}"""
@@ -2701,6 +2808,17 @@ OUTLINE:
         clean = local_components
         total = local_total
         used_fallback = True
+    # Preserve explicit letter-grade requirements even when the AI misses them.
+    letter_requirements=parsed.get('letter_requirements') if isinstance(parsed.get('letter_requirements'),list) else []
+    text_for_rules=row.content_text or ''
+    for match in re.finditer(r'(?:required|must|need(?:ed)?)\s+(?:to\s+)?(?:achieve|obtain|earn)?[^.\n]{0,90}?\b([ABCDF][+-]?)\b\s+or\s+better',text_for_rules,re.I):
+        letter=match.group(1).upper()
+        sentence=re.split(r'[\n.]',text_for_rules[match.start():match.start()+240])[0].strip()
+        nearby=text_for_rules[max(0,match.start()-100):match.start()+240].lower()
+        scope='prerequisite' if 'prerequisite' in nearby else 'course_pass'
+        if not any(str(x.get('minimum_letter','')).upper()==letter and x.get('scope')==scope for x in letter_requirements if isinstance(x,dict)):
+            letter_requirements.append({'minimum_letter':letter,'scope':scope,'message':sentence or f'{letter} or better required'})
+    parsed['letter_requirements']=letter_requirements
     if not parsed.get('input_components'): parsed['input_components']=clean
     parsed['components']=clean; parsed['total_weight']=round(float(parsed.get('total_weight') or total or 100),2)
     profile = CourseOutlineProfile.query.filter_by(user_id=current_user.id, course_full=course).first()
@@ -3250,15 +3368,28 @@ def analyze_outline_generic():
     """Analyze an uploaded or pasted course outline and return grade components."""
     text = ""
     filename = "Pasted course outline"
-    upload = request.files.get("file")
-    if upload and upload.filename:
+    uploads = request.files.getlist("files") or request.files.getlist("file")
+    uploads = [u for u in uploads if u and u.filename]
+    if uploads:
+        if len(uploads) > 8:
+            return jsonify({"success": False, "error": "Upload at most 8 screenshots/pages at once.", "components": []}), 400
         try:
-            filename, text, _file_hash, _size = _extract_uploaded_course_file(upload)
+            parts = []
+            names = []
+            for index, upload in enumerate(uploads, 1):
+                item_name, extracted, _file_hash, _size = _extract_uploaded_course_file(upload)
+                extracted = _sanitize_extracted_text(extracted)
+                if not extracted:
+                    raise ValueError(f"Nexora could not read visible text from {item_name}.")
+                names.append(item_name)
+                parts.append(f"\n===== UPLOAD {index}: {item_name} =====\n{extracted}")
+            filename = names[0] if len(names) == 1 else f"{len(names)} outline uploads"
+            text = "\n".join(parts)
         except ValueError as exc:
             return jsonify({"success": False, "error": str(exc), "components": []}), 422
         except Exception:
             app.logger.exception("Generic outline upload failed")
-            return jsonify({"success": False, "error": "Nexora could not read this outline file.", "components": []}), 422
+            return jsonify({"success": False, "error": "Nexora could not read one of these outline files.", "components": []}), 422
     else:
         data = request.get_json(silent=True) or {}
         text = str(data.get("text") or "")
