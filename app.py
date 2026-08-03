@@ -9,6 +9,7 @@ import secrets
 import io
 import time
 import zipfile
+import base64
 from datetime import datetime, date, timedelta
 import calendar as calendar_module
 from uuid import uuid4
@@ -31,6 +32,12 @@ from pypdf import PdfReader
 from pptx import Presentation
 from docx import Document
 from ics import Calendar
+
+try:
+    from PIL import Image, ImageOps, ImageEnhance, ImageFilter
+    import pytesseract
+except Exception:  # OCR remains optional; PDF/DOCX parsing still works.
+    Image = ImageOps = ImageEnhance = ImageFilter = pytesseract = None
 
 app = Flask(__name__)
 
@@ -1174,58 +1181,218 @@ def _extract_generic_options(text_value):
     return options
 
 
-def _local_outline_analysis(text_value, course=''):
-    """Deterministic outline parser. It preserves alternative schemes instead of flattening them."""
-    special=_math1104_outline_analysis(text_value,course)
-    if special:
-        return special
-    text_value=_sanitize_extracted_text(text_value)
-    text_value=_strip_bonus_sections(text_value)
+def _grading_section_candidates(text_value):
+    """Return likely grading/evaluation sections, ordered from most focused to full text.
+
+    Outlines use many headings: Assessment Breakdown, Assessment Distribution,
+    Grade Distribution, Evaluation and Marking Scheme, Basis of Grade, etc.  We isolate
+    those regions first so unrelated percentages (dates, attendance deductions, bonuses,
+    textbook prices) cannot become fake grade components.
+    """
+    text = _strip_bonus_sections(_sanitize_extracted_text(text_value))
+    headings = re.compile(
+        r'(?im)^\s*(?:\d+[.)]\s*)?(?:evaluation(?:\s+in\s+this\s+course)?|evaluation\s+and\s+marking\s+scheme|'
+        r'assessment\s+(?:breakdown|distribution|scheme)|grade\s+(?:distribution|breakdown)|grading\s+(?:scheme|breakdown)|'
+        r'marking\s+(?:scheme|breakdown)|basis\s+of\s+(?:the\s+)?(?:final\s+)?grade|method\s+of\s+evaluation|'
+        r'course\s+evaluation|final\s+grade\s+(?:calculation|breakdown)|how\s+your\s+grade\s+is\s+calculated)\s*:?[ \t]*$'
+    )
+    starts=[m.start() for m in headings.finditer(text)]
+    sections=[]
+    stop_heading=re.compile(
+        r'(?im)^\s*(?:\d+[.)]\s*)?(?:academic\s+integrity|academic\s+dates|appeals?|copyright|accommodations?|'
+        r'course\s+schedule|schedule\s+of\s+lectures|learning\s+outcomes|textbooks?|communications?|policies)\s*:?[ \t]*$'
+    )
+    for pos in starts:
+        tail=text[pos:pos+14000]
+        stop=stop_heading.search(tail, 250)
+        section=tail[:stop.start()] if stop else tail
+        if len(section.strip())>=40:
+            sections.append(section)
+    # A compact fallback around any line containing three or more percentages often catches
+    # tables whose heading was lost during PDF extraction.
+    lines=text.splitlines()
+    for i,line in enumerate(lines):
+        if len(re.findall(r'\b\d{1,3}(?:\.\d+)?\s*%', line)) >= 2:
+            sections.append('\n'.join(lines[max(0,i-8):min(len(lines),i+18)]))
+    sections.append(text)
+    # Deduplicate while preserving order.
+    out=[]; seen=set()
+    for section in sections:
+        key=hashlib.sha256(section[:12000].encode('utf-8','ignore')).hexdigest()
+        if key not in seen:
+            seen.add(key); out.append(section)
+    return out
+
+
+def _canonical_component_name(raw):
+    raw=' '.join(str(raw or '').replace('|',' ').split()).strip(' :-–—.,;')
+    raw=re.sub(r'^(?:item|component|assessment|description|weight|percentage)\s+','',raw,flags=re.I)
+    # Prefer a known academic component phrase and discard trailing prose/dates.
+    patterns=[
+        (r'\bfinal\s+(?:exam(?:ination)?|assessment)\b','Final Exam'),
+        (r'\bmid[- ]?term\s+(?:exam\s*)?(?P<n>(?:#?\d+|[ivx]+))\b','Midterm {n}'),
+        (r'\bmid[- ]?term\s+(?:exam(?:ination)?)?\b','Midterm'),
+        (r'\bterm\s+test\s*(?P<n>(?:#?\d+|[ivx]+))?\b','Term Test {n}'),
+        (r'\btest\s*(?P<n>(?:#?\d+|[ivx]+))\b','Test {n}'),
+        (r'\b(?:laboratory|lab)\s*(?P<n>\d+)?\b','Lab {n}'),
+        (r'\bassignments?\b','Assignments'),
+        (r'\bquizzes?\b','Quizzes'),
+        (r'\bprojects?\b','Project'),
+        (r'\b(?:tutorial\s+)?attendance\b','Tutorial Attendance'),
+        (r'\bparticipation\b','Participation'),
+        (r'\bproblem\s+analysis(?:\s+sessions?)?\b','Problem Analysis'),
+        (r'\b(?:weekly\s+)?homework\b','Homework'),
+        (r'\b(?:coursework|term\s+work)\b','Coursework'),
+        (r'\bpresentations?\b','Presentation'),
+        (r'\bportfolios?\b','Portfolio'),
+        (r'\bessays?\b','Essay'),
+        (r'\b(?:reflection|discussion)\s+(?:posts?|boards?)\b','Discussion'),
+    ]
+    lower=raw.lower()
+    for pat,label in patterns:
+        m=re.search(pat,lower,re.I)
+        if m:
+            n=(m.groupdict().get('n') or '').replace('#','').upper()
+            return label.format(n=n).strip()
+    # Generic table label fallback, but reject sentence fragments.
+    raw=re.split(r'\b(?:closed\s+book|open\s+book|tentatively|scheduled|due|weekend|description)\b',raw,1,flags=re.I)[0].strip(' :-–—.,;')
+    return raw[:80] if _looks_like_grading_label(raw) else ''
+
+
+def _extract_components_from_section(section):
     components=[]; seen=set()
-    for raw_line in text_value.splitlines():
-        line=' '.join(raw_line.replace('|',' ').split()).strip()
-        if not line or len(line)>350: continue
-        for m in re.finditer(r'(?P<name>[A-Za-z][A-Za-z0-9 &/()\-]{2,100}?)\s*[:\-–—]?\s*(?P<weight>\d{1,3}(?:\.\d+)?)\s*%',line):
-            name=re.sub(r'^\d+(?:\.\d+)?\s+','',m.group('name').strip(' :-–—')).strip()
-            try: weight=float(m.group('weight'))
-            except Exception: continue
-            if not name or not (0<weight<=100) or not _looks_like_grading_label(name): continue
-            lower=name.lower()
-            if any(x in lower for x in ['minimum','at least','must earn','passing grade','overall grade','attendance requirement']): continue
-            key=re.sub(r'\W+','',lower)
-            if key in seen: continue
-            seen.add(key)
-            components.append({'name':name[:120],'weight':round(weight,2),'category':_component_category(name),'default_max':100,'notes':''})
-    options=_extract_generic_options(text_value)
+    lines=[' '.join(x.replace('|',' ').split()) for x in section.splitlines()]
+
+    def add(name, weight):
+        if not name or not (0 < weight <= 100): return
+        key=re.sub(r'\W+','',name.lower())
+        if key in seen: return
+        seen.add(key)
+        components.append({'name':name,'weight':round(weight,2),'category':_component_category(name),'default_max':100,'notes':''})
+
+    # 1) Same-line rows, e.g. "Midterm 1 ... 20%".
+    for line in lines:
+        if not line or len(line)>500: continue
+        if re.search(r'\b(?:minimum|at least|required to pass|must obtain|must achieve|deduction|price|tax)\b',line,re.I):
+            continue
+        percents=list(re.finditer(r'(?<![\d/])(\d{1,3}(?:\.\d+)?)\s*%',line))
+        for pm in percents:
+            weight=float(pm.group(1))
+            previous=max([x.end() for x in percents if x.end() < pm.start()] or [max(0,pm.start()-180)])
+            name=_canonical_component_name(line[previous:pm.start()].strip())
+            add(name,weight)
+
+    # 2) PDF tables often extract each cell on a separate line:
+    #    Midterm Exam I / description / 20%.  Track a component label and look ahead.
+    for i,line in enumerate(lines):
+        if not line or len(line)>180: continue
+        name=_canonical_component_name(line)
+        if not name: continue
+        # A standalone generic heading is not a component.
+        if name.lower() in {'assessment','item','description','weight','coursework'}: continue
+        for j in range(i+1,min(len(lines),i+7)):
+            nxt=lines[j]
+            if not nxt: continue
+            # Stop if another clear component starts before a percentage appears.
+            other=_canonical_component_name(nxt)
+            if other and other.lower()!=name.lower() and not re.search(r'\d{1,3}(?:\.\d+)?\s*%',nxt):
+                break
+            m=re.fullmatch(r'\s*(\d{1,3}(?:\.\d+)?)\s*%\s*',nxt)
+            if m:
+                add(name,float(m.group(1))); break
+    return components
+
+
+def _extract_generic_options(text_value):
+    """Extract alternative grading schemes without combining their totals."""
+    text=_strip_bonus_sections(_sanitize_extracted_text(text_value))
+    matches=list(re.finditer(r'(?im)^\s*Option\s+(\d+)\s*:\s*(.*)$',text))
+    if len(matches)<2: return []
+    options=[]
+    for i,m in enumerate(matches):
+        block=text[m.start():matches[i+1].start() if i+1<len(matches) else len(text)]
+        comps=_extract_components_from_section(block)
+        total=sum(c['weight'] for c in comps)
+        if comps and 98 <= total <= 102:
+            options.append({'option_name':f'Option {m.group(1)}','components':[{'source':c['name'],'method':'direct','weight':c['weight']} for c in comps],'eligibility':{}})
+    return options
+
+
+def _local_outline_analysis(text_value, course=''):
+    """Section-aware deterministic parser for ordinary and multi-option outlines."""
+    special=_math1104_outline_analysis(text_value,course)
+    if special: return special
+    text=_strip_bonus_sections(_sanitize_extracted_text(text_value))
+    options=_extract_generic_options(text)
+    best=[]; best_score=-1
+    for section in _grading_section_candidates(text):
+        comps=_extract_components_from_section(section)
+        total=sum(c['weight'] for c in comps)
+        # Prefer complete 100% schemes, then schemes close to 100, then component count.
+        score=(1000 if 99<=total<=101 else 600 if 95<=total<=105 else 250 if 80<=total<=120 else 0) + len(comps)*10 - abs(100-total)
+        if score>best_score:
+            best_score=score; best=comps
+    components=best
+    names={c.get('name','').lower() for c in components}
+    if 'midterm' in names and any(n in names for n in {'midterm ii','midterm 2'}):
+        for c in components:
+            if c.get('name','').lower()=='midterm': c['name']='Midterm I'
+    total=round(sum(c['weight'] for c in components),2)
+
     pass_mark=50.0
-    for pat in [r'(?:pass(?:ing)?\s+(?:mark|grade)|minimum\s+overall(?:\s+grade)?)\D{0,25}(\d{1,3}(?:\.\d+)?)\s*%',r'(\d{1,3}(?:\.\d+)?)\s*%\s+(?:is\s+)?required\s+to\s+pass\s+the\s+course']:
-        m=re.search(pat,text_value,re.I)
+    for pat in [
+        r'(?:pass(?:ing)?\s+(?:mark|grade)|minimum\s+overall(?:\s+grade)?|total\s+course\s+grade\s+must\s+be\s+at\s+least)\D{0,30}(\d{1,3}(?:\.\d+)?)\s*%',
+        r'(\d{1,3}(?:\.\d+)?)\s*%\s+(?:is\s+)?required\s+to\s+pass\s+the\s+course',
+    ]:
+        m=re.search(pat,text,re.I|re.S)
         if m:
             try: pass_mark=float(m.group(1)); break
             except Exception: pass
-    minimums=[]; final_minimum=None; structured_rules=[]
-    for pat,name in [
-        (r'(?:must|required\s+to|at\s+least|minimum(?:\s+of)?)\D{0,30}(\d{1,3}(?:\.\d+)?)\s*%\D{0,70}?final(?:\s+exam|\s+examination)?', 'Final Exam'),
-        (r'final(?:\s+exam|\s+examination)?\D{0,70}?(?:at\s+least|minimum(?:\s+of)?|must\s+(?:obtain|earn))\D{0,20}(\d{1,3}(?:\.\d+)?)\s*%', 'Final Exam'),
-    ]:
-        m=re.search(pat,text_value,re.I|re.S)
-        if m:
-            minimum=float(m.group(1)); final_minimum=minimum
-            minimums.append({'name':name,'minimum':minimum,'consequence':'Must meet this minimum to pass'})
-            structured_rules.append({'type':'component_minimum','component':name,'minimum_percent':minimum,'message':f'{name} must be at least {minimum:g}%.'})
-            break
+    structured_rules=[]; minimums=[]; final_minimum=None
+    # Final/component minimum rules in both word orders.
+    rule_specs=[
+        ('Final Exam',[
+            r'(?:must|required\s+to)\s+(?:pass|obtain|earn|achieve).{0,80}?final(?:\s+exam|\s+examination)?.{0,50}?(\d{1,3}(?:\.\d+)?)\s*%',
+            r'(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%.{0,90}?final(?:\s+exam|\s+examination)',
+            r'final(?:\s+exam|\s+examination).{0,60}?(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%',
+        ]),
+        ('Labs',[
+            r'(?:must|required\s+to).{0,80}?lab(?:s|oratory)?.{0,50}?(\d{1,3}(?:\.\d+)?)\s*%',
+            r'lab(?:s|oratory)?.{0,60}?(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%',
+        ]),
+    ]
+    for name,pats in rule_specs:
+        value=None
+        for pat in pats:
+            m=re.search(pat,text,re.I|re.S)
+            if m:
+                try: value=float(m.group(1)); break
+                except Exception: pass
+        if value is not None:
+            minimums.append({'name':name,'minimum':value,'consequence':f'Must meet the {name} minimum to pass the course'})
+            structured_rules.append({'type':'component_minimum','component':name,'minimum_percent':value,'message':f'{name} must be at least {value:g}% to pass.'})
+            if name=='Final Exam': final_minimum=value
     structured_rules.append({'type':'overall_minimum','minimum_percent':pass_mark,'message':f'Total course grade must be at least {pass_mark:g}%.'})
-    # When options exist, create a union of inputs rather than using a fake combined scheme.
     if options:
-        union=[]; keys=set()
+        # Build a union of source inputs. This avoids flattening four options into 105%.
+        union=[]; seen=set()
         for opt in options:
-            for c in opt['components']:
-                name=c.get('source','Assessment'); key=re.sub(r'\W+','',name.lower())
-                if key not in keys:
-                    keys.add(key); union.append({'name':name,'weight':0,'category':_component_category(name),'default_max':100,'notes':'Used in one or more grading options.'})
-        components=union
-    total=100.0 if options else round(sum(c['weight'] for c in components),2)
-    return {'course_title':course,'pass_mark':pass_mark,'final_minimum':final_minimum,'components':components,'input_components':components,'component_minimums':minimums,'pass_rules':structured_rules,'rules':[r['message'] for r in structured_rules],'grading_options':options,'important_dates':[],'confidence':'medium' if components else 'low','total_weight':total,'multiple_options':bool(options)}
+            for c in opt.get('components') or []:
+                name=str(c.get('source') or c.get('name') or '').strip()
+                key=re.sub(r'\W+','',name.lower())
+                if name and key not in seen:
+                    seen.add(key); union.append({'name':name,'weight':0,'category':_component_category(name),'default_max':100,'notes':'Used by one or more grading options.'})
+        if union: components=union
+        total=100.0
+    confidence='high' if (options or (components and 99<=sum(float(c.get('weight') or 0) for c in components)<=101)) else 'medium' if components else 'low'
+    return {
+        'course_title':course,'pass_mark':pass_mark,'final_minimum':final_minimum,
+        'components':components,'input_components':components,'component_minimums':minimums,
+        'pass_rules':structured_rules,'rules':[r['message'] for r in structured_rules],
+        'grading_options':options,'important_dates':[],'confidence':confidence,
+        'total_weight':total,'multiple_options':bool(options),
+    }
+
 
 def _outline_rule_minimums(parsed):
     minimums={}
@@ -1319,6 +1486,33 @@ def _select_course_content(user_id, prompt, limit=8):
     return results
 
 
+
+def _gemini_image_to_outline_text(raw, mime_type):
+    """Transcribe an outline screenshot with Gemini Vision when local OCR is unavailable/weak."""
+    api_key=(os.environ.get('GEMINI_API_KEY','').strip() or os.environ.get('GOOGLE_API_KEY','').strip())
+    if not api_key:
+        raise RuntimeError('Gemini is not configured for screenshot reading.')
+    model=os.environ.get('GEMINI_MODEL','gemini-2.5-flash').strip()
+    endpoint=("https://generativelanguage.googleapis.com/v1beta/models/"+
+              urllib.parse.quote(model,safe='')+":generateContent?key="+urllib.parse.quote(api_key,safe=''))
+    prompt=(
+        "Transcribe every visible word in this university course-outline screenshot, preserving table rows, "
+        "assessment names, percentages, pass/fail requirements, and headings. Do not summarize and do not infer. "
+        "Return plain text only."
+    )
+    body={
+        'contents':[{'role':'user','parts':[{'text':prompt},{'inline_data':{'mime_type':mime_type,'data':base64.b64encode(raw).decode('ascii')}}]}],
+        'generationConfig':{'temperature':0.0,'maxOutputTokens':8000},
+    }
+    req=urllib.request.Request(endpoint,data=json.dumps(body).encode('utf-8'),headers={'Content-Type':'application/json'},method='POST')
+    with urllib.request.urlopen(req,timeout=90) as response:
+        result=json.loads(response.read().decode('utf-8'))
+    parts=((((result.get('candidates') or [{}])[0].get('content') or {}).get('parts')) or [])
+    text_value='\n'.join(x.get('text','') for x in parts if isinstance(x,dict)).strip()
+    if len(text_value)<40:
+        raise ValueError('Gemini could not read enough text from this screenshot.')
+    return text_value
+
 def _extract_uploaded_course_file(upload):
     filename = secure_filename(upload.filename or 'lecture-file')
     raw = upload.read()
@@ -1380,13 +1574,43 @@ def _extract_uploaded_course_file(upload):
         for table in doc.tables:
             for row in table.rows:
                 text_parts.append(' | '.join(cell.text.strip() for cell in row.cells))
+    elif suffix in {'.png', '.jpg', '.jpeg', '.webp'}:
+        ocr=''
+        local_error=None
+        if Image is not None and pytesseract is not None:
+            try:
+                image=Image.open(io.BytesIO(raw)).convert('RGB')
+                image=ImageOps.exif_transpose(image)
+                if max(image.size) < 1800:
+                    scale=1800/max(image.size)
+                    image=image.resize((int(image.width*scale),int(image.height*scale)))
+                gray=ImageOps.grayscale(image)
+                gray=ImageEnhance.Contrast(gray).enhance(1.7)
+                gray=gray.filter(ImageFilter.SHARPEN)
+                ocr=pytesseract.image_to_string(gray, config='--oem 3 --psm 3')
+                if len(ocr.strip()) < 80 or len(re.findall(r'\d{1,3}(?:\.\d+)?\s*%',ocr)) < 2:
+                    alternate=pytesseract.image_to_string(gray, config='--oem 3 --psm 11')
+                    if len(re.findall(r'\d{1,3}(?:\.\d+)?\s*%',alternate)) > len(re.findall(r'\d{1,3}(?:\.\d+)?\s*%',ocr)):
+                        ocr=alternate
+            except Exception as exc:
+                local_error=exc
+        # Render deployments may not include the Tesseract system binary. Gemini Vision is
+        # therefore a real fallback, not a fake success path.
+        if len(ocr.strip()) < 80 or len(re.findall(r'\d{1,3}(?:\.\d+)?\s*%',ocr)) < 2:
+            mime={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'}[suffix]
+            try:
+                ocr=_gemini_image_to_outline_text(raw,mime)
+            except Exception as gemini_exc:
+                detail=f' Local OCR: {local_error}.' if local_error else ''
+                raise ValueError('Nexora could not read this screenshot. Use a clearer image or upload the PDF/DOCX.'+detail+f' Gemini Vision: {gemini_exc}')
+        text_parts.append('[Outline screenshot OCR]\n'+ocr)
     elif suffix in {'.txt', '.md', '.csv', '.py', '.java', '.c', '.cpp', '.js', '.html'}:
         text_parts.append(raw.decode('utf-8', errors='replace'))
     else:
-        raise ValueError(f'Automatic lecture reading does not yet support {suffix or "this file type"}.')
+        raise ValueError(f'Automatic file reading does not yet support {suffix or "this file type"}.')
     text = '\n\n'.join(x for x in text_parts if x).strip()
     if not text:
-        raise ValueError('No readable text was found in this lecture. It may contain only scanned images.')
+        raise ValueError('No readable text was found. Upload a clearer PDF, DOCX, or high-resolution PNG/JPG screenshot.')
     return filename, text[:500000], hashlib.sha256(raw).hexdigest(), len(raw)
 
 
@@ -2373,7 +2597,7 @@ def upload_course_outline(course_code):
     course=_normalize_course_code(course_code)
     upload=request.files.get('file')
     if not upload or not upload.filename:
-        return jsonify({'error':'Choose a PDF, PPTX, DOCX, TXT, MD, CSV, or HTML course outline.'}),400
+        return jsonify({'error':'Choose a PDF, DOCX, PPTX, PNG, JPG, WEBP, TXT, MD, CSV, or HTML course outline.'}),400
     try:
         filename, extracted, file_hash, size=_extract_uploaded_course_file(upload)
         extracted=_sanitize_extracted_text(extracted)
@@ -2381,7 +2605,7 @@ def upload_course_outline(course_code):
         return jsonify({'error':str(exc)}),422
     except Exception:
         app.logger.exception('Course outline upload failed')
-        return jsonify({'error':'Nexora could not read this outline file. Use PDF, PPTX, DOCX, TXT, MD, CSV, or HTML.'}),422
+        return jsonify({'error':'Nexora could not read this outline file. Use PDF, DOCX, PPTX, PNG, JPG, WEBP, TXT, MD, CSV, or HTML.'}),422
     source_uid='manual-outline:'+hashlib.sha256(f'{current_user.id}:{course}:{file_hash}'.encode()).hexdigest()[:40]
     row=CourseContent.query.filter_by(user_id=current_user.id,course_full=course,source_uid=source_uid).first()
     if not row:
@@ -2442,6 +2666,9 @@ IMPORTANT — read the whole outline before extracting anything:
 3. IGNORE bonus marks, extra-credit quizzes, optional mentorship-meeting bonuses, or any "1% bonus" style paragraphs — these are not part of the graded weighting scheme and must never appear in components or grading_options. A percentage inside a sentence like "complete the quiz to earn your 1%" is a bonus incentive, not a graded component; do not extract it.
 4. Only extract an item as a component if it is a genuine named grading category from a grading breakdown/table (e.g. "Midterm", "Labs", "Assignments", "Final Exam", "Tutorial attendance", "Term Tests") — never a sentence fragment.
 5. Detect every special pass/fail rule (minimum score on the final exam, labs, midterms, tutorial attendance requirements, overall minimum grade) and put numeric thresholds in component_minimums. Never invent missing values.
+6. Grading tables may be headed Assessment Breakdown, Assessment Distribution, Grade Distribution, Evaluation, Marking Scheme, Basis of Grade, or similar. Treat all of these as equivalent.
+7. Ignore explanatory dates/descriptions between an assessment name and its weight. Example: 'Midterm Exam I Closed book (Weekend of Jan 31) 20%' means Midterm 1 = 20%.
+8. If there are several alternative options, never add their weights together. Return each option separately.
 
 OUTLINE:
 {_sanitize_extracted_text(row.content_text)[:120000]}"""

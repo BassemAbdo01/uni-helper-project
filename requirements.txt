@@ -7,3 +7,6 @@ psycopg2-binary
 pypdf
 python-pptx
 python-docx
+
+Pillow
+pytesseract

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Nexora Sync",
-  "version": "2.1.0",
-  "description": "Nexora Smart Sync with automatic course-outline detection and Grade Intelligence.",
+  "version": "2.8.0",
+  "description": "Nexora Smart Sync with robust outline parsing, multi-option Grade Intelligence, and screenshot outline upload.",
   "permissions": [
     "storage",
     "alarms",
