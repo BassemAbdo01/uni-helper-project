@@ -49,6 +49,7 @@ if database_url and database_url.startswith("postgres://"):
 
 app.config["SQLALCHEMY_DATABASE_URI"] = database_url or "sqlite:///uni_helper.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # up to 8 outline screenshots/pages
 
 db = SQLAlchemy(app)
 
@@ -919,7 +920,7 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2):
         if m and m not in models:
             models.append(m)
     body = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "generationConfig": {
             "temperature": temperature,
@@ -1497,30 +1498,64 @@ def _select_course_content(user_id, prompt, limit=8):
 
 
 def _gemini_image_to_outline_text(raw, mime_type):
-    """Transcribe an outline screenshot with Gemini Vision when local OCR is unavailable/weak."""
+    """Read a grading screenshot with Gemini Vision.
+
+    This uses the REST API's canonical camelCase fields (inlineData / mimeType).  The
+    previous implementation used snake_case protobuf names, which caused PNG/JPG
+    uploads to fail on the live Gemini endpoint even though text-only calls worked.
+    """
     api_key=(os.environ.get('GEMINI_API_KEY','').strip() or os.environ.get('GOOGLE_API_KEY','').strip())
     if not api_key:
         raise RuntimeError('Gemini is not configured for screenshot reading.')
-    model=os.environ.get('GEMINI_MODEL','gemini-2.5-flash').strip()
-    endpoint=("https://generativelanguage.googleapis.com/v1beta/models/"+
-              urllib.parse.quote(model,safe='')+":generateContent?key="+urllib.parse.quote(api_key,safe=''))
+
+    preferred=os.environ.get('GEMINI_VISION_MODEL','').strip() or os.environ.get('GEMINI_MODEL','gemini-2.5-flash').strip()
+    fallback=os.environ.get('GEMINI_FALLBACK_MODEL','gemini-2.5-flash-lite').strip()
+    models=[]
+    for model in (preferred, fallback, 'gemini-2.5-flash'):
+        if model and model not in models:
+            models.append(model)
+
     prompt=(
-        "Transcribe every visible word in this university course-outline screenshot, preserving table rows, "
-        "assessment names, percentages, pass/fail requirements, and headings. Do not summarize and do not infer. "
-        "Return plain text only."
+        "Read this university course-outline screenshot exactly. Transcribe all visible text and preserve the "
+        "logical table rows. Pay special attention to assessment names, weights, alternative grading options, "
+        "minimum final/test/lab requirements, attendance rules, bonus rules, prerequisite letter-grade rules, "
+        "and words such as Assessment Distribution, Grade Distribution, Evaluation, or Marking Scheme. "
+        "Do not summarize, omit, or infer missing text. Return plain text only."
     )
+    encoded=base64.b64encode(raw).decode('ascii')
     body={
-        'contents':[{'role':'user','parts':[{'text':prompt},{'inline_data':{'mime_type':mime_type,'data':base64.b64encode(raw).decode('ascii')}}]}],
-        'generationConfig':{'temperature':0.0,'maxOutputTokens':8000},
+        'contents':[{'role':'user','parts':[{'text':prompt},{'inlineData':{'mimeType':mime_type,'data':encoded}}]}],
+        'generationConfig':{'temperature':0.0,'maxOutputTokens':8192},
     }
-    req=urllib.request.Request(endpoint,data=json.dumps(body).encode('utf-8'),headers={'Content-Type':'application/json'},method='POST')
-    with urllib.request.urlopen(req,timeout=90) as response:
-        result=json.loads(response.read().decode('utf-8'))
-    parts=((((result.get('candidates') or [{}])[0].get('content') or {}).get('parts')) or [])
-    text_value='\n'.join(x.get('text','') for x in parts if isinstance(x,dict)).strip()
-    if len(text_value)<40:
-        raise ValueError('Gemini could not read enough text from this screenshot.')
-    return text_value
+    last_error=None
+    for model in models:
+        endpoint=("https://generativelanguage.googleapis.com/v1beta/models/"+
+                  urllib.parse.quote(model,safe='')+":generateContent?key="+urllib.parse.quote(api_key,safe=''))
+        for attempt in range(3):
+            try:
+                req=urllib.request.Request(endpoint,data=json.dumps(body).encode('utf-8'),headers={'Content-Type':'application/json'},method='POST')
+                with urllib.request.urlopen(req,timeout=120) as response:
+                    result=json.loads(response.read().decode('utf-8'))
+                parts=((((result.get('candidates') or [{}])[0].get('content') or {}).get('parts')) or [])
+                text_value='\n'.join(x.get('text','') for x in parts if isinstance(x,dict)).strip()
+                if len(text_value)<40:
+                    raise ValueError('Gemini returned too little readable text.')
+                return text_value
+            except urllib.error.HTTPError as exc:
+                try:
+                    detail=exc.read().decode('utf-8','replace')[:1200]
+                except Exception:
+                    detail=''
+                last_error=RuntimeError(f'Gemini HTTP {exc.code}: {detail}')
+                if exc.code in (429,500,502,503,504) and attempt<2:
+                    time.sleep(1.5*(attempt+1)); continue
+                break
+            except (urllib.error.URLError,TimeoutError,ValueError) as exc:
+                last_error=exc
+                if attempt<2:
+                    time.sleep(1.5*(attempt+1)); continue
+                break
+    raise RuntimeError(f'Gemini Vision could not read the screenshot: {last_error or "unknown error"}')
 
 def _extract_uploaded_course_file(upload):
     filename = secure_filename(upload.filename or 'lecture-file')
