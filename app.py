@@ -2826,8 +2826,39 @@ def analyze_course_outline(course_code):
         return jsonify({"error":"No course outline has been detected for this course yet."}),404
     if len((row.content_text or '').strip()) < 200:
         return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":"Reading the course outline from Brightspace…"}),409
-    prompt = f"""Analyze this university course outline for {course}. Return strict JSON with this schema:
-{{"course_title":"", "pass_mark":50, "final_minimum":null, "components":[{{"name":"Assignments","weight":20,"category":"assignments","notes":""}}], "component_minimums":[{{"name":"Final Exam","minimum":50,"consequence":"Must pass final to pass course"}}], "rules":[""], "grading_options":[{{"option_name":"Option 1","components":[{{"name":"Final Exam","weight":100,"category":"final","notes":""}}]}}], "important_dates":[], "letter_requirements":[{"minimum_letter":"C-","scope":"prerequisite","message":"C- or better required to use this course as a prerequisite"}], "confidence":"high|medium|low"}}
+    outline_schema = {
+        "course_title": "",
+        "pass_mark": 50,
+        "final_minimum": None,
+        "components": [
+            {"name": "Assignments", "weight": 20, "category": "assignments", "notes": ""}
+        ],
+        "component_minimums": [
+            {"name": "Final Exam", "minimum": 50, "consequence": "Must pass final to pass course"}
+        ],
+        "rules": [""],
+        "grading_options": [
+            {
+                "option_name": "Option 1",
+                "components": [
+                    {"name": "Final Exam", "weight": 100, "category": "final", "notes": ""}
+                ],
+            }
+        ],
+        "important_dates": [],
+        "letter_requirements": [
+            {
+                "minimum_letter": "C-",
+                "scope": "prerequisite",
+                "message": "C- or better required to use this course as a prerequisite",
+            }
+        ],
+        "confidence": "high|medium|low",
+    }
+    prompt = (
+        f"Analyze this university course outline for {course}. Return strict JSON matching this schema:\n"
+        + json.dumps(outline_schema, ensure_ascii=False, indent=2)
+        + """
 
 IMPORTANT — read the whole outline before extracting anything:
 1. Some outlines define ONE fixed grading scheme (a single components list). If so, leave grading_options empty and put everything in components; weights should total 100.
@@ -2841,7 +2872,9 @@ IMPORTANT — read the whole outline before extracting anything:
 9. Detect letter-grade rules such as "C- or better". Put them in letter_requirements. Distinguish scope: use "course_pass" only if the outline says the student fails the course below that letter; use "prerequisite" when it only controls prerequisite eligibility. Never turn a prerequisite requirement into a course FAIL rule.
 
 OUTLINE:
-{_sanitize_extracted_text(row.content_text)[:120000]}"""
+"""
+        + _sanitize_extracted_text(row.content_text)[:120000]
+    )
     used_fallback=False
     try:
         parsed = _gemini_json("You are a precise university course-outline parser. Output only valid JSON.", prompt, 5000, 0.1)
