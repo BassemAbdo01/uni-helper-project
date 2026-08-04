@@ -1398,9 +1398,9 @@ def _local_outline_analysis(text_value, course=''):
     # Final/component minimum rules in both word orders.
     rule_specs=[
         ('Final Exam',[
-            r'(?:must|required\s+to)\s+(?:pass|obtain|earn|achieve).{0,80}?final(?:\s+exam|\s+examination)?.{0,50}?(\d{1,3}(?:\.\d+)?)\s*%',
-            r'(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%.{0,90}?final(?:\s+exam|\s+examination)',
-            r'final(?:\s+exam|\s+examination).{0,60}?(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%',
+            r'(?:must|required\s+to)\s+(?:pass|obtain|earn|achieve)[^.\n]{0,80}?final(?:\s+exam|\s+examination)?[^.\n]{0,50}?(\d{1,3}(?:\.\d+)?)\s*%',
+            r'(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%[^.\n]{0,90}?final(?:\s+exam|\s+examination)',
+            r'final(?:\s+exam|\s+examination)[^.\n]{0,60}?(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%',
         ]),
         ('Labs',[
             r'(?:must|required\s+to).{0,80}?lab(?:s|oratory)?.{0,50}?(\d{1,3}(?:\.\d+)?)\s*%',
@@ -1418,6 +1418,21 @@ def _local_outline_analysis(text_value, course=''):
             minimums.append({'name':name,'minimum':value,'consequence':f'Must meet the {name} minimum to pass the course'})
             structured_rules.append({'type':'component_minimum','component':name,'minimum_percent':value,'message':f'{name} must be at least {value:g}% to pass.'})
             if name=='Final Exam': final_minimum=value
+    # Group rules such as "at least 50% in the labs and 50% in the non-lab portion".
+    group_patterns=[
+        (r'(?:must|required to)\s+(?:obtain|achieve|earn|score)?\s*(\d{1,3}(?:\.\d+)?)\s*%[^.\n]{0,80}?\b(?:in|on)\s+(?:the\s+)?labs?\b', 'lab', False, 'Lab average'),
+        (r'(?:labs?|laboratory component)[^.\n]{0,80}?(?:must|required to)[^.\n]{0,30}?(\d{1,3}(?:\.\d+)?)\s*%', 'lab', False, 'Lab average'),
+        (r'(?:must|required to)[^.\n]{0,45}?(?:obtain|achieve|earn|score)?\s*(?:at\s+least\s*)?(\d{1,3}(?:\.\d+)?)\s*%[^.\n]{0,100}?\b(?:in|on)\s+(?:the\s+)?(?:non[- ]lab|other|non[- ]laboratory)\s+(?:component|work|portion)?', 'lab', True, 'Non-lab average'),
+        (r'(?:and|,)?\s*(?:at\s+least\s*)?(\d{1,3}(?:\.\d+)?)\s*%[^.\n]{0,60}?\b(?:in|on)\s+(?:the\s+)?(?:non[- ]lab|other|non[- ]laboratory)\s+(?:component|work|portion)?', 'lab', True, 'Non-lab average'),
+        (r'(?:non[- ]lab|other|non[- ]laboratory)\s+(?:component|work|portion)?[^.\n]{0,80}?(?:must|required to)[^.\n]{0,30}?(\d{1,3}(?:\.\d+)?)\s*%', 'lab', True, 'Non-lab average'),
+    ]
+    for pat,category,invert,label in group_patterns:
+        m=re.search(pat,text,re.I|re.S)
+        if not m: continue
+        value=float(m.group(1))
+        typ='non_category_minimum' if invert else 'category_minimum'
+        if not any(r.get('type')==typ and r.get('category')==category for r in structured_rules):
+            structured_rules.append({'type':typ,'category':category,'minimum_percent':value,'message':f'{label} must be at least {value:g}% to pass.'})
     structured_rules.append({'type':'overall_minimum','minimum_percent':pass_mark,'message':f'Total course grade must be at least {pass_mark:g}%.'})
     if options:
         # Build a union of source inputs. This avoids flattening four options into 105%.
@@ -2503,6 +2518,15 @@ def course_workspace(course_code):
     all_cards = sort_cards(build_grouped_cards(load_tasks()))
     task_assignments = [c for c in all_cards if _normalize_course_code(c.get("course_full")) == course]
     contents = CourseContent.query.filter_by(user_id=current_user.id, course_full=course).order_by(CourseContent.updated_at.desc()).all()
+    def _content_newest_key(item):
+        raw=str(getattr(item,'published_at','') or '')
+        try:
+            return datetime.fromisoformat(raw.replace('Z','+00:00')).timestamp()
+        except Exception:
+            dt=getattr(item,'updated_at',None) or getattr(item,'created_at',None) or datetime.min
+            try: return dt.timestamp()
+            except Exception: return 0
+    contents=sorted(contents,key=_content_newest_key,reverse=True)
     synced_assignments = [c for c in contents if c.content_type == "assignment"]
     assignments = task_assignments
     synced_course = SyncedCourse.query.filter_by(user_id=current_user.id, course_code=course).first()
@@ -2544,6 +2568,27 @@ def course_workspace(course_code):
     )
 
 
+def _parse_mark_entry(score_value, max_value=100):
+    """Accept 15/20, 15 out of 20, 75%, or a plain score with a separate maximum."""
+    if score_value is None:
+        return None, max(0.0001, float(max_value or 100))
+    raw=str(score_value).strip()
+    if not raw:
+        return None, max(0.0001, float(max_value or 100))
+    normalized=raw.lower().replace('%','').strip()
+    match=re.fullmatch(r'\s*(-?\d+(?:\.\d+)?)\s*(?:/|out\s+of)\s*(-?\d+(?:\.\d+)?)\s*',normalized,re.I)
+    if match:
+        earned=float(match.group(1)); maximum=float(match.group(2))
+        if maximum<=0 or earned<0:
+            raise ValueError('Marks must be zero or greater, and the maximum must be above zero.')
+        return earned, maximum
+    earned=float(normalized)
+    maximum=max(0.0001,float(max_value or 100))
+    if earned<0:
+        raise ValueError('Marks cannot be negative.')
+    return earned, maximum
+
+
 @app.route("/api/course/<course_code>/grades", methods=["GET", "POST", "DELETE"])
 @login_required
 def course_grades(course_code):
@@ -2560,11 +2605,9 @@ def course_grades(course_code):
     name = str(data.get("name") or "Assessment").strip()[:255]
     try:
         weight = max(0.0, min(100.0, float(data.get("weight") or 0)))
-        score = data.get("score")
-        score = None if score in (None, "") else max(0.0, float(score))
-        max_score = max(0.0001, float(data.get("max_score") or 100))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Use valid numbers for score, maximum, and weight."}), 400
+        score, max_score = _parse_mark_entry(data.get("score"), data.get("max_score") or 100)
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc) or "Enter a mark like 15/20, 75%, or use the separate maximum box."}), 400
     row_id = str(data.get("id") or "")
     row = GradeEntry.query.filter_by(id=row_id, user_id=current_user.id, course_full=course).first() if row_id else None
     if not row:
@@ -2658,6 +2701,20 @@ def _evaluate_pass_rules(analysis,row_map,course_grade,final_override=None):
         elif typ=='raw_minimum':
             row=_find_grade_row(row_map,rule.get('component')); actual=None if not row or row.score is None else float(row.score)
             required=float(rule.get('minimum_raw') or 0); ok=actual is not None and actual>=required
+        elif typ in {'category_minimum','non_category_minimum'}:
+            category=str(rule.get('category') or '').lower()
+            values=[]; weighted=0.0; total_weight=0.0
+            for row in row_map.values():
+                row_category=str(getattr(row,'category','') or '').lower()
+                matches=(row_category==category or (category=='lab' and 'lab' in str(getattr(row,'name','')).lower()))
+                if typ=='non_category_minimum': matches=not matches
+                pct=_row_percent(row)
+                if matches and pct is not None:
+                    w=max(0.0,float(getattr(row,'weight',0) or 0))
+                    if w>0: weighted+=pct*w; total_weight+=w
+                    else: values.append(pct)
+            actual=(weighted/total_weight) if total_weight>0 else (sum(values)/len(values) if values else None)
+            required=float(rule.get('minimum_percent') or 0); ok=actual is not None and actual>=required
         elif typ=='overall_minimum':
             actual=course_grade; required=float(rule.get('minimum_percent') or 0); ok=course_grade>=required
         else:
@@ -2928,27 +2985,22 @@ OUTLINE:
     except Exception: profile.final_minimum=None
     profile.analysis_notes='; '.join(str(x) for x in (parsed.get('rules') or []))[:4000]
     profile.updated_at=datetime.utcnow()
-    # Synchronize the grade calculator with the analyzed outline while preserving marks.
-    existing_rows=GradeEntry.query.filter_by(user_id=current_user.id,course_full=course).all()
-    def _grade_key(value):
-        return re.sub(r'[^a-z0-9]+',' ',str(value or '').lower()).strip()
-    by_key={_grade_key(r.name):r for r in existing_rows}
-    analyzed_keys=set()
+    # A confirmed new outline fully replaces the previous calculator. Never mix two courses/outlines.
+    GradeEntry.query.filter_by(user_id=current_user.id,course_full=course).delete(synchronize_session=False)
     sync_components=parsed.get('input_components') or clean
     for comp in sync_components:
-        key=_grade_key(comp['name']); analyzed_keys.add(key)
-        existing=by_key.get(key)
-        if not existing:
-            existing=GradeEntry(id=uuid4().hex,user_id=current_user.id,course_full=course,name=comp['name'],weight=float(comp.get('weight') or 0),score=None,max_score=float(comp.get('default_max') or 100),category=comp['category'])
-            db.session.add(existing)
-        else:
-            existing.name=comp['name']; existing.weight=float(comp.get('weight') or 0); existing.category=comp['category'];
-            if existing.score is None: existing.max_score=float(comp.get('default_max') or existing.max_score or 100)
-            existing.updated_at=datetime.utcnow()
-    # Remove obsolete auto-created rows only when they have no student mark.
-    for old_row in existing_rows:
-        if _grade_key(old_row.name) not in analyzed_keys and old_row.score is None:
-            db.session.delete(old_row)
+        row_entry=GradeEntry(
+            id=uuid4().hex,user_id=current_user.id,course_full=course,
+            name=str(comp.get('name') or 'Assessment')[:255],
+            weight=float(comp.get('weight') or 0),score=None,
+            max_score=float(comp.get('default_max') or 100),
+            category=str(comp.get('category') or _component_category(comp.get('name')))[:80],
+        )
+        db.session.add(row_entry)
+    # Keep only the outline that produced the active profile when this was a manual upload.
+    if str(row.source_uid or '').startswith('manual-outline:'):
+        stale=CourseContent.query.filter_by(user_id=current_user.id,course_full=course,content_type='outline').filter(CourseContent.id!=row.id).all()
+        for old_outline in stale: db.session.delete(old_outline)
     db.session.commit()
     return jsonify({"ok":True,"fallback":used_fallback,"analysis":parsed,"pass_mark":profile.pass_mark,"final_minimum":profile.final_minimum})
 
