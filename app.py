@@ -908,17 +908,50 @@ def landing():
 
 
 
+def _gemini_model_candidates(vision=False):
+    """Return resilient Gemini model candidates, newest stable first.
+
+    Environment values are honored first, but the app always includes current
+    stable fallbacks so a retired/blocked model ID cannot break uploads.
+    """
+    env_names = []
+    if vision:
+        env_names.append(os.environ.get("GEMINI_VISION_MODEL", "").strip())
+    env_names.extend([
+        os.environ.get("GEMINI_MODEL", "").strip(),
+        os.environ.get("GEMINI_FALLBACK_MODEL", "").strip(),
+    ])
+    defaults = [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
+    ]
+    result = []
+    for model in [*env_names, *defaults]:
+        model = (model or "").strip()
+        if model and model not in result:
+            result.append(model)
+    return result
+
+
+def _gemini_http_detail(exc):
+    try:
+        raw = exc.read().decode("utf-8", "replace")
+        payload = json.loads(raw)
+        message = (((payload.get("error") or {}).get("message")) or raw).strip()
+    except Exception:
+        message = str(exc)
+    return re.sub(r"\s+", " ", message)[:500]
+
+
 def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2):
     """Call Gemini for strict JSON with retries and a model fallback on transient 5xx errors."""
     api_key = (os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip())
     if not api_key:
         raise RuntimeError("Gemini is not configured")
-    preferred = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
-    fallback = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite").strip()
-    models = []
-    for m in (preferred, fallback):
-        if m and m not in models:
-            models.append(m)
+    models = _gemini_model_candidates(vision=False)
     body = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -943,10 +976,13 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2):
                 text_value = re.sub(r'^```(?:json)?\s*|\s*```$', '', text_value, flags=re.I|re.S).strip()
                 return json.loads(text_value)
             except urllib.error.HTTPError as exc:
-                last_error = exc
+                detail = _gemini_http_detail(exc)
+                last_error = RuntimeError(f"{model}: HTTP {exc.code}: {detail}")
                 if exc.code in (429, 500, 502, 503, 504) and attempt < 2:
                     time.sleep(1.5 * (attempt + 1))
                     continue
+                # 400/403/404 usually means this specific model is unavailable
+                # for the current project/key. Move on to the next candidate.
                 break
             except (urllib.error.URLError, TimeoutError) as exc:
                 last_error = exc
@@ -1508,12 +1544,7 @@ def _gemini_image_to_outline_text(raw, mime_type):
     if not api_key:
         raise RuntimeError('Gemini is not configured for screenshot reading.')
 
-    preferred=os.environ.get('GEMINI_VISION_MODEL','').strip() or os.environ.get('GEMINI_MODEL','gemini-2.5-flash').strip()
-    fallback=os.environ.get('GEMINI_FALLBACK_MODEL','gemini-2.5-flash-lite').strip()
-    models=[]
-    for model in (preferred, fallback, 'gemini-2.5-flash'):
-        if model and model not in models:
-            models.append(model)
+    models=_gemini_model_candidates(vision=True)
 
     prompt=(
         "Read this university course-outline screenshot exactly. Transcribe all visible text and preserve the "
@@ -1542,11 +1573,8 @@ def _gemini_image_to_outline_text(raw, mime_type):
                     raise ValueError('Gemini returned too little readable text.')
                 return text_value
             except urllib.error.HTTPError as exc:
-                try:
-                    detail=exc.read().decode('utf-8','replace')[:1200]
-                except Exception:
-                    detail=''
-                last_error=RuntimeError(f'Gemini HTTP {exc.code}: {detail}')
+                detail=_gemini_http_detail(exc)
+                last_error=RuntimeError(f'{model}: HTTP {exc.code}: {detail}')
                 if exc.code in (429,500,502,503,504) and attempt<2:
                     time.sleep(1.5*(attempt+1)); continue
                 break
