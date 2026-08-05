@@ -136,38 +136,34 @@
 
         <article class="nxv2-courses" id="courses">
           <header class="nxv2-section-head">
-            <div><span>COURSE INTELLIGENCE</span><h3>Your Courses</h3><p>Real courses, workload signals, and next actions.</p></div>
+            <div><span>COURSE INTELLIGENCE</span><h3>Your Courses</h3><p>Grouped automatically by academic term.</p></div>
             <a href="/dashboard?view=all#courses">{% if show_all_courses %}Showing all {{ course_cards|length }} courses{% else %}View all courses{% endif %} <span>→</span></a>
           </header>
-          <div class="nxv2-course-track">
-            {% if course_cards %}
-              {% for c in course_cards %}
-              <article class="nxv2-course-card course-{{ loop.index }}" data-course="{{ c.course }}">
-                <a class="nxv2-course-main" href="{{ url_for('course_workspace', course_code=c.course) }}" aria-label="Open {{ c.course }} workspace">
-                  <div class="nxv2-course-cover"{% if c.image_url %} style="background-image:linear-gradient(180deg,rgba(7,10,25,.12),rgba(7,10,25,.82)),url('{{ c.image_url|e }}');background-size:cover;background-position:center"{% endif %}>
-                    <span class="course-code">{{ c.course }}</span>
-                    <div class="course-emblem"><i></i><b>{{ c.course[:1] }}</b></div>
-                    <div class="course-grid-lines"></div>
-                  </div>
-                  <div class="nxv2-course-body">
-                    <div class="nxv2-course-title"><strong>{{ c.title }}</strong><span>{{ c.course }}</span></div>
-                    <div class="nxv2-course-progress-row"><b>{{ c.progress }}%</b><div class="nxv2-progress"><span style="width:{{ c.progress }}%"></span></div></div>
-                    <small>{% if c.next_title %}NEXT: {{ c.next_title }}{% else %}{{ c.content_count or c.total }} imported item{% if (c.content_count or c.total) != 1 %}s{% endif %}{% endif %}</small>
-                    <p>{{ c.due_status }}</p>
-                    <footer><span>Open Workspace</span><b>→</b></footer>
-                  </div>
-                </a>
-                <button class="nxv2-course-menu-button" type="button" aria-label="Options for {{ c.course }}" aria-expanded="false">•••</button>
-                <div class="nxv2-course-menu" hidden>
-                  <a href="{{ url_for('course_workspace', course_code=c.course) }}">Open workspace</a>
-                  <button type="button" class="nxv2-remove-course">Remove from Nexora</button>
+          {% if course_groups %}
+            <div class="nxv2-term-groups">
+            {% for group in course_groups %}
+              <section class="nxv2-term-group">
+                <header class="nxv2-term-head"><div><span>ACADEMIC TERM</span><h4>{{ group.label }}</h4></div><b>{{ group.courses|length }} course{% if group.courses|length != 1 %}s{% endif %}</b></header>
+                <div class="nxv2-course-track">
+                {% for c in group.courses %}
+                  <article class="nxv2-course-card course-{{ loop.index }}" data-course="{{ c.course }}">
+                    <a class="nxv2-course-main" href="{{ url_for('course_workspace', course_code=c.course) }}" aria-label="Open {{ c.course }} workspace">
+                      <div class="nxv2-course-cover"{% if c.image_url %} style="background-image:linear-gradient(180deg,rgba(7,10,25,.12),rgba(7,10,25,.82)),url('{{ c.image_url|e }}');background-size:cover;background-position:center"{% endif %}>
+                        <span class="course-code">{{ c.course }}</span><div class="course-emblem"><i></i><b>{{ c.course[:1] }}</b></div><div class="course-grid-lines"></div>
+                      </div>
+                      <div class="nxv2-course-body"><div class="nxv2-course-title"><strong>{{ c.title }}</strong><span>{{ c.course }}</span></div><div class="nxv2-course-progress-row"><b>{{ c.progress }}%</b><div class="nxv2-progress"><span style="width:{{ c.progress }}%"></span></div></div><small>{% if c.next_title %}NEXT: {{ c.next_title }}{% else %}{{ c.content_count or c.total }} imported item{% if (c.content_count or c.total) != 1 %}s{% endif %}{% endif %}</small><p>{{ c.due_status }}</p><footer><span>Open Workspace</span><b>→</b></footer></div>
+                    </a>
+                    <button class="nxv2-course-menu-button" type="button" aria-label="Options for {{ c.course }}" aria-expanded="false">•••</button>
+                    <div class="nxv2-course-menu" hidden><a href="{{ url_for('course_workspace', course_code=c.course) }}">Open workspace</a><button type="button" class="nxv2-remove-course">Remove from Nexora</button></div>
+                  </article>
+                {% endfor %}
                 </div>
-              </article>
-              {% endfor %}
-            {% else %}
-              <div class="nxv2-course-empty"><span>▣</span><h4>Your courses will appear here</h4><p>Connect Brightspace or add your first task.</p><a href="{{ url_for('connect_brightspace') }}">Connect Brightspace</a></div>
-            {% endif %}
-          </div>
+              </section>
+            {% endfor %}
+            </div>
+          {% else %}
+            <div class="nxv2-course-empty"><span>▣</span><h4>Your courses will appear here</h4><p>Connect Brightspace or add your first task.</p><a href="{{ url_for('connect_brightspace') }}">Connect Brightspace</a></div>
+          {% endif %}
         </article>
 
         <div class="nxv2-bottom-grid">

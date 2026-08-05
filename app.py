@@ -2136,6 +2136,41 @@ def grading_scale_api():
     return jsonify({"ok":True,"university_name":row.university_name,"scale":scale})
 
 
+@app.route("/api/grading-scale/analyze", methods=["POST"])
+@login_required
+def analyze_grading_scale_upload():
+    uploads=request.files.getlist("files") or request.files.getlist("file")
+    uploads=[u for u in uploads if u and u.filename]
+    if not uploads:
+        return jsonify({"error":"Upload at least one official grading-scale screenshot, PDF, or document."}),400
+    if len(uploads)>6:
+        return jsonify({"error":"Upload at most 6 grading-scale pages."}),400
+    try:
+        chunks=[]
+        for upload in uploads:
+            filename,text_value,_,_=_extract_uploaded_course_file(upload)
+            chunks.append(f"===== {filename} =====\n{text_value}")
+        combined="\n\n".join(chunks)
+        schema={"university_name":"","scale":[{"letter":"A+","minimum":90},{"letter":"C-","minimum":60},{"letter":"F","minimum":0}],"confidence":"high|medium|low","ambiguities":[]}
+        prompt=("Extract the official university letter-grade scale. Return only JSON matching this schema:\n"+json.dumps(schema,indent=2)+"\nCapture every letter band and its minimum numeric percentage. Never invent a missing threshold. Put uncertainty in ambiguities.\n\nCONTENT:\n"+combined[:80000])
+        try:
+            parsed=_gemini_json("You precisely extract official university grading scales. Output only valid JSON.",prompt,2200,0.0)
+        except Exception:
+            parsed={}
+        scale=_normalize_grading_scale((parsed or {}).get("scale") or [])
+        if len(scale)<2:
+            found=[]
+            for m in re.finditer(r"(?im)^\s*([A-F][+-]?)\s*(?:[:|\-–—]|\s)\s*(\d{1,3}(?:\.\d+)?)\s*(?:%|[-–—])?",combined):
+                found.append({"letter":m.group(1).upper(),"minimum":float(m.group(2))})
+            scale=_normalize_grading_scale(found)
+        if len(scale)<2:
+            return jsonify({"error":"Nexora could not confidently read a complete letter-grade scale. Upload a clearer page or enter the scale manually."}),422
+        return jsonify({"ok":True,"university_name":str((parsed or {}).get("university_name") or ""),"scale":scale,"confidence":(parsed or {}).get("confidence") or "medium","ambiguities":(parsed or {}).get("ambiguities") or [],"accuracy_notice":"AI extraction may not be 100% accurate. Confirm every threshold before saving."})
+    except Exception as exc:
+        app.logger.exception("University grading-scale analysis failed")
+        return jsonify({"error":str(exc)}),500
+
+
 @app.route("/feedback", methods=["GET", "POST"])
 @login_required
 def feedback():
@@ -2379,6 +2414,28 @@ def home():
     else:
         last_sync_text = "Never"
 
+    # Group courses by academic term. Brightspace terms may be human-readable
+    # ("Winter 2026") or D2L-style codes ("2026.10", "2026.20", "2026.30").
+    term_rank={"winter":1,"spring":2,"summer":2,"fall":3,"autumn":3,"other":4}
+    def _term_meta(value):
+        raw=str(value or "").strip()
+        m=re.search(r"(?i)\b(winter|spring|summer|fall|autumn)\s*(20\d{2})\b",raw)
+        if m:
+            season=m.group(1).title().replace("Autumn","Fall")
+            return season,int(m.group(2))
+        m=re.search(r"(?i)\b(20\d{2})[._ -]?(10|20|30)\b",raw)
+        if m:
+            season={"10":"Winter","20":"Summer","30":"Fall"}.get(m.group(2),"Other")
+            return season,int(m.group(1))
+        return "Other",0
+    grouped_courses={}
+    for card in course_cards:
+        season,year=_term_meta(card.get("term") or card.get("title") or "")
+        label=f"{season} {year}" if year else "Other courses"
+        group=grouped_courses.setdefault(label,{"label":label,"season":season,"year":year,"courses":[]})
+        group["courses"].append(card)
+    course_groups=sorted(grouped_courses.values(),key=lambda g:(g["year"],term_rank.get(g["season"].lower(),4)),reverse=True)
+
     return render_template(
         "index.html",
         groups=groups,
@@ -2392,6 +2449,7 @@ def home():
         last_sync_text=last_sync_text,
         user=current_user,
         course_cards=course_cards,
+        course_groups=course_groups,
         task_preview=task_preview,
         upcoming_cards=upcoming_cards,
         month_title=month_title,
@@ -2641,8 +2699,87 @@ def _find_grade_row(row_map, name):
     return None
 
 
-def _evaluate_option(option,row_map,final_override=None):
+def _component_weight_lookup(analysis):
+    weights={}
+    for comp in (analysis.get("input_components") or analysis.get("components") or []):
+        if not isinstance(comp,dict):
+            continue
+        key=re.sub(r"[^a-z0-9]+"," ",str(comp.get("name") or comp.get("source") or "").lower()).strip()
+        try: weights[key]=float(comp.get("weight") or 0)
+        except Exception: weights[key]=0.0
+    return weights
+
+
+def _group_percent(analysis,row_map,components,final_override=None):
+    weights=_component_weight_lookup(analysis)
+    values=[]
+    for name in components or []:
+        row=_find_grade_row(row_map,name)
+        override=final_override if "final" in str(name).lower() else None
+        pct=_row_percent(row,override)
+        if pct is None:
+            return None
+        key=re.sub(r"[^a-z0-9]+"," ",str(name or "").lower()).strip()
+        weight=weights.get(key,0.0)
+        if not weight:
+            for wk,wv in weights.items():
+                if key and (key in wk or wk in key):
+                    weight=wv; break
+        values.append((pct,weight))
+    if not values:
+        return None
+    weighted=[x for x in values if x[1]>0]
+    if weighted:
+        total=sum(w for _,w in weighted)
+        return sum(pct*w for pct,w in weighted)/total if total else None
+    return sum(pct for pct,_ in values)/len(values)
+
+
+def _apply_selection_rules(analysis,row_map):
+    virtual={}
+    for rule in analysis.get("selection_rules") or []:
+        if not isinstance(rule,dict):
+            continue
+        typ=str(rule.get("type") or "").lower()
+        sources=rule.get("components") or rule.get("source_components") or []
+        vals=[]
+        for source in sources:
+            pct=_row_percent(_find_grade_row(row_map,source))
+            if pct is not None:
+                vals.append((source,pct))
+        if not vals or typ not in {"best_n_of_m","select_best","drop_lowest"}:
+            continue
+        keep=max(1,len(vals)-int(rule.get("drop") or 1)) if typ=="drop_lowest" else max(1,int(rule.get("keep") or rule.get("count") or 1))
+        chosen=sorted(vals,key=lambda x:x[1],reverse=True)[:keep]
+        name=str(rule.get("output_component") or rule.get("name") or "Selected assessments")
+        virtual[re.sub(r"[^a-z0-9]+"," ",name.lower()).strip()]={"percent":sum(v for _,v in chosen)/len(chosen),"chosen":[x[0] for x in chosen]}
+    return virtual
+
+
+def _normalize_advanced_grading_model(parsed):
+    if not isinstance(parsed,dict):
+        parsed={}
+    for key,default in (("selection_rules",[]),("derived_components",[]),("conditional_rules",[]),("scheme_policies",[]),("ambiguities",[])):
+        if not isinstance(parsed.get(key),list):
+            parsed[key]=default
+    parsed.setdefault("confidence","low")
+    parsed.setdefault("accuracy_notice","AI interpretation may not be 100% accurate. Confirm the detected scheme before relying on it.")
+    if not isinstance(parsed.get("pass_rules"),list):
+        parsed["pass_rules"]=[]
+    for item in parsed.get("component_minimums") or []:
+        if not isinstance(item,dict):
+            continue
+        name=item.get("name") or item.get("component")
+        minimum=item.get("minimum") if item.get("minimum") is not None else item.get("minimum_percent")
+        if name and minimum is not None:
+            parsed["pass_rules"].append({"type":"component_minimum","component":name,"minimum_percent":minimum,"message":item.get("consequence") or f"{name} minimum"})
+    return parsed
+
+
+def _evaluate_option(option,row_map,final_override=None,analysis=None):
     points=0.0; missing=[]; details=[]
+    analysis=analysis or {}
+    virtual=_apply_selection_rules(analysis,row_map)
     eligibility=option.get('eligibility') or {}
     test_rows=[_find_grade_row(row_map,f'Test {i}') for i in (1,2,3)]
     written=sum(1 for r in test_rows if r and r.score is not None)
@@ -2728,6 +2865,10 @@ def _evaluate_pass_rules(analysis,row_map,course_grade,final_override=None):
                     else: values.append(pct)
             actual=(weighted/total_weight) if total_weight>0 else (sum(values)/len(values) if values else None)
             required=float(rule.get('minimum_percent') or 0); ok=actual is not None and actual>=required
+        elif typ in {'aggregate_minimum','derived_component_minimum','group_minimum'}:
+            actual=_group_percent(analysis,row_map,rule.get('components') or rule.get('includes') or [],final_override)
+            required=float(rule.get('minimum_percent') or rule.get('minimum') or 0)
+            ok=actual is not None and actual>=required
         elif typ=='overall_minimum':
             actual=course_grade; required=float(rule.get('minimum_percent') or 0); ok=course_grade>=required
         else:
@@ -2756,10 +2897,30 @@ def grade_outcomes(course_code):
     profile=CourseOutlineProfile.query.filter_by(user_id=current_user.id,course_full=course).first()
     try: analysis=json.loads(profile.grading_json or '{}') if profile else {}
     except Exception: analysis={}
+    if profile and analysis.get('confirmed') is False:
+        return jsonify({'error':'Confirm the detected grading policy before calculating official outcomes.','confirmation_required':True}),409
     row_map=_grade_row_map(rows)
     options=analysis.get('grading_options') or []
     if options:
-        evaluated=[_evaluate_option(opt,row_map) for opt in options]
+        evaluated=[_evaluate_option(opt,row_map,analysis=analysis) for opt in options]
+        by_option={str(x.get('option_name') or '').lower():x for x in evaluated}
+        for policy in analysis.get('scheme_policies') or analysis.get('conditional_rules') or []:
+            if not isinstance(policy,dict) or str(policy.get('type') or '').lower() not in {'scheme_gate','conditional_scheme','option_eligibility'}:
+                continue
+            target=str(policy.get('target_option') or policy.get('option') or policy.get('then_option') or '').lower()
+            source=str(policy.get('source_option') or policy.get('based_on_option') or policy.get('if_option') or '').lower()
+            target_row=next((x for k,x in by_option.items() if target and (target in k or k in target)),None)
+            source_row=next((x for k,x in by_option.items() if source and (source in k or k in source)),None)
+            if not target_row or not source_row:
+                continue
+            threshold=policy.get('minimum_percent')
+            if threshold is None and policy.get('minimum_letter'):
+                scale=_get_user_grading_scale(current_user.id)
+                threshold=next((float(x['minimum']) for x in scale['scale'] if x['letter'].upper()==str(policy.get('minimum_letter')).upper()),None)
+            gate_ok=source_row.get('complete') and source_row.get('eligible') and threshold is not None and float(source_row.get('grade') or 0)>=float(threshold)
+            if not gate_ok:
+                target_row['eligible']=False
+                target_row.setdefault('missing',[]).append(policy.get('message') or f"Requires {source_row.get('option_name')} to meet the eligibility threshold.")
         complete=[x for x in evaluated if x['complete'] and x['eligible']]
         best=max(complete,key=lambda x:x['grade']) if complete else None
         official_grade=best['grade'] if best else None
@@ -2771,7 +2932,7 @@ def grade_outcomes(course_code):
             found=None
             for step in range(0,1001):
                 fs=step/10
-                ev=_evaluate_option(opt,row_map,final_override=fs)
+                ev=_evaluate_option(opt,row_map,final_override=fs,analysis=analysis)
                 if not ev['eligible']: continue
                 # Missing final is satisfied by override; other missing inputs still block calculation.
                 nonfinal_missing=[m for m in ev['missing'] if 'Final Exam' not in m and 'final exam' not in m.lower()]
@@ -2779,7 +2940,7 @@ def grade_outcomes(course_code):
                 pass_rules,_=_evaluate_pass_rules(analysis,row_map,ev['grade'],final_override=fs)
                 if ev['grade']>=target and pass_rules:
                     found=fs; break
-            required.append({'option_name':opt.get('option_name'),'required_final':found,'eligible_now':_evaluate_option(opt,row_map,final_override=100)['eligible']})
+            required.append({'option_name':opt.get('option_name'),'required_final':found,'eligible_now':_evaluate_option(opt,row_map,final_override=100,analysis=analysis)['eligible']})
         possible=[x for x in required if x['required_final'] is not None]
         best_required=min(possible,key=lambda x:x['required_final']) if possible else None
         decorated=_decorate_grade_result(current_user.id,analysis,official_grade)
@@ -2890,10 +3051,209 @@ def upload_course_material(course_code):
     return jsonify({'ok':True,'source_uid':source_uid,'title':filename,'characters':len(extracted),'file_size':size})
 
 
+
+def _outline_relevant_excerpt(text_value, max_chars=90000):
+    """Keep the grading/evaluation passages and their nearby context.
+
+    Full outlines are noisy. This extractor preserves every percentage-bearing
+    paragraph plus surrounding headings, pass/fail language, and alternative
+    scheme wording so Gemini sees the evidence most likely to affect grades.
+    """
+    text=_sanitize_extracted_text(text_value)
+    if len(text)<=max_chars:
+        return text
+    lines=text.splitlines()
+    keys=re.compile(r"(?:assessment|evaluation|grading|grade distribution|marking|weight|final exam|midterm|test|quiz|lab|assignment|tutorial|attendance|pass|fail|prerequisite|scheme|option|best|drop|replace|reweight|bonus|minimum|at least|must obtain|must achieve)",re.I)
+    selected=set()
+    for i,line in enumerate(lines):
+        if keys.search(line) or re.search(r"\b\d+(?:\.\d+)?\s*%",line):
+            for j in range(max(0,i-3),min(len(lines),i+5)):
+                selected.add(j)
+    excerpt='\n'.join(lines[i] for i in sorted(selected))
+    return excerpt[:max_chars] if excerpt.strip() else text[:max_chars]
+
+
+def _outline_model_validation(model):
+    """Return deterministic issues for a compiled grading policy."""
+    issues=[]
+    if not isinstance(model,dict):
+        return ['The model is not an object.']
+    components=model.get('components') or []
+    options=model.get('grading_options') or []
+    if options:
+        names=[]
+        for idx,opt in enumerate(options,1):
+            oname=str(opt.get('option_name') or f'Option {idx}')
+            names.append(oname)
+            comps=opt.get('components') or []
+            total=sum(float(c.get('weight') or 0) for c in comps if isinstance(c,dict))
+            if not comps: issues.append(f'{oname} has no components.')
+            if not 99.0 <= total <= 101.0: issues.append(f'{oname} totals {total:.2f}%, not 100%.')
+        for policy in model.get('scheme_policies') or []:
+            if not isinstance(policy,dict): continue
+            for key in ('source_option','target_option'):
+                ref=str(policy.get(key) or '')
+                if ref and not any(ref.lower()==n.lower() for n in names):
+                    issues.append(f'Scheme policy references unknown option: {ref}.')
+    elif components:
+        total=sum(float(c.get('weight') or 0) for c in components if isinstance(c,dict))
+        if not 99.0 <= total <= 101.0: issues.append(f'Component weights total {total:.2f}%, not 100%.')
+    else:
+        issues.append('No grading components were detected.')
+    known=[]
+    for c in components:
+        if isinstance(c,dict): known.append(str(c.get('name') or '').lower())
+    for opt in options:
+        for c in opt.get('components') or []:
+            if isinstance(c,dict): known.append(str(c.get('name') or c.get('source') or '').lower())
+    for rule in model.get('pass_rules') or []:
+        if not isinstance(rule,dict): continue
+        refs=[]
+        if rule.get('component'): refs.append(rule.get('component'))
+        refs.extend(rule.get('components') or [])
+        for ref in refs:
+            refn=str(ref).lower()
+            if refn and not any(refn in x or x in refn for x in known if x):
+                issues.append(f'Pass rule references a component not found in the schemes: {ref}.')
+    return list(dict.fromkeys(issues))
+
+
+def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema):
+    """Three-stage outline compiler: facts -> executable policy -> adversarial audit.
+
+    This deliberately costs more than a single Gemini call, but greatly reduces
+    silent omissions and invented rules. It still cannot guarantee perfect
+    interpretation, so unresolved disagreements are surfaced for confirmation.
+    """
+    excerpt = _outline_relevant_excerpt(outline_text)
+    scale = json.dumps(scale_profile.get("scale") or [], ensure_ascii=False)
+    fact_schema = {
+        "evidence": [{"fact": "", "quote": "", "location": ""}],
+        "components": [{"name": "", "weight": 0, "evidence_quote": ""}],
+        "alternative_schemes": [],
+        "minimum_requirements": [],
+        "selection_or_reweight_rules": [],
+        "letter_grade_rules": [],
+        "missing_or_ambiguous_information": [],
+    }
+    facts_prompt = (
+        f"Extract grading facts from the complete evidence for {course}. "
+        "Do not calculate or infer unstated rules. Every extracted fact must "
+        "include a short exact evidence quote. Return strict JSON matching:\n"
+        + json.dumps(fact_schema, ensure_ascii=False, indent=2)
+        + "\nUniversity grading scale (confirmed by student):\n"
+        + scale
+        + "\nCOURSE OUTLINE EVIDENCE:\n"
+        + excerpt
+    )
+    facts = _gemini_json(
+        "You are a forensic academic-policy fact extractor. Never invent missing information.",
+        facts_prompt,
+        6000,
+        0.0,
+    )
+    compile_prompt = (
+        "Compile the extracted facts into an executable grading policy. Use only facts "
+        "supported by the evidence. Represent alternative schemes separately; best/drop/"
+        "replacement rules as selection_rules; aggregate theory/lab rules as derived_components; "
+        "scheme eligibility as scheme_policies; prerequisite letter rules separately from "
+        "course-pass rules. Return strict JSON matching this schema:\n"
+        + json.dumps(schema, ensure_ascii=False, indent=2)
+        + "\nCONFIRMED UNIVERSITY SCALE:\n"
+        + scale
+        + "\nEXTRACTED FACTS:\n"
+        + json.dumps(facts, ensure_ascii=False)
+        + "\nSOURCE EVIDENCE:\n"
+        + excerpt
+    )
+    compiled = _gemini_json(
+        "You are a grading-policy compiler. Produce executable JSON only.",
+        compile_prompt,
+        7000,
+        0.0,
+    )
+    audit_schema = {
+        "approved": False,
+        "missing_facts": [],
+        "unsupported_claims": [],
+        "incorrect_weights": [],
+        "missed_conditions": [],
+        "ambiguities": [],
+        "corrected_model": schema,
+        "confidence_score": 0,
+    }
+    audit_prompt = (
+        "Audit this grading model adversarially against the source. Check every weight, "
+        "pass rule, alternative scheme, conditional eligibility, best/drop/reweight policy, "
+        "aggregate requirement, letter threshold, and prerequisite distinction. Correct the "
+        "model only when the source clearly supports a correction. Return strict JSON matching:\n"
+        + json.dumps(audit_schema, ensure_ascii=False, indent=2)
+        + "\nSOURCE:\n"
+        + excerpt
+        + "\nFACTS:\n"
+        + json.dumps(facts, ensure_ascii=False)
+        + "\nCOMPILED MODEL:\n"
+        + json.dumps(compiled, ensure_ascii=False)
+    )
+    audit = _gemini_json(
+        "You are an adversarial verifier of university grading policies. Be conservative.",
+        audit_prompt,
+        7000,
+        0.0,
+    )
+    final = (
+        audit.get("corrected_model")
+        if isinstance(audit, dict) and isinstance(audit.get("corrected_model"), dict)
+        else compiled
+    )
+    final = _normalize_advanced_grading_model(final)
+    deterministic = _outline_model_validation(final)
+    ambiguities = []
+    for key in (
+        "missing_facts",
+        "unsupported_claims",
+        "incorrect_weights",
+        "missed_conditions",
+        "ambiguities",
+    ):
+        vals = audit.get(key) if isinstance(audit, dict) else []
+        if isinstance(vals, list):
+            ambiguities.extend(str(v) for v in vals if str(v).strip())
+    ambiguities.extend(deterministic)
+    ambiguities.extend(
+        str(v)
+        for v in (facts.get("missing_or_ambiguous_information") or [])
+        if str(v).strip()
+    )
+    final["ambiguities"] = list(dict.fromkeys(ambiguities))
+    try:
+        score = float(audit.get("confidence_score") or 0)
+    except Exception:
+        score = 0
+    final["confidence_score"] = max(0, min(100, score))
+    final["confidence"] = (
+        "high" if score >= 90 and not deterministic else "medium" if score >= 70 else "low"
+    )
+    final["verification"] = {
+        "passes": 3,
+        "auditor_approved": bool(audit.get("approved")) if isinstance(audit, dict) else False,
+        "deterministic_issues": deterministic,
+        "evidence_count": len(facts.get("evidence") or []) if isinstance(facts, dict) else 0,
+    }
+    final["accuracy_notice"] = (
+        "AI interpretation cannot be guaranteed 100% accurate. Nexora used independent "
+        "fact extraction, policy compilation, adversarial verification, and deterministic "
+        "checks. Review and confirm every rule before relying on it."
+    )
+    return final
+
 @app.route("/api/course/<course_code>/outline/analyze", methods=["POST"])
 @login_required
 def analyze_course_outline(course_code):
     course = _normalize_course_code(course_code)
+    scale_profile = _get_user_grading_scale(current_user.id)
+    if not scale_profile.get("configured"):
+        return jsonify({"error":"Set up and confirm your university grading scale in Settings before analyzing a course outline. Nexora needs it to interpret rules such as C- correctly.","setup_required":"grading_scale"}),428
     data = request.get_json(silent=True) or {}
     source_uid = str(data.get('source_uid') or '')
     query = CourseContent.query.filter_by(user_id=current_user.id, course_full=course)
@@ -2931,6 +3291,16 @@ def analyze_course_outline(course_code):
                 "message": "C- or better required to use this course as a prerequisite",
             }
         ],
+        "selection_rules": [
+            {"type":"best_n_of_m","components":["Midterm 1","Midterm 2"],"keep":1,"output_component":"Midterm"}
+        ],
+        "derived_components": [
+            {"name":"Theory component","components":["Quizzes","Tutorials","Final Exam"],"minimum_percent":50}
+        ],
+        "scheme_policies": [
+            {"type":"scheme_gate","source_option":"Scheme 1","target_option":"Scheme 2","minimum_letter":"C-","message":"Scheme 2 is considered only if Scheme 1 is C- or higher."}
+        ],
+        "ambiguities": [],
         "confidence": "high|medium|low",
     }
     prompt = (
@@ -2948,6 +3318,11 @@ IMPORTANT — read the whole outline before extracting anything:
 7. Ignore explanatory dates/descriptions between an assessment name and its weight. Example: 'Midterm Exam I Closed book (Weekend of Jan 31) 20%' means Midterm 1 = 20%.
 8. If there are several alternative options, never add their weights together. Return each option separately.
 9. Detect letter-grade rules such as "C- or better". Put them in letter_requirements. Distinguish scope: use "course_pass" only if the outline says the student fails the course below that letter; use "prerequisite" when it only controls prerequisite eligibility. Never turn a prerequisite requirement into a course FAIL rule.
+10. Detect best/drop/replacement policies such as best 1 of 2 midterms, best 2 of 3 assignments, drop the lowest quiz, or final replaces a missed test. Put executable rules in selection_rules.
+11. Detect aggregate requirements such as "theory component (quiz + tutorial + final) must be at least 50%". Put them in derived_components and in pass_rules using type aggregate_minimum with the included component names.
+12. Detect conditional scheme logic. Example: Scheme 2 is used only if Scheme 1 is C- or higher. Put this in scheme_policies; do not treat an ineligible scheme as the winning result.
+13. Interpret every letter threshold using the student's saved university grading scale, never a hardcoded university scale.
+14. If wording is ambiguous or pages appear missing, list the uncertainty in ambiguities and lower confidence. Never invent missing rules. AI interpretation is not guaranteed to be 100% accurate and the student must confirm the result.
 
 OUTLINE:
 """
@@ -2955,12 +3330,19 @@ OUTLINE:
     )
     used_fallback=False
     try:
-        parsed = _gemini_json("You are a precise university course-outline parser. Output only valid JSON.", prompt, 5000, 0.1)
+        parsed = _high_accuracy_outline_analysis(course, row.content_text, scale_profile, outline_schema)
         if not isinstance(parsed,dict): raise ValueError('Invalid outline response')
     except Exception as exc:
-        app.logger.warning('Gemini outline analysis failed; using local parser: %s', exc)
+        app.logger.exception('High-accuracy outline analysis failed; using deterministic parser: %s', exc)
         parsed=_local_outline_analysis(row.content_text,course)
+        parsed.setdefault('ambiguities',[]).append('The multi-pass AI verification pipeline was unavailable; deterministic fallback was used. Review carefully.')
+        parsed['confidence']='low'
+        parsed['confidence_score']=35
         used_fallback=True
+    parsed=_normalize_advanced_grading_model(parsed)
+    for group in parsed.get('derived_components') or []:
+        if isinstance(group,dict) and group.get('minimum_percent') is not None:
+            parsed['pass_rules'].append({'type':'aggregate_minimum','components':group.get('components') or group.get('includes') or [],'minimum_percent':group.get('minimum_percent'),'message':group.get('message') or f"{group.get('name','Derived component')} must meet the minimum."})
     components = parsed.get('components') if isinstance(parsed,dict) else []
     if not isinstance(components,list): components=[]
     clean=[]; total=0.0
@@ -2995,6 +3377,7 @@ OUTLINE:
     parsed['letter_requirements']=letter_requirements
     if not parsed.get('input_components'): parsed['input_components']=clean
     parsed['components']=clean; parsed['total_weight']=round(float(parsed.get('total_weight') or total or 100),2)
+    parsed['confirmed']=False
     profile = CourseOutlineProfile.query.filter_by(user_id=current_user.id, course_full=course).first()
     if not profile:
         profile=CourseOutlineProfile(id=uuid4().hex,user_id=current_user.id,course_full=course)
@@ -3024,6 +3407,23 @@ OUTLINE:
         for old_outline in stale: db.session.delete(old_outline)
     db.session.commit()
     return jsonify({"ok":True,"fallback":used_fallback,"analysis":parsed,"pass_mark":profile.pass_mark,"final_minimum":profile.final_minimum})
+
+
+@app.route("/api/course/<course_code>/outline/confirm", methods=["POST"])
+@login_required
+def confirm_course_outline_policy(course_code):
+    course=_normalize_course_code(course_code)
+    profile=CourseOutlineProfile.query.filter_by(user_id=current_user.id,course_full=course).first()
+    if not profile:
+        return jsonify({'error':'Analyze a course outline first.'}),404
+    try: analysis=json.loads(profile.grading_json or '{}')
+    except Exception: analysis={}
+    analysis['confirmed']=True
+    analysis['confirmed_at']=datetime.utcnow().isoformat()+'Z'
+    profile.grading_json=json.dumps(analysis,ensure_ascii=False)
+    profile.updated_at=datetime.utcnow()
+    db.session.commit()
+    return jsonify({'ok':True})
 
 
 @app.route("/api/course/<course_code>/study-tools/generate", methods=["POST"])
