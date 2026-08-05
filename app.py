@@ -2670,14 +2670,27 @@ def _evaluate_option(option,row_map,final_override=None):
             else:
                 missing.append(f"Needs {count} test score(s) for {option.get('option_name','this option')}.")
         else:
-            source=str(comp.get('source') or '')
+            # Gemini/local parsers may call the component field `source`, `name`,
+            # `component`, or `label`. Normalize all shapes here so alternative
+            # schemes can always reuse the student's single saved mark.
+            source=str(
+                comp.get('source')
+                or comp.get('name')
+                or comp.get('component')
+                or comp.get('label')
+                or ''
+            ).strip()
             r=_find_grade_row(row_map,source)
             override=final_override if 'final' in source.lower() else None
             pct=_row_percent(r,override)
-            if pct is None: missing.append(f'{source} is not entered.')
+            if pct is None:
+                missing.append(f'{source or "Assessment"} is not entered.')
         if pct is not None:
             contribution=pct/100*weight; points+=contribution
-            details.append({'name':comp.get('source') or 'Tests','percent':round(pct,2),'weight':weight,'points':round(contribution,2)})
+            details.append({
+                'name': source if not comp.get('source_group') else (comp.get('name') or 'Tests'),
+                'percent':round(pct,2),'weight':weight,'points':round(contribution,2)
+            })
     return {'option_name':option.get('option_name') or 'Grading option','grade':round(points,2),'eligible':eligible,'complete':not missing,'missing':missing,'details':details}
 
 
@@ -2783,21 +2796,29 @@ def grade_outcomes(course_code):
     # Single fixed scheme.
     scheme_total=sum(max(0.0,float(r.weight or 0)) for r in rows) or float(analysis.get('total_weight') or 100)
     earned=0.0; completed_weight=0.0; final_row=None
+    # Separate the final from all other work. Current standing uses every saved
+    # mark, but the What-do-I-need solver intentionally ignores a saved final
+    # so students can run a hypothetical target at any time.
+    nonfinal_earned=0.0; nonfinal_completed_weight=0.0
     for r in rows:
-        if re.search(r'\bfinal(?:\s+exam)?\b',r.name or '',re.I): final_row=r
+        is_final=bool(re.search(r'\bfinal(?:\s+(?:exam|examination))?\b',r.name or '',re.I))
+        if is_final: final_row=r
         if r.score is not None and r.weight>0:
-            earned+=(_row_percent(r)/100)*float(r.weight); completed_weight+=float(r.weight)
+            contribution=(_row_percent(r)/100)*float(r.weight)
+            earned+=contribution; completed_weight+=float(r.weight)
+            if not is_final:
+                nonfinal_earned+=contribution; nonfinal_completed_weight+=float(r.weight)
     remaining=max(0.0,scheme_total-completed_weight); normalized_target=target/100*scheme_total
     needed_average=None if remaining<=0 else (normalized_target-earned)/remaining*100
     current_on_completed=earned/completed_weight*100 if completed_weight else 0
     official_grade=earned/scheme_total*100 if remaining<=0 and scheme_total else None
     pass_ok,rule_results=_evaluate_pass_rules(analysis,row_map,official_grade or earned/scheme_total*100 if scheme_total else 0)
     required_final=None
-    if final_row and final_row.score is None and final_row.weight>0:
-        other_remaining=max(0,remaining-final_row.weight)
+    if final_row and final_row.weight>0:
+        other_unfinished=max(0.0, scheme_total - nonfinal_completed_weight - float(final_row.weight))
         try: assumed=max(0,min(100,float(data.get('assumed_other_average',100))))
         except Exception: assumed=100
-        required_final=(normalized_target-earned-(assumed/100)*other_remaining)/final_row.weight*100
+        required_final=(normalized_target-nonfinal_earned-(assumed/100)*other_unfinished)/float(final_row.weight)*100
         final_min=analysis.get('final_minimum',profile.final_minimum if profile else None)
         if final_min is not None: required_final=max(required_final,float(final_min))
     decorated=_decorate_grade_result(current_user.id,analysis,official_grade)
