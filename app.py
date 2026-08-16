@@ -2155,7 +2155,8 @@ def analyze_grading_scale_upload():
         prompt=("Extract the official university letter-grade scale. Return only JSON matching this schema:\n"+json.dumps(schema,indent=2)+"\nCapture every letter band and its minimum numeric percentage. Never invent a missing threshold. Put uncertainty in ambiguities.\n\nCONTENT:\n"+combined[:80000])
         try:
             parsed=_gemini_json("You precisely extract official university grading scales. Output only valid JSON.",prompt,2200,0.0)
-        except Exception:
+        except Exception as gemini_exc:
+            app.logger.warning('Grading-scale Gemini extraction failed, falling back to regex: %s', gemini_exc)
             parsed={}
         scale=_normalize_grading_scale((parsed or {}).get("scale") or [])
         if len(scale)<2:
@@ -2604,6 +2605,7 @@ def course_workspace(course_code):
         outline_analysis = {}
 
     next_assignment = assignments[0] if assignments else None
+    grading_scale_profile = _get_user_grading_scale(current_user.id)
     return render_template(
         "course_workspace.html",
         user=current_user,
@@ -2623,6 +2625,7 @@ def course_workspace(course_code):
         outline_analysis=outline_analysis,
         updates=updates,
         next_assignment=next_assignment,
+        grading_scale_configured=grading_scale_profile.get("configured", False),
     )
 
 
@@ -3007,6 +3010,7 @@ def upload_course_outline(course_code):
             names.append(filename); hashes.append(file_hash); total_size+=size
             extracted_parts.append(f'\n===== UPLOAD {index}: {filename} =====\n{extracted}')
     except ValueError as exc:
+        app.logger.warning('Course outline upload extraction failed: %s', exc)
         return jsonify({'error':str(exc)}),422
     except Exception:
         app.logger.exception('Course outline upload failed')
@@ -3036,6 +3040,7 @@ def upload_course_material(course_code):
         filename, extracted, file_hash, size=_extract_uploaded_course_file(upload)
         extracted=_sanitize_extracted_text(extracted)
     except ValueError as exc:
+        app.logger.warning('Course material upload extraction failed: %s', exc)
         return jsonify({'error':str(exc)}),422
     except Exception:
         app.logger.exception('Course material upload failed')
@@ -3955,6 +3960,7 @@ def analyze_outline_generic():
             filename = names[0] if len(names) == 1 else f"{len(names)} outline uploads"
             text = "\n".join(parts)
         except ValueError as exc:
+            app.logger.warning('Generic outline extraction failed: %s', exc)
             return jsonify({"success": False, "error": str(exc), "components": []}), 422
         except Exception:
             app.logger.exception("Generic outline upload failed")
