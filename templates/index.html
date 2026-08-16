@@ -32,7 +32,8 @@
       <a href="#courses"><span>◉</span><b>Resources</b><i></i></a>
       <a href="/study-room"><span>◈</span><b>Study Room</b><i></i></a>
       <a href="/grade-calculator"><span>％</span><b>Grade Calculator</b><i></i></a>
-      <a href="/settings"><span>⚙</span><b>Settings</b><i></i></a>
+      <a href="/settings"><span>🎓</span><b>Grading Scale</b><i></i></a>
+      <a href="/profile"><span>⚙</span><b>Settings</b><i></i></a>
     </nav>
 
     <section class="nxv2-sync-card">
@@ -54,8 +55,10 @@
     </section>
 
     <div class="nxv2-user">
-      <div class="nxv2-avatar">{{ user.name[0]|upper if user and user.name else 'U' }}</div>
-      <span><strong>{{ user.name if user else 'Student' }}</strong><small>Student Plan</small></span>
+      <a href="/profile" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;text-decoration:none;color:inherit">
+        <div class="nxv2-avatar">{{ user.name[0]|upper if user and user.name else 'U' }}</div>
+        <span><strong>{{ user.name if user else 'Student' }}</strong><small>Student Plan</small></span>
+      </a>
       <button id="themeToggle" type="button" aria-label="Toggle theme">☾</button>
     </div>
   </aside>

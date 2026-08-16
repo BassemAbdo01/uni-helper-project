@@ -4015,6 +4015,12 @@ def analyze_outline_generic():
         })
         total += weight
 
+    if not components:
+        app.logger.warning(
+            "Generic outline analysis produced zero components. raw_components=%r extracted_chars=%d",
+            parsed.get("components"), len(text),
+        )
+
     return jsonify({
         "success": bool(components),
         "filename": filename,
