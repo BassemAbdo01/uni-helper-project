@@ -49,6 +49,10 @@ if database_url and database_url.startswith("postgres://"):
 
 app.config["SQLALCHEMY_DATABASE_URI"] = database_url or "sqlite:///uni_helper.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_pre_ping": True,
+    "pool_recycle": 280,
+}
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # up to 8 outline screenshots/pages
 
 db = SQLAlchemy(app)
