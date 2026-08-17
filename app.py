@@ -2607,6 +2607,8 @@ def course_workspace(course_code):
         outline_analysis = json.loads(outline_profile.grading_json or "{}") if outline_profile else {}
     except Exception:
         outline_analysis = {}
+    if outline_analysis and not outline_analysis.get('confidence_score'):
+        outline_analysis['confidence_score'] = {'high': 90, 'medium': 75, 'low': 50}.get(str(outline_analysis.get('confidence') or '').lower(), 0)
 
     next_assignment = assignments[0] if assignments else None
     grading_scale_profile = _get_user_grading_scale(current_user.id)
