@@ -1299,11 +1299,18 @@ def _canonical_component_name(raw):
         (r'\b(?:reflection|discussion)\s+(?:posts?|boards?)\b','Discussion'),
     ]
     lower=raw.lower()
+    # "best N out of M" / "top N of M"-style selection qualifiers carry real
+    # grading information (which marks get dropped) and must survive even when
+    # the base name below gets collapsed to a canonical label.
+    qualifier=re.search(r'\(\s*(?:best|top|highest)\s+\d+\s+(?:out\s+of|of)\s+\d+\s*\)',raw,re.I)
     for pat,label in patterns:
         m=re.search(pat,lower,re.I)
         if m:
             n=(m.groupdict().get('n') or '').replace('#','').upper()
-            return label.format(n=n).strip()
+            canonical=label.format(n=n).strip()
+            if qualifier:
+                canonical=f"{canonical} {qualifier.group(0)}"
+            return canonical
     # Generic table label fallback, but reject sentence fragments.
     raw=re.split(r'\b(?:closed\s+book|open\s+book|tentatively|scheduled|due|weekend|description)\b',raw,1,flags=re.I)[0].strip(' :-–—.,;')
     return raw[:80] if _looks_like_grading_label(raw) else ''
@@ -1411,11 +1418,21 @@ def _local_outline_analysis(text_value, course=''):
             r'lab(?:s|oratory)?.{0,60}?(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%',
         ]),
     ]
+    def _is_aggregate_mention(span_text,keyword_pattern):
+        """True if the keyword sits inside an unclosed, comma-separated parenthetical
+        (e.g. "theory component (quizzes, tutorials and final exam)") naming it as one
+        of several components in a group, rather than as its own standalone minimum."""
+        km=re.search(keyword_pattern,span_text,re.I)
+        if not km: return False
+        before=span_text[:km.start()]
+        return before.count('(')>before.count(')') and ',' in before
     for name,pats in rule_specs:
         value=None
         for pat in pats:
             m=re.search(pat,text,re.I|re.S)
             if m:
+                if name=='Final Exam' and _is_aggregate_mention(m.group(0),r'final(?:\s+exam|\s+examination)'):
+                    continue
                 try: value=float(m.group(1)); break
                 except Exception: pass
         if value is not None:
@@ -1437,6 +1454,23 @@ def _local_outline_analysis(text_value, course=''):
         typ='non_category_minimum' if invert else 'category_minimum'
         if not any(r.get('type')==typ and r.get('category')==category for r in structured_rules):
             structured_rules.append({'type':typ,'category':category,'minimum_percent':value,'message':f'{label} must be at least {value:g}% to pass.'})
+    # Named aggregate groups, e.g. "at least 50% on the theory component (weekly
+    # quizzes, tutorials and final exam)". Extract the group label, its listed
+    # members, and the threshold as one functional aggregate_minimum rule instead
+    # of letting the per-component regexes above misfire on a member mentioned
+    # inside the parenthetical list.
+    for m in re.finditer(
+        r'(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%[^.\n]{0,40}?\b(?:on|in)\s+(?:the\s+)?([a-z][a-z \-]{2,40}?component)\s*\(([^)]{3,150})\)',
+        text, re.I,
+    ):
+        value=float(m.group(1))
+        group_label=m.group(2).strip().title()
+        members=[re.sub(r'\s+',' ',x).strip() for x in re.split(r'\s*,\s*|\s+and\s+', m.group(3))]
+        members=[x for x in members if x]
+        if len(members)<2:
+            continue
+        if not any(r.get('type')=='aggregate_minimum' and r.get('components')==members for r in structured_rules):
+            structured_rules.append({'type':'aggregate_minimum','components':members,'minimum_percent':value,'message':f'{group_label} ({", ".join(members)}) must be at least {value:g}% to pass.'})
     structured_rules.append({'type':'overall_minimum','minimum_percent':pass_mark,'message':f'Total course grade must be at least {pass_mark:g}%.'})
     if options:
         # Build a union of source inputs. This avoids flattening four options into 105%.
