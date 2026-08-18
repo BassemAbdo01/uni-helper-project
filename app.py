@@ -2872,9 +2872,19 @@ def _evaluate_option(option,row_map,final_override=None,analysis=None):
                 or comp.get('label')
                 or ''
             ).strip()
-            r=_find_grade_row(row_map,source)
-            override=final_override if 'final' in source.lower() else None
-            pct=_row_percent(r,override)
+            virtual_key=re.sub(r'[^a-z0-9]+',' ',source.lower()).strip()
+            virtual_match=virtual.get(virtual_key)
+            if virtual_match is not None:
+                # A selection rule (best_n_of_m / drop_lowest / select_best) produced
+                # this component (e.g. "Midterm" from best 1 of Midterm 1/2). Use the
+                # computed result instead of falling through to a raw row, otherwise
+                # _find_grade_row's substring matching can silently grab the wrong
+                # individual assessment (e.g. "Midterm 1" for a "Midterm" lookup).
+                pct=virtual_match.get('percent')
+            else:
+                r=_find_grade_row(row_map,source)
+                override=final_override if 'final' in source.lower() else None
+                pct=_row_percent(r,override)
             if pct is None:
                 missing.append(f'{source or "Assessment"} is not entered.')
         if pct is not None:
@@ -3243,7 +3253,9 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
         "Audit this grading model adversarially against the source. Check every weight, "
         "pass rule, alternative scheme, conditional eligibility, best/drop/reweight policy, "
         "aggregate requirement, letter threshold, and prerequisite distinction. Correct the "
-        "model only when the source clearly supports a correction. Return strict JSON matching:\n"
+        "model only when the source clearly supports a correction. confidence_score MUST be "
+        "an integer from 0 to 100 (a percentage, e.g. 96 for 96% confident) — never a 0-1 "
+        "fraction. Return strict JSON matching:\n"
         + json.dumps(audit_schema, ensure_ascii=False, indent=2)
         + "\nSOURCE:\n"
         + excerpt
@@ -3287,6 +3299,13 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
         score = float(audit.get("confidence_score") or 0)
     except Exception:
         score = 0
+    # The audit prompt's schema example just shows `"confidence_score": 0`
+    # with no unit specified, so the model sometimes returns a 0-1 fraction
+    # (e.g. 0.96) instead of a 0-100 percentage. A fraction silently survives
+    # the old max(0, min(100, score)) clamp unchanged, then gets displayed as
+    # "1.0%" instead of "96%". Detect the fraction case and rescale it.
+    if 0 < score <= 1:
+        score = score * 100
     final["confidence_score"] = max(0, min(100, score))
     final["confidence"] = (
         "high" if score >= 90 and not deterministic else "medium" if score >= 70 else "low"
