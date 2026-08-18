@@ -2676,14 +2676,22 @@ def _parse_mark_entry(score_value, max_value=100):
     raw=str(score_value).strip()
     if not raw:
         return None, max(0.0001, float(max_value or 100))
-    normalized=raw.lower().replace('%','').strip()
-    match=re.fullmatch(r'\s*(-?\d+(?:\.\d+)?)\s*(?:/|out\s+of)\s*(-?\d+(?:\.\d+)?)\s*',normalized,re.I)
+    lowered=raw.lower().strip()
+    match=re.fullmatch(r'\s*(-?\d+(?:\.\d+)?)\s*(?:/|out\s+of)\s*(-?\d+(?:\.\d+)?)\s*',lowered,re.I)
     if match:
         earned=float(match.group(1)); maximum=float(match.group(2))
         if maximum<=0 or earned<0:
             raise ValueError('Marks must be zero or greater, and the maximum must be above zero.')
         return earned, maximum
-    earned=float(normalized)
+    if '%' in lowered:
+        # An explicit percent sign always means the number IS the percentage,
+        # regardless of the component's stored maximum -- "75%" must always be
+        # 75%, never divided against a max like 50 to produce 150%.
+        earned=float(lowered.replace('%','').strip())
+        if earned<0:
+            raise ValueError('Marks cannot be negative.')
+        return earned, 100.0
+    earned=float(lowered)
     maximum=max(0.0001,float(max_value or 100))
     if earned<0:
         raise ValueError('Marks cannot be negative.')
