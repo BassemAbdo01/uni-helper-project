@@ -2669,8 +2669,9 @@ def course_workspace(course_code):
     )
 
 
-def _parse_mark_entry(score_value, max_value=100):
-    """Accept 15/20, 15 out of 20, 75%, or a plain score with a separate maximum."""
+def _parse_mark_entry(score_value, max_value=100, allow_bare_as_points=False):
+    """Accept 15/20, 15 out of 20, 75%, or (for attendance-style counts only) a
+    plain number counted against a separate maximum."""
     if score_value is None:
         return None, max(0.0001, float(max_value or 100))
     raw=str(score_value).strip()
@@ -2692,7 +2693,9 @@ def _parse_mark_entry(score_value, max_value=100):
             raise ValueError('Marks cannot be negative.')
         return earned, 100.0
     earned=float(lowered)
-    maximum=max(0.0001,float(max_value or 100))
+    # A bare number means "this is my percentage" everywhere except attendance
+    # counts (e.g. "3" sessions out of 5), where it's genuinely a raw count.
+    maximum=max(0.0001,float(max_value or 100)) if allow_bare_as_points else 100.0
     if earned<0:
         raise ValueError('Marks cannot be negative.')
     return earned, maximum
@@ -2714,9 +2717,10 @@ def course_grades(course_code):
     name = str(data.get("name") or "Assessment").strip()[:255]
     try:
         weight = max(0.0, min(100.0, float(data.get("weight") or 0)))
-        score, max_score = _parse_mark_entry(data.get("score"), data.get("max_score") or 100)
+        is_attendance = str(data.get("category") or "").strip().lower() == "attendance"
+        score, max_score = _parse_mark_entry(data.get("score"), data.get("max_score") or 100, allow_bare_as_points=is_attendance)
     except (TypeError, ValueError) as exc:
-        return jsonify({"error": str(exc) or "Enter a mark like 15/20, 75%, or use the separate maximum box."}), 400
+        return jsonify({"error": str(exc) or "Enter a mark like 15/20 or 75%."}), 400
     row_id = str(data.get("id") or "")
     row = GradeEntry.query.filter_by(id=row_id, user_id=current_user.id, course_full=course).first() if row_id else None
     if not row:
