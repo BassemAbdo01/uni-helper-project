@@ -196,6 +196,10 @@ class SyncedCourse(db.Model):
     content_count = db.Column(db.Integer, default=0)
     is_hidden = db.Column(db.Boolean, default=False, nullable=False)
     source_hash = db.Column(db.String(64), default="")
+    last_sync_ok = db.Column(db.Boolean, default=True)
+    last_sync_error = db.Column(db.Text, default="")
+    last_sync_items = db.Column(db.Integer, default=0)
+    last_sync_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -244,6 +248,10 @@ def ensure_schema_columns():
         },
         "synced_course": {
             "is_hidden": "BOOLEAN DEFAULT FALSE",
+            "last_sync_ok": "BOOLEAN DEFAULT TRUE",
+            "last_sync_error": "TEXT DEFAULT ''",
+            "last_sync_items": "INTEGER DEFAULT 0",
+            "last_sync_at": "TIMESTAMP NULL",
         },
         "task": {
             "source_uid": "VARCHAR(255) DEFAULT ''",
@@ -2582,6 +2590,33 @@ def _normalize_course_code(value):
     return cleaned or "OTHER"
 
 
+def _lecture_sequence_key(item):
+    """Order lectures by their actual curriculum sequence, not sync/publish time.
+
+    Brightspace doesn't give us a reliable numeric position for lecture
+    content, only a title and a module label, so the sync timestamp used for
+    Announcements (newest first) ends up ordering lectures essentially at
+    random relative to the course's real Lecture 1/2/3... progression. Every
+    real course numbers its lectures somewhere in the title or module name,
+    so pull that number out generically -- this isn't tied to any specific
+    course's naming convention, just the near-universal "Lecture N" / "Week
+    N" / "Module N" pattern.
+    """
+    title = str(getattr(item, "title", "") or "")
+    module = str(getattr(item, "module_name", "") or "")
+    combined = f"{module} {title}"
+    numbers = [int(n) for n in re.findall(r"\d+", combined)][:3]
+    # Pad to a fixed length so items with fewer numbers still compare
+    # correctly against items with more (e.g. "Week 3" vs "Week 3 Lecture 2").
+    padded = tuple(numbers + [10**9] * (3 - len(numbers))) if numbers else (10**9, 10**9, 10**9)
+    has_number = 0 if numbers else 1
+    # Natural-sort the title itself as a tiebreaker/fallback so titles with no
+    # extractable number still land in a stable, sensible order rather than
+    # colliding at the same sort position.
+    natural_title = [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", title)]
+    return (has_number, padded, natural_title)
+
+
 def _content_payload_hash(payload):
     raw = json.dumps({
         "title": payload.get("title", ""),
@@ -2634,6 +2669,7 @@ def course_workspace(course_code):
     updates = AcademicUpdate.query.filter_by(user_id=current_user.id, course_full=course).order_by(AcademicUpdate.created_at.desc()).limit(12).all()
 
     lectures = [c for c in contents if c.content_type == "lecture"]
+    lectures = sorted(lectures, key=_lecture_sequence_key)
     resources = [c for c in contents if c.content_type in ("file", "resource", "link", "practice", "page")]
     quizzes = [c for c in contents if c.content_type == "quiz"]
     announcements = [c for c in contents if c.content_type == "announcement"]
@@ -3592,6 +3628,100 @@ OUTLINE:
     return jsonify({"ok":True,"fallback":used_fallback,"analysis":parsed,"pass_mark":profile.pass_mark,"final_minimum":profile.final_minimum})
 
 
+@app.route("/api/course/<course_code>/outline/correct", methods=["POST"])
+@login_required
+def correct_course_outline_policy(course_code):
+    """Let a student fix a specific detected weight or pass-rule threshold
+    without re-uploading the whole outline. This is intentionally narrow --
+    it only edits values that already exist in the compiled model (component
+    weights, pass-rule minimums, the overall pass mark), never invents new
+    components or rules. A wrong number is common; a wrong structure needs a
+    fresh upload instead, which the outline-replacement flow already covers.
+    """
+    course=_normalize_course_code(course_code)
+    profile=CourseOutlineProfile.query.filter_by(user_id=current_user.id,course_full=course).first()
+    if not profile:
+        return jsonify({'error':'Analyze a course outline first.'}),404
+    try: analysis=json.loads(profile.grading_json or '{}')
+    except Exception: analysis={}
+    if analysis.get('confirmed'):
+        return jsonify({'error':'This grading policy is already confirmed. Upload a new outline to replace it instead.'}),409
+    data=request.get_json(silent=True) or {}
+    component_edits=data.get('components') if isinstance(data.get('components'),dict) else {}
+    pass_rule_edits=data.get('pass_rules') if isinstance(data.get('pass_rules'),list) else []
+    pass_mark_edit=data.get('pass_mark')
+
+    changed=[]
+    components=analysis.get('components') if isinstance(analysis.get('components'),list) else []
+    for comp in components:
+        if not isinstance(comp,dict): continue
+        name=str(comp.get('name') or '')
+        key=re.sub(r'[^a-z0-9]+',' ',name.lower()).strip()
+        for edit_name,edit_weight in component_edits.items():
+            if re.sub(r'[^a-z0-9]+',' ',str(edit_name).lower()).strip()==key:
+                try:
+                    new_weight=max(0.0,min(100.0,float(edit_weight)))
+                except (TypeError,ValueError):
+                    continue
+                if round(new_weight,2)!=round(float(comp.get('weight') or 0),2):
+                    changed.append(f"{name}: {comp.get('weight')}% → {new_weight}%")
+                comp['weight']=new_weight
+
+    pass_rules=analysis.get('pass_rules') if isinstance(analysis.get('pass_rules'),list) else []
+    for edit in pass_rule_edits:
+        if not isinstance(edit,dict): continue
+        try: idx=int(edit.get('index'))
+        except (TypeError,ValueError): continue
+        if not (0<=idx<len(pass_rules)) or not isinstance(pass_rules[idx],dict):
+            continue
+        new_min=edit.get('minimum_percent')
+        if new_min is None: continue
+        try:
+            new_min=max(0.0,min(100.0,float(new_min)))
+        except (TypeError,ValueError):
+            continue
+        old_min=pass_rules[idx].get('minimum_percent')
+        if old_min is not None and round(float(old_min),2)!=round(new_min,2):
+            changed.append(f"{pass_rules[idx].get('message') or 'pass rule'}: {old_min}% → {new_min}%")
+        pass_rules[idx]['minimum_percent']=new_min
+
+    if pass_mark_edit is not None:
+        try:
+            new_pass_mark=max(0.0,min(100.0,float(pass_mark_edit)))
+            if round(new_pass_mark,2)!=round(float(analysis.get('pass_mark') or 50),2):
+                changed.append(f"Overall pass mark: {analysis.get('pass_mark')}% → {new_pass_mark}%")
+            analysis['pass_mark']=new_pass_mark
+        except (TypeError,ValueError):
+            pass
+
+    if not changed:
+        return jsonify({'error':'No valid corrections were provided.'}),400
+
+    analysis=_normalize_advanced_grading_model(analysis)
+    analysis['ambiguities']=_outline_model_validation(analysis)
+    analysis['manually_corrected']=True
+    analysis['correction_log']=(analysis.get('correction_log') or [])+[{
+        'at':datetime.utcnow().isoformat()+'Z','changes':changed,
+    }]
+    profile.grading_json=json.dumps(analysis,ensure_ascii=False)
+    try: profile.pass_mark=float(analysis.get('pass_mark') or 50)
+    except Exception: pass
+    profile.updated_at=datetime.utcnow()
+
+    # Keep the enterable grade cards' weight badges in sync with the correction
+    # immediately, without touching any marks the student has already entered.
+    rows=GradeEntry.query.filter_by(user_id=current_user.id,course_full=course).all()
+    row_map={re.sub(r'[^a-z0-9]+',' ',str(r.name or '').lower()).strip():r for r in rows}
+    for comp in components:
+        if not isinstance(comp,dict): continue
+        key=re.sub(r'[^a-z0-9]+',' ',str(comp.get('name') or '').lower()).strip()
+        row=row_map.get(key)
+        if row is not None:
+            row.weight=float(comp.get('weight') or 0)
+    db.session.commit()
+    return jsonify({'ok':True,'changed':changed})
+
+
 @app.route("/api/course/<course_code>/outline/confirm", methods=["POST"])
 @login_required
 def confirm_course_outline_policy(course_code):
@@ -3822,6 +3952,10 @@ def sync_course_content():
         CourseContent.query.filter(CourseContent.user_id == user.id, CourseContent.course_full.in_(replace_courses)).delete(synchronize_session=False)
         # Smart Sync refreshes metadata only; preserve any user-requested cached files.
         db.session.flush()
+    scan_meta = payload.get("scan_meta") if isinstance(payload.get("scan_meta"), dict) else {}
+    scan_course = str(payload.get("course") or (replace_courses[0] if replace_courses else "") or "").strip()
+    if scan_course:
+        scan_course = _normalize_course_code(scan_course)
     counts = {"added": 0, "updated": 0, "unchanged": 0}
     for item in items[:1200]:
         title = str(item.get("title") or "").strip()
@@ -3899,6 +4033,25 @@ def sync_course_content():
         if course_row:
             course_row.content_count = CourseContent.query.filter_by(user_id=user.id, course_full=code).count()
             course_row.updated_at = datetime.utcnow()
+    # Record the outcome of this specific sync attempt so a totally failed
+    # scan (e.g. every Brightspace API call 404ing for one course while
+    # others work fine) is visible on the course page itself, instead of
+    # silently leaving the course empty with no explanation anywhere.
+    if scan_course:
+        course_row = SyncedCourse.query.filter_by(user_id=user.id, course_code=scan_course).first()
+        if course_row:
+            errors = scan_meta.get("diagnostics", {}).get("errors") if isinstance(scan_meta.get("diagnostics"), dict) else {}
+            scan_ok = bool(items) or (scan_meta.get("complete") is True)
+            course_row.last_sync_ok = scan_ok
+            course_row.last_sync_items = len(items)
+            course_row.last_sync_at = datetime.utcnow()
+            if not scan_ok and isinstance(errors, dict) and errors:
+                parts = [f"{section}: {msg}" for section, msg in list(errors.items())[:4]]
+                course_row.last_sync_error = ("Brightspace didn't return any content for this course. " + "; ".join(parts))[:2000]
+            elif not scan_ok:
+                course_row.last_sync_error = "Brightspace didn't return any content for this course on the last sync attempt."[:2000]
+            else:
+                course_row.last_sync_error = ""
     db.session.commit()
     return jsonify({"ok": True, **counts, "received": len(items), "replaced_courses": replace_courses})
 

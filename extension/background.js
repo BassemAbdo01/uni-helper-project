@@ -523,18 +523,23 @@ async function syncAllCourses(trigger = 'manual') {
     await setStatus({ running: true, phase: 'smart-sync', trigger, currentCourse: course.code, progress: `${i + 1}/${courses.length}` });
     try {
       const scan = await scanCourseDirect(course, origin);
-      if (!scan.ok) throw new Error(scan.error || 'Unknown Brightspace scan error.');
       const items = Array.isArray(scan.items) ? scan.items : [];
-      const trustworthy = scan.complete === true && scan.authenticated === true;
+      const trustworthy = scan.ok === true && scan.complete === true && scan.authenticated === true;
       const replaceCourses = trustworthy && items.length > 0 ? [course.code] : [];
+      // Always report back to Nexora, even when the scan found nothing --
+      // otherwise a total failure (every Brightspace API call failing for
+      // one specific course) never reaches the website at all, and the
+      // course just looks silently empty with no explanation.
       const imported = await api('/api/sync/content', {
         method: 'POST',
         body: {
           items,
+          course: course.code,
           replace_courses: replaceCourses,
           scan_meta: { method: scan.method, complete: trustworthy, diagnostics: scan.diagnostics || {}, trigger }
         }
       });
+      if (!scan.ok) throw new Error(scan.error || 'Brightspace did not return any content for this course.');
 
       summary.scanned++;
       summary.itemsFound += items.length;
