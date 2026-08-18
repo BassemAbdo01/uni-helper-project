@@ -158,11 +158,14 @@
           {% set derived_components = outline_analysis.get('derived_components', []) %}
           {% set scheme_policies = outline_analysis.get('scheme_policies', []) %}
           {% if selection_rules or derived_components or scheme_policies %}<section class="official-rules"><h4>Detected grading logic</h4><div class="rule-chip-grid">{% for r in selection_rules %}<div class="rule-chip">{{ r.type|replace('_',' ')|title }}: {{ (r.components or r.source_components or [])|join(', ') }}</div>{% endfor %}{% for r in derived_components %}<div class="rule-chip">{{ r.name }}: {{ (r.components or r.includes or [])|join(' + ') }}{% if r.minimum_percent is not none %} ≥ {{ r.minimum_percent }}%{% endif %}</div>{% endfor %}{% for r in scheme_policies %}<div class="rule-chip">{{ r.message or (r.target_option ~ ' eligibility rule') }}</div>{% endfor %}</div></section>{% endif %}
-          {% if not outline_analysis.get('confirmed') %}<section class="smart-box"><h4>Confirm before calculating</h4><p class="meta">Nexora ran independent fact extraction, policy compilation, adversarial verification, and mathematical checks. AI interpretation may still not be 100% accurate, so review every component, rule, alternative scheme, and letter threshold.</p><div class="rule-chip-grid"><div class="rule-chip">Confidence: {{ outline_analysis.get('confidence_score', 0)|round(0) }}% ({{ outline_analysis.get('confidence','low') }})</div><div class="rule-chip">Verification passes: {{ outline_analysis.get('verification',{}).get('passes',1) }}</div></div>{% if outline_analysis.get('ambiguities') %}<div class="rule-chip-grid">{% for item in outline_analysis.get('ambiguities') %}<div class="rule-chip">Needs review: {{ item }}</div>{% endfor %}</div>{% endif %}{% if outline_analysis.get('confidence') == 'low' %}<label class="meta" style="display:flex;gap:8px;align-items:flex-start;margin:12px 0"><input type="checkbox" id="lowConfidenceAcknowledge"> I reviewed the source and accept that this low-confidence policy may need corrections.</label>{% endif %}<button class="action" id="confirmOutlinePolicy" type="button" {% if outline_analysis.get('confidence') == 'low' %}disabled{% endif %}>Confirm detected grading policy</button></section>{% endif %}
+          {% set conf_score = outline_analysis.get('confidence_score', 0)|round(0)|int %}
+          {% set conf_label = 'high' if conf_score >= 85 else ('medium' if conf_score >= 60 else 'low') %}
+          {% if not outline_analysis.get('confirmed') %}<section class="smart-box"><h4>Confirm before calculating</h4><p class="meta">Nexora ran independent fact extraction, policy compilation, adversarial verification, and mathematical checks. AI interpretation may still not be 100% accurate, so review every component, rule, alternative scheme, and letter threshold.</p><div class="rule-chip-grid"><div class="rule-chip">Confidence: {{ conf_score }}% ({{ conf_label }})</div><div class="rule-chip">Verification passes: {{ outline_analysis.get('verification',{}).get('passes',1) }}</div></div>{% if outline_analysis.get('ambiguities') %}<div class="rule-chip-grid">{% for item in outline_analysis.get('ambiguities') %}<div class="rule-chip">Needs review: {% if item is mapping %}{{ item.get('description') or item.get('message') or (item.values()|list|join(' — ')) }}{% else %}{{ item }}{% endif %}</div>{% endfor %}</div>{% endif %}{% if conf_label == 'low' %}<label class="meta" style="display:flex;gap:8px;align-items:flex-start;margin:12px 0"><input type="checkbox" id="lowConfidenceAcknowledge"> I reviewed the source and accept that this low-confidence policy may need corrections.</label>{% endif %}<button class="action" id="confirmOutlinePolicy" type="button" {% if conf_label == 'low' %}disabled{% endif %}>Confirm detected grading policy</button></section>{% endif %}
           <div class="mark-entry-intro"><h4>Enter your actual results</h4><p>Use the first box for marks earned and the second for the maximum. Example: <b>15 / 20</b> automatically becomes <b>75%</b>. Leave unfinished work blank.</p></div>
           <div class="grade-components" id="gradeRows">
             {% for g in grade_entries %}
-            {% set varies_by_option = options and g.weight < 0.05 %}
+            {% set is_group_member = g.weight < 0.05 and g.notes and 'Counts toward' in g.notes %}
+            {% set varies_by_option = options and g.weight < 0.05 and not is_group_member %}
             {% set is_attendance = g.category == 'attendance' %}
             {% set pct = ((g.score / g.max_score) * 100) if g.score is not none else none %}
             <article class="grade-component gc-card" data-id="{{ g.id }}" data-category="{{ g.category }}">
@@ -170,7 +173,7 @@
                 <div><span class="component-category">{{ g.category|replace('_',' ')|title }}</span><h4>{{ g.name }}</h4></div>
                 <div class="gc-badges">
                   <span class="save-state {% if g.score is not none %}is-saved{% endif %}" data-save-state>{% if g.score is not none %}Saved ✓{% else %}Not saved{% endif %}</span>
-                  {% if varies_by_option %}<span class="gc-weight gc-weight-multi">Multiple options</span>{% else %}<span class="gc-weight">{{ g.weight|round(1) }}%</span>{% endif %}
+                  {% if is_group_member %}<span class="gc-weight gc-weight-multi">Part of a group</span>{% elif varies_by_option %}<span class="gc-weight gc-weight-multi">Multiple options</span>{% else %}<span class="gc-weight">{{ g.weight|round(1) }}%</span>{% endif %}
                 </div>
               </div>
               {% if is_attendance %}
@@ -199,7 +202,7 @@
                   </div>
                 </div>
               </div>
-              <p class="gc-hint">{% if is_attendance %}Number of sessions attended, out of {{ default_max }} total.{% else %}Defaults to out of {{ default_max }} to match this component's weight — change it to match your real mark, e.g. <b>72/85</b>.{% endif %}</p>
+              <p class="gc-hint">{% if is_attendance %}Number of sessions attended, out of {{ default_max }} total.{% elif g.notes %}{{ g.notes }}{% else %}Defaults to out of {{ default_max }} to match this component's weight — change it to match your real mark, e.g. <b>72/85</b>.{% endif %}</p>
               <p class="gc-warn" data-converted-note hidden>That's over 100% of this component's marks.</p>
               <input class="edit-name" type="hidden" value="{{ g.name }}"><input class="edit-weight" type="hidden" value="{{ g.weight }}"><input class="edit-max" type="hidden" value="{{ g.max_score }}">
             </article>

@@ -135,6 +135,7 @@ class GradeEntry(db.Model):
     score = db.Column(db.Float, nullable=True)
     max_score = db.Column(db.Float, default=100.0)
     category = db.Column(db.String(80), default="assessment")
+    notes = db.Column(db.String(255), default="")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -251,6 +252,9 @@ def ensure_schema_columns():
             "sync_state": "VARCHAR(30) DEFAULT 'active'",
             "last_seen_sync": "VARCHAR(40) DEFAULT ''",
             "completed": "BOOLEAN DEFAULT FALSE",
+        },
+        "grade_entry": {
+            "notes": "VARCHAR(255) DEFAULT ''",
         },
     }
 
@@ -2707,7 +2711,7 @@ def course_grades(course_code):
     course = _normalize_course_code(course_code)
     if request.method == "GET":
         rows = GradeEntry.query.filter_by(user_id=current_user.id, course_full=course).order_by(GradeEntry.created_at.asc()).all()
-        return jsonify({"grades": [{"id": r.id, "name": r.name, "weight": r.weight, "score": r.score, "max_score": r.max_score, "category": r.category} for r in rows]})
+        return jsonify({"grades": [{"id": r.id, "name": r.name, "weight": r.weight, "score": r.score, "max_score": r.max_score, "category": r.category, "notes": r.notes} for r in rows]})
     data = request.get_json(silent=True) or {}
     if request.method == "DELETE":
         row = GradeEntry.query.filter_by(id=str(data.get("id") or ""), user_id=current_user.id, course_full=course).first()
@@ -2821,13 +2825,43 @@ def _normalize_advanced_grading_model(parsed):
     parsed.setdefault("accuracy_notice","AI interpretation may not be 100% accurate. Confirm the detected scheme before relying on it.")
     if not isinstance(parsed.get("pass_rules"),list):
         parsed["pass_rules"]=[]
+    def _rule_signature(rule):
+        # Only rules with a single named component + numeric minimum (the shape
+        # both component_minimums and plain-text extraction can independently
+        # produce for the same real-world requirement) get a loose signature.
+        # Every other rule type is deduplicated only on an exact full-content
+        # match, so genuinely different rules are never collapsed together.
+        if isinstance(rule,dict) and rule.get('component') and rule.get('minimum_percent') is not None:
+            try:
+                return ('component_minimum', str(rule.get('component')).strip().lower(), round(float(rule.get('minimum_percent')),2))
+            except (TypeError,ValueError):
+                pass
+        return json.dumps(rule, sort_keys=True, default=str)
+    seen_signatures={_rule_signature(r) for r in parsed["pass_rules"]}
     for item in parsed.get("component_minimums") or []:
         if not isinstance(item,dict):
             continue
         name=item.get("name") or item.get("component")
         minimum=item.get("minimum") if item.get("minimum") is not None else item.get("minimum_percent")
         if name and minimum is not None:
-            parsed["pass_rules"].append({"type":"component_minimum","component":name,"minimum_percent":minimum,"message":item.get("consequence") or f"{name} minimum"})
+            candidate={"type":"component_minimum","component":name,"minimum_percent":minimum,"message":item.get("consequence") or f"{name} minimum"}
+            sig=_rule_signature(candidate)
+            if sig in seen_signatures:
+                continue
+            seen_signatures.add(sig)
+            parsed["pass_rules"].append(candidate)
+    # This function can run more than once on the same already-normalized model
+    # further down the pipeline (e.g. once inside the audit stage, once again
+    # in the route that calls it). Deduplicate the final list defensively so
+    # that scenario never doubles up every requirement shown to the student.
+    deduped=[]; final_signatures=set()
+    for rule in parsed["pass_rules"]:
+        sig=_rule_signature(rule)
+        if sig in final_signatures:
+            continue
+        final_signatures.add(sig)
+        deduped.append(rule)
+    parsed["pass_rules"]=deduped
     return parsed
 
 
@@ -3147,15 +3181,32 @@ def _outline_model_validation(model):
         return ['The model is not an object.']
     components=model.get('components') or []
     options=model.get('grading_options') or []
+    def _bonus_weight(comps):
+        return sum(float(c.get('weight') or 0) for c in comps if isinstance(c,dict) and
+                   re.search(r'bonus|extra\s*credit', f"{c.get('name') or ''} {c.get('category') or ''}", re.I))
+    def _check_total(label, comps):
+        if not comps:
+            issues.append(f'{label} has no components.')
+            return
+        total=sum(float(c.get('weight') or 0) for c in comps if isinstance(c,dict))
+        if total < 99.0:
+            issues.append(f'{label} totals {total:.2f}%, not 100% — some weight appears to be missing.')
+            return
+        if total > 101.0:
+            # A scheme can legitimately total more than 100% when it includes
+            # bonus/extra-credit weight on top of the base 100% (e.g. an outline
+            # that lists "Bonus: Class Participation ... 4%" alongside components
+            # that already sum to 100%). Only flag the excess if bonus weight
+            # doesn't account for it.
+            base_total = total - _bonus_weight(comps)
+            if not (99.0 <= base_total <= 101.0):
+                issues.append(f'{label} totals {total:.2f}%, not 100% (base weight excluding any bonus components is {base_total:.2f}%).')
     if options:
         names=[]
         for idx,opt in enumerate(options,1):
             oname=str(opt.get('option_name') or f'Option {idx}')
             names.append(oname)
-            comps=opt.get('components') or []
-            total=sum(float(c.get('weight') or 0) for c in comps if isinstance(c,dict))
-            if not comps: issues.append(f'{oname} has no components.')
-            if not 99.0 <= total <= 101.0: issues.append(f'{oname} totals {total:.2f}%, not 100%.')
+            _check_total(oname, opt.get('components') or [])
         for policy in model.get('scheme_policies') or []:
             if not isinstance(policy,dict): continue
             for key in ('source_option','target_option'):
@@ -3163,8 +3214,7 @@ def _outline_model_validation(model):
                 if ref and not any(ref.lower()==n.lower() for n in names):
                     issues.append(f'Scheme policy references unknown option: {ref}.')
     elif components:
-        total=sum(float(c.get('weight') or 0) for c in components if isinstance(c,dict))
-        if not 99.0 <= total <= 101.0: issues.append(f'Component weights total {total:.2f}%, not 100%.')
+        _check_total('Component weights', components)
     else:
         issues.append('No grading components were detected.')
     known=[]
@@ -3180,7 +3230,16 @@ def _outline_model_validation(model):
         refs.extend(rule.get('components') or [])
         for ref in refs:
             refn=str(ref).lower()
-            if refn and not any(refn in x or x in refn for x in known if x):
+            # A pass rule can legitimately reference a component using a
+            # generic/singular form (e.g. "lab component", "assignment
+            # component") when the actual schemes use the plural or a
+            # differently-worded name (e.g. "Labs", "Assignments"). Strip
+            # generic words before matching so these don't get falsely
+            # flagged as referencing an unknown component.
+            refn_stripped=re.sub(r'\b(component|components|category)\b','',refn).strip()
+            refn_singular=re.sub(r's\b','',refn_stripped) if refn_stripped else refn_stripped
+            candidates={c for c in (refn, refn_stripped, refn_singular) if c}
+            if refn and not any(any(c in x or x in c for c in candidates) for x in known if x):
                 issues.append(f'Pass rule references a component not found in the schemes: {ref}.')
     return list(dict.fromkeys(issues))
 
@@ -3467,7 +3526,54 @@ OUTLINE:
     profile.updated_at=datetime.utcnow()
     # A confirmed new outline fully replaces the previous calculator. Never mix two courses/outlines.
     GradeEntry.query.filter_by(user_id=current_user.id,course_full=course).delete(synchronize_session=False)
-    sync_components=parsed.get('input_components') or clean
+    sync_components=list(parsed.get('input_components') or clean)
+    existing_keys={re.sub(r'[^a-z0-9]+',' ',str(c.get('name') or '').lower()).strip() for c in sync_components}
+
+    # The default component list can legitimately give a component 0% weight
+    # (e.g. Scheme 1 gives Assignments/Labs 0% while only Scheme 2 weighs them,
+    # or a component's real weight only exists per-scheme in grading_options).
+    # Such components would otherwise never get an enterable card even though
+    # pass rules or selection rules depend on them. Pull in anything referenced
+    # by a real grading_option, a selection_rule, or a component_minimum that
+    # isn't already covered.
+    def _register(name, weight=0.0, category=None, notes=''):
+        key=re.sub(r'[^a-z0-9]+',' ',str(name or '').lower()).strip()
+        if not key or key in existing_keys:
+            return
+        existing_keys.add(key)
+        sync_components.append({
+            "name": str(name)[:255],
+            "weight": max(0.0,float(weight or 0)),
+            "category": str(category or _component_category(name))[:80],
+            "notes": str(notes or '')[:255],
+        })
+
+    for option in (parsed.get('grading_options') or []):
+        if not isinstance(option,dict): continue
+        for comp in (option.get('components') or []):
+            if not isinstance(comp,dict): continue
+            _register(comp.get('name'), comp.get('weight'), comp.get('category'),
+                       notes=f"Weight varies by grading option (e.g. {option.get('option_name') or 'an alternate scheme'}).")
+
+    for rule in (parsed.get('selection_rules') or []):
+        if not isinstance(rule,dict): continue
+        members=rule.get('components') or []
+        keep=rule.get('keep'); rtype=str(rule.get('type') or '').lower()
+        output_name=rule.get('output_component') or (members[0] if members else 'this group')
+        if rtype=='drop_lowest':
+            drop=rule.get('drop')
+            note=f"Counts toward {output_name} — the lowest {drop or ''} of {len(members)} is dropped.".replace('  ',' ')
+        elif rtype in ('best_n_of_m','select_best'):
+            note=f"Counts toward {output_name} — best {keep or ''} of {len(members)} counts.".replace('  ',' ')
+        else:
+            note=f"Counts toward {output_name}."
+        for member_name in members:
+            _register(member_name, 0.0, None, notes=note)
+
+    for minimum in (parsed.get('component_minimums') or []):
+        if isinstance(minimum,dict):
+            _register(minimum.get('name'), 0.0, None, notes='Required minimum applies to this component.')
+
     for comp in sync_components:
         row_entry=GradeEntry(
             id=uuid4().hex,user_id=current_user.id,course_full=course,
@@ -3475,6 +3581,7 @@ OUTLINE:
             weight=float(comp.get('weight') or 0),score=None,
             max_score=float(comp.get('default_max') or 100),
             category=str(comp.get('category') or _component_category(comp.get('name')))[:80],
+            notes=str(comp.get('notes') or '')[:255],
         )
         db.session.add(row_entry)
     # Keep only the outline that produced the active profile when this was a manual upload.
