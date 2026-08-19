@@ -980,10 +980,17 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2):
     last_error = None
     for model in models:
         endpoint = ("https://generativelanguage.googleapis.com/v1beta/models/" + urllib.parse.quote(model, safe='') + ":generateContent?key=" + urllib.parse.quote(api_key, safe=''))
-        for attempt in range(3):
+        # Structured JSON responses of this size normally return in a few
+        # seconds. A 90s timeout x 3 attempts x 5 model candidates gave a
+        # worst-case of ~22 minutes for a SINGLE call in this pipeline, which
+        # runs 3 of these sequentially -- easily explaining multi-minute
+        # stalls on any transient rate limit or slow model. Tightening this
+        # only shrinks the failure-path ceiling; a normal successful call
+        # still returns immediately regardless of the timeout value.
+        for attempt in range(2):
             try:
                 req = urllib.request.Request(endpoint, data=json.dumps(body).encode('utf-8'), headers={"Content-Type":"application/json"}, method='POST')
-                with urllib.request.urlopen(req, timeout=90) as response:
+                with urllib.request.urlopen(req, timeout=30) as response:
                     result = json.loads(response.read().decode('utf-8'))
                 parts = ((((result.get('candidates') or [{}])[0].get('content') or {}).get('parts')) or [])
                 text_value = "\n".join(p.get('text','') for p in parts if isinstance(p,dict)).strip()
@@ -994,7 +1001,7 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2):
             except urllib.error.HTTPError as exc:
                 detail = _gemini_http_detail(exc)
                 last_error = RuntimeError(f"{model}: HTTP {exc.code}: {detail}")
-                if exc.code in (429, 500, 502, 503, 504) and attempt < 2:
+                if exc.code in (429, 500, 502, 503, 504) and attempt < 1:
                     time.sleep(1.5 * (attempt + 1))
                     continue
                 # 400/403/404 usually means this specific model is unavailable
@@ -1002,7 +1009,7 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2):
                 break
             except (urllib.error.URLError, TimeoutError) as exc:
                 last_error = exc
-                if attempt < 2:
+                if attempt < 1:
                     time.sleep(1.5 * (attempt + 1))
                     continue
                 break
@@ -1627,10 +1634,17 @@ def _gemini_image_to_outline_text(raw, mime_type):
     for model in models:
         endpoint=("https://generativelanguage.googleapis.com/v1beta/models/"+
                   urllib.parse.quote(model,safe='')+":generateContent?key="+urllib.parse.quote(api_key,safe=''))
-        for attempt in range(3):
+        # Same reasoning as the text pipeline: a 120s timeout x 3 attempts x 5
+        # model candidates gave a worst-case of ~30 minutes for reading a
+        # single screenshot, before the 3-call facts/compile/audit pipeline
+        # even starts. Image OCR genuinely can take a little longer than a
+        # pure-text call, so this keeps a more generous timeout than the text
+        # pipeline, but still caps the failure-path ceiling hard. A normal
+        # successful read still completes in a few seconds either way.
+        for attempt in range(2):
             try:
                 req=urllib.request.Request(endpoint,data=json.dumps(body).encode('utf-8'),headers={'Content-Type':'application/json'},method='POST')
-                with urllib.request.urlopen(req,timeout=120) as response:
+                with urllib.request.urlopen(req,timeout=45) as response:
                     result=json.loads(response.read().decode('utf-8'))
                 parts=((((result.get('candidates') or [{}])[0].get('content') or {}).get('parts')) or [])
                 text_value='\n'.join(x.get('text','') for x in parts if isinstance(x,dict)).strip()
@@ -1640,12 +1654,12 @@ def _gemini_image_to_outline_text(raw, mime_type):
             except urllib.error.HTTPError as exc:
                 detail=_gemini_http_detail(exc)
                 last_error=RuntimeError(f'{model}: HTTP {exc.code}: {detail}')
-                if exc.code in (429,500,502,503,504) and attempt<2:
+                if exc.code in (429,500,502,503,504) and attempt<1:
                     time.sleep(1.5*(attempt+1)); continue
                 break
             except (urllib.error.URLError,TimeoutError,ValueError) as exc:
                 last_error=exc
-                if attempt<2:
+                if attempt<1:
                     time.sleep(1.5*(attempt+1)); continue
                 break
     raise RuntimeError(f'Gemini Vision could not read the screenshot: {last_error or "unknown error"}')
