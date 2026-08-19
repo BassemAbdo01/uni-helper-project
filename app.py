@@ -2857,6 +2857,14 @@ def _normalize_advanced_grading_model(parsed):
     for key,default in (("selection_rules",[]),("derived_components",[]),("conditional_rules",[]),("scheme_policies",[]),("ambiguities",[])):
         if not isinstance(parsed.get(key),list):
             parsed[key]=default
+    # A "selection rule" (best N of M, drop lowest, etc.) only means something
+    # when there are at least two real items to select among. A degenerate
+    # 1-member rule (e.g. extracted from "Midterms (worth 20%)... if you miss
+    # one, the second helps" when the outline table only lists one "Midterm"
+    # line) isn't selecting anything -- keeping it around just makes the sync
+    # logic synthesize a confusing near-duplicate card (e.g. both "Midterms"
+    # and "Midterm" at the same weight) with no real calculation value.
+    parsed["selection_rules"]=[r for r in parsed["selection_rules"] if isinstance(r,dict) and len(r.get('components') or [])>=2]
     parsed.setdefault("confidence","low")
     parsed.setdefault("accuracy_notice","AI interpretation may not be 100% accurate. Confirm the detected scheme before relying on it.")
     if not isinstance(parsed.get("pass_rules"),list):
@@ -3372,6 +3380,23 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
     )
     final = _normalize_advanced_grading_model(final)
     deterministic = _outline_model_validation(final)
+    def _clean_ambiguity_item(v):
+        """The AI can report an ambiguity as a rich dict ({'topic':..,
+        'description':..}) or a plain string. Keep dicts as dicts so the
+        template can render them properly -- str()-ing a dict here would
+        permanently bake Python's raw repr ("{'topic': 'X', ...}") into
+        storage, which is unreadable and can never be cleaned up downstream.
+        """
+        if isinstance(v, dict):
+            desc = v.get('description') or v.get('message') or v.get('detail')
+            topic = v.get('topic') or v.get('title') or ''
+            if desc:
+                return {'topic': str(topic), 'description': str(desc)}
+            parts = [str(x) for x in v.values() if x]
+            joined = ' — '.join(parts)
+            return joined.strip() or None
+        text = str(v).strip()
+        return text or None
     ambiguities = []
     for key in (
         "missing_facts",
@@ -3382,14 +3407,25 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
     ):
         vals = audit.get(key) if isinstance(audit, dict) else []
         if isinstance(vals, list):
-            ambiguities.extend(str(v) for v in vals if str(v).strip())
+            for v in vals:
+                cleaned = _clean_ambiguity_item(v)
+                if cleaned:
+                    ambiguities.append(cleaned)
     ambiguities.extend(deterministic)
-    ambiguities.extend(
-        str(v)
-        for v in (facts.get("missing_or_ambiguous_information") or [])
-        if str(v).strip()
-    )
-    final["ambiguities"] = list(dict.fromkeys(ambiguities))
+    for v in (facts.get("missing_or_ambiguous_information") or []):
+        cleaned = _clean_ambiguity_item(v)
+        if cleaned:
+            ambiguities.append(cleaned)
+    # Dedupe even though some items are unhashable dicts.
+    _seen_ambiguity_sigs = set()
+    _deduped_ambiguities = []
+    for item in ambiguities:
+        sig = json.dumps(item, sort_keys=True) if isinstance(item, dict) else item
+        if sig in _seen_ambiguity_sigs:
+            continue
+        _seen_ambiguity_sigs.add(sig)
+        _deduped_ambiguities.append(item)
+    final["ambiguities"] = _deduped_ambiguities
     try:
         score = float(audit.get("confidence_score") or 0)
     except Exception:
@@ -3631,12 +3667,13 @@ OUTLINE:
 @app.route("/api/course/<course_code>/outline/correct", methods=["POST"])
 @login_required
 def correct_course_outline_policy(course_code):
-    """Let a student fix a specific detected weight or pass-rule threshold
-    without re-uploading the whole outline. This is intentionally narrow --
-    it only edits values that already exist in the compiled model (component
-    weights, pass-rule minimums, the overall pass mark), never invents new
-    components or rules. A wrong number is common; a wrong structure needs a
-    fresh upload instead, which the outline-replacement flow already covers.
+    """Let a student fix a specific detected value, or a wrongly-extracted
+    component, without re-uploading the whole outline: adjust a weight or
+    pass-rule threshold, remove a component that shouldn't exist (e.g. a
+    duplicate created by a degenerate 1-item selection rule), or add one
+    that's genuinely missing (e.g. a second midterm the AI missed). A wrong
+    structure that's more than a component or two still needs a fresh
+    upload, which the outline-replacement flow already covers.
     """
     course=_normalize_course_code(course_code)
     profile=CourseOutlineProfile.query.filter_by(user_id=current_user.id,course_full=course).first()
@@ -3650,15 +3687,56 @@ def correct_course_outline_policy(course_code):
     component_edits=data.get('components') if isinstance(data.get('components'),dict) else {}
     pass_rule_edits=data.get('pass_rules') if isinstance(data.get('pass_rules'),list) else []
     pass_mark_edit=data.get('pass_mark')
+    remove_names=[str(n) for n in (data.get('remove_components') or []) if str(n).strip()] if isinstance(data.get('remove_components'),list) else []
+    add_components=data.get('add_components') if isinstance(data.get('add_components'),list) else []
+
+    def _norm_key(name):
+        return re.sub(r'[^a-z0-9]+',' ',str(name or '').lower()).strip()
 
     changed=[]
     components=analysis.get('components') if isinstance(analysis.get('components'),list) else []
+
+    # Removals first, so a removed name can't also match an edit below.
+    remove_keys={_norm_key(n) for n in remove_names}
+    if remove_keys:
+        kept=[c for c in components if isinstance(c,dict) and _norm_key(c.get('name')) not in remove_keys]
+        removed_names=[c.get('name') for c in components if isinstance(c,dict) and _norm_key(c.get('name')) in remove_keys]
+        if removed_names:
+            changed.append(f"Removed: {', '.join(str(n) for n in removed_names)}")
+        components=kept
+        # Strip dangling references so the grading engine never tries to
+        # evaluate a rule against a component that no longer exists.
+        for rule in analysis.get('selection_rules') or []:
+            if isinstance(rule,dict) and isinstance(rule.get('components'),list):
+                rule['components']=[m for m in rule['components'] if _norm_key(m) not in remove_keys]
+        for option in analysis.get('grading_options') or []:
+            if isinstance(option,dict) and isinstance(option.get('components'),list):
+                option['components']=[c for c in option['components'] if isinstance(c,dict) and _norm_key(c.get('name')) not in remove_keys]
+
+    # Additions.
+    existing_keys={_norm_key(c.get('name')) for c in components if isinstance(c,dict)}
+    for item in add_components:
+        if not isinstance(item,dict): continue
+        name=str(item.get('name') or '').strip()
+        if not name: continue
+        key=_norm_key(name)
+        if not key or key in existing_keys:
+            continue
+        try:
+            weight=max(0.0,min(100.0,float(item.get('weight') or 0)))
+        except (TypeError,ValueError):
+            weight=0.0
+        components.append({"name":name[:255],"weight":weight,"category":str(item.get('category') or _component_category(name))[:80]})
+        existing_keys.add(key)
+        changed.append(f"Added: {name} ({weight}%)")
+
+    # Weight edits on whatever components remain.
     for comp in components:
         if not isinstance(comp,dict): continue
         name=str(comp.get('name') or '')
-        key=re.sub(r'[^a-z0-9]+',' ',name.lower()).strip()
+        key=_norm_key(name)
         for edit_name,edit_weight in component_edits.items():
-            if re.sub(r'[^a-z0-9]+',' ',str(edit_name).lower()).strip()==key:
+            if _norm_key(edit_name)==key:
                 try:
                     new_weight=max(0.0,min(100.0,float(edit_weight)))
                 except (TypeError,ValueError):
@@ -3666,6 +3744,8 @@ def correct_course_outline_policy(course_code):
                 if round(new_weight,2)!=round(float(comp.get('weight') or 0),2):
                     changed.append(f"{name}: {comp.get('weight')}% → {new_weight}%")
                 comp['weight']=new_weight
+
+    analysis['components']=components
 
     pass_rules=analysis.get('pass_rules') if isinstance(analysis.get('pass_rules'),list) else []
     for edit in pass_rule_edits:
@@ -3708,16 +3788,27 @@ def correct_course_outline_policy(course_code):
     except Exception: pass
     profile.updated_at=datetime.utcnow()
 
-    # Keep the enterable grade cards' weight badges in sync with the correction
-    # immediately, without touching any marks the student has already entered.
+    # Sync GradeEntry rows to match: update weights, delete removed
+    # components' rows (only if that mark was never actually entered, to
+    # avoid silently destroying a real recorded grade), and create rows for
+    # newly added components.
     rows=GradeEntry.query.filter_by(user_id=current_user.id,course_full=course).all()
-    row_map={re.sub(r'[^a-z0-9]+',' ',str(r.name or '').lower()).strip():r for r in rows}
+    row_map={_norm_key(r.name):r for r in rows}
+    for key in remove_keys:
+        row=row_map.get(key)
+        if row is not None and row.score is None:
+            db.session.delete(row)
     for comp in components:
         if not isinstance(comp,dict): continue
-        key=re.sub(r'[^a-z0-9]+',' ',str(comp.get('name') or '').lower()).strip()
+        key=_norm_key(comp.get('name'))
         row=row_map.get(key)
         if row is not None:
             row.weight=float(comp.get('weight') or 0)
+        else:
+            db.session.add(GradeEntry(id=uuid4().hex,user_id=current_user.id,course_full=course,
+                                       name=str(comp.get('name') or 'Assessment')[:255],
+                                       weight=float(comp.get('weight') or 0),score=None,max_score=100.0,
+                                       category=str(comp.get('category') or 'assessment')[:80]))
     db.session.commit()
     return jsonify({'ok':True,'changed':changed})
 
