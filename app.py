@@ -3043,6 +3043,14 @@ def _decorate_grade_result(user_id, analysis, grade):
     prerequisite_rules=[r for r in letter_results if r.get('scope')=='prerequisite']
     return {"letter_grade":letter,"grading_scale_name":scale_profile.get("university_name") or "Your grading scale","grading_scale_configured":scale_profile.get("configured",False),"letter_rule_results":letter_results,"course_letter_rules_passed":all(r.get("passed") is True for r in course_pass_rules) if course_pass_rules else True,"prerequisite_eligibility":prerequisite_rules}
 
+def _fail_letter(user_id):
+    """The letter to display when the official status is FAIL, regardless of
+    the numeric grade — a mandatory-rule failure (e.g. attendance) must never
+    be shown alongside a passing letter like A+."""
+    profile=_get_user_grading_scale(user_id)
+    scale=profile.get("scale") or []
+    return scale[-1]["letter"] if scale else "F"
+
 @app.route("/api/course/<course_code>/grade-outcomes", methods=["POST"])
 @login_required
 def grade_outcomes(course_code):
@@ -3103,6 +3111,8 @@ def grade_outcomes(course_code):
         decorated=_decorate_grade_result(current_user.id,analysis,official_grade)
         if official_grade is not None and not decorated['course_letter_rules_passed']:
             official_status='FAIL'
+        if official_status=='FAIL':
+            decorated['letter_grade']=_fail_letter(current_user.id)
         return jsonify({
             'mode':'multiple_options','target':target,'options':evaluated,'best_option':best,
             'official_grade':official_grade,'official_status':official_status,'pass_rules':rule_results,
@@ -3141,6 +3151,8 @@ def grade_outcomes(course_code):
         if final_min is not None: required_final=max(required_final,float(final_min))
     decorated=_decorate_grade_result(current_user.id,analysis,official_grade)
     official_status='INCOMPLETE' if official_grade is None else ('PASS' if pass_ok and decorated['course_letter_rules_passed'] else 'FAIL')
+    if official_status=='FAIL':
+        decorated['letter_grade']=_fail_letter(current_user.id)
     return jsonify({'mode':'single_scheme','target':target,'official_grade':official_grade,'official_status':official_status,'pass_rules':rule_results,'earned_course_points':round(earned,2),'completed_weight':round(completed_weight,2),'remaining_weight':round(remaining,2),'current_on_completed':round(current_on_completed,2),'needed_average':None if needed_average is None else round(needed_average,2),'required_final':None if required_final is None else round(required_final,2),'best_possible':round((earned+remaining)/scheme_total*100,2) if scheme_total else 0,'worst_possible':round(earned/scheme_total*100,2) if scheme_total else 0,**decorated})
 
 
