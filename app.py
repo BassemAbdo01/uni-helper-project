@@ -1351,7 +1351,7 @@ def _canonical_component_name(raw):
                 canonical=f"{canonical} {qualifier.group(0)}"
             return canonical
     # Generic table label fallback, but reject sentence fragments.
-    raw=re.split(r'\b(?:closed\s+book|open\s+book|tentatively|scheduled|due|weekend|description)\b',raw,1,flags=re.I)[0].strip(' :-–—.,;')
+    raw=re.split(r'\b(?:closed\s+book|open\s+book|tentatively|scheduled|due|weekend|description)\b',raw,maxsplit=1,flags=re.I)[0].strip(' :-–—.,;')
     return raw[:80] if _looks_like_grading_label(raw) else ''
 
 
