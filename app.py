@@ -1313,6 +1313,31 @@ def _grading_section_candidates(text_value):
     return out
 
 
+
+def _component_keys_match(key, other):
+    """True when two normalised component keys denote the same assessment.
+
+    Loose containment is deliberate: a rule often names a component more
+    briefly than the outline did ("Labs" vs "Labs (all 5 count)"), and those
+    must resolve to one card instead of two.
+
+    Numbered siblings are the exception. Plain containment made "Lab 1" match
+    "Lab 10", so in a numbered group every member past 9 was silently dropped
+    -- a "best 10 of 13" rule produced only 9 enterable labs, making the rule
+    impossible to satisfy. When both keys end in a number they are the same
+    component only if stem and number both match.
+    """
+    if not key or not other:
+        return False
+    if key == other:
+        return True
+    a = re.match(r'^(.*?)\s*(\d+)$', key)
+    b = re.match(r'^(.*?)\s*(\d+)$', other)
+    if a and b:
+        return a.group(1) == b.group(1) and a.group(2) == b.group(2)
+    return key in other or other in key
+
+
 def _canonical_component_name(raw):
     raw=' '.join(str(raw or '').replace('|',' ').split()).strip(' :-–—.,;')
     raw=re.sub(r'^(?:item|component|assessment|description|weight|percentage)\s+','',raw,flags=re.I)
@@ -3875,7 +3900,7 @@ OUTLINE:
         # zero-weight "Labs" card next to the real one. Match the same way
         # _find_grade_row/_group_percent already do everywhere else in this
         # file: containment in either direction counts as the same component.
-        if key in existing_keys or any(key in k or k in key for k in existing_keys):
+        if key in existing_keys or any(_component_keys_match(key, k) for k in existing_keys):
             return
         existing_keys.add(key)
         sync_components.append({
