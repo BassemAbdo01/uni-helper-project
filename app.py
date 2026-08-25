@@ -1338,6 +1338,75 @@ def _component_keys_match(key, other):
     return key in other or other in key
 
 
+
+_GROUP_NOTE_RE = re.compile(r'^Counts toward\s+(.+?)\s*(?:—|--|\.|$)\s*(.*)$', re.I)
+_REQUIREMENT_NOTE = 'required minimum applies'
+
+
+def _parse_group_note(notes):
+    """Pull the parent name and rule summary out of a group-member note.
+
+    Members are tagged at registration time with notes like
+    "Counts toward Labs — best 10 of 13 counts." Returns
+    (parent_name, rule_text) or (None, '').
+    """
+    m = _GROUP_NOTE_RE.match(str(notes or '').strip())
+    if not m:
+        return None, ''
+    return (m.group(1) or '').strip(' .'), (m.group(2) or '').strip(' .')
+
+
+def _group_grade_entries(entries):
+    """Fold group members underneath the component they count toward.
+
+    The calculator used to render every registered component as an equal
+    full-size card, so an outline with 13 labs and 6 quizzes produced a wall
+    of 21 boxes with no indication that most of them rolled up into two.
+
+    Returns a list of dicts with:
+      kind      'group' | 'single' | 'requirement'
+      parent    the GradeEntry the card is built from
+      children  member entries, empty for non-groups
+      rule      human-readable selection rule, e.g. "best 10 of 13 counts"
+    """
+    entries = list(entries or [])
+    members = {}          # parent key -> [child entries]
+    rules = {}            # parent key -> rule text
+    child_ids = set()
+
+    for e in entries:
+        parent_name, rule_text = _parse_group_note(getattr(e, 'notes', ''))
+        if not parent_name or float(getattr(e, 'weight', 0) or 0) >= 0.05:
+            continue
+        for candidate in entries:
+            if candidate is e:
+                continue
+            if _component_keys_match(
+                re.sub(r'[^a-z0-9]+', ' ', parent_name.lower()).strip(),
+                re.sub(r'[^a-z0-9]+', ' ', str(candidate.name or '').lower()).strip(),
+            ):
+                members.setdefault(candidate.id, []).append(e)
+                rules.setdefault(candidate.id, rule_text)
+                child_ids.add(e.id)
+                break
+
+    groups = []
+    for e in entries:
+        if e.id in child_ids:
+            continue
+        kids = members.get(e.id) or []
+        if kids:
+            groups.append({'kind': 'group', 'parent': e, 'children': kids,
+                           'rule': rules.get(e.id, '')})
+            continue
+        notes = str(getattr(e, 'notes', '') or '').lower()
+        if _REQUIREMENT_NOTE in notes and float(getattr(e, 'weight', 0) or 0) < 0.05:
+            groups.append({'kind': 'requirement', 'parent': e, 'children': [], 'rule': ''})
+            continue
+        groups.append({'kind': 'single', 'parent': e, 'children': [], 'rule': ''})
+    return groups
+
+
 def _canonical_component_name(raw):
     raw=' '.join(str(raw or '').replace('|',' ').split()).strip(' :-–—.,;')
     raw=re.sub(r'^(?:item|component|assessment|description|weight|percentage)\s+','',raw,flags=re.I)
@@ -2788,6 +2857,7 @@ def course_workspace(course_code):
         announcements=announcements,
         course_outlines=course_outlines,
         grade_entries=grade_entries,
+        grade_groups=_group_grade_entries(grade_entries),
         outline_profile=outline_profile,
         study_artifacts=study_artifacts,
         outline_analysis=outline_analysis,
