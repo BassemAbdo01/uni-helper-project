@@ -924,7 +924,7 @@ def landing():
 
 
 
-def _gemini_model_candidates(vision=False):
+def _gemini_model_candidates(vision=False, reasoning=False):
     """Return resilient Gemini model candidates, newest stable first.
 
     Environment values are honored first, but the app always includes current
@@ -944,6 +944,16 @@ def _gemini_model_candidates(vision=False):
         "gemini-flash-latest",
         "gemini-flash-lite-latest",
     ]
+    if reasoning:
+        # Outline analysis is the one task where reasoning quality decides
+        # whether a student is shown a correct grade. Prefer Pro-tier models
+        # and fall back to flash only if the key cannot serve them at all.
+        env_reasoning = os.environ.get("GEMINI_REASONING_MODEL", "").strip()
+        defaults = [m for m in [
+            env_reasoning,
+            "gemini-3.6-pro",
+            "gemini-pro-latest",
+        ] if m] + defaults
     result = []
     for model in [*env_names, *defaults]:
         model = (model or "").strip()
@@ -962,12 +972,12 @@ def _gemini_http_detail(exc):
     return re.sub(r"\s+", " ", message)[:500]
 
 
-def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2):
+def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2, reasoning=False, used_model=None):
     """Call Gemini for strict JSON with retries and a model fallback on transient 5xx errors."""
     api_key = (os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip())
     if not api_key:
         raise RuntimeError("Gemini is not configured")
-    models = _gemini_model_candidates(vision=False)
+    models = _gemini_model_candidates(vision=False, reasoning=reasoning)
     body = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -997,6 +1007,8 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2):
                 if not text_value:
                     raise ValueError('Gemini returned no JSON')
                 text_value = re.sub(r'^```(?:json)?\s*|\s*```$', '', text_value, flags=re.I|re.S).strip()
+                if isinstance(used_model, list):
+                    used_model.append(model)
                 return json.loads(text_value)
             except urllib.error.HTTPError as exc:
                 detail = _gemini_http_detail(exc)
@@ -3647,11 +3659,14 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
         + "\nCOURSE OUTLINE EVIDENCE:\n"
         + excerpt
     )
+    models_used = []
     facts = _gemini_json(
         "You are a forensic academic-policy fact extractor. Never invent missing information.",
         facts_prompt,
         6000,
         0.0,
+        reasoning=True,
+        used_model=models_used,
     )
     compile_prompt = (
         "Compile the extracted facts into an executable grading policy. Use only facts "
@@ -3672,6 +3687,8 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
         compile_prompt,
         7000,
         0.0,
+        reasoning=True,
+        used_model=models_used,
     )
     audit_schema = {
         "approved": False,
@@ -3703,6 +3720,8 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
         audit_prompt,
         7000,
         0.0,
+        reasoning=True,
+        used_model=models_used,
     )
     final = (
         audit.get("corrected_model")
@@ -3711,6 +3730,44 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
     )
     final = _normalize_advanced_grading_model(final)
     deterministic = _outline_model_validation(final)
+    # Deterministic validation already knows when the model is wrong (weights
+    # that do not total 100%, scheme policies pointing at options that do not
+    # exist). Reporting that to the student and stopping there wastes the most
+    # reliable accuracy signal in the pipeline. Feed the concrete failures back
+    # and let the verifier repair them -- keeping the result only when it is
+    # actually better, so a repair attempt can never make the model worse.
+    if deterministic:
+        try:
+            repair_prompt = (
+                "Your compiled grading model failed deterministic validation. Fix ONLY these "
+                "specific problems using the source evidence. Do not restructure anything that "
+                "already validates, and do not invent facts the source does not support.\n"
+                "VALIDATION FAILURES:\n"
+                + json.dumps(deterministic, ensure_ascii=False, indent=2)
+                + "\nCURRENT MODEL:\n"
+                + json.dumps(final, ensure_ascii=False)
+                + "\nSOURCE:\n"
+                + excerpt
+                + "\nReturn strict JSON matching:\n"
+                + json.dumps(schema, ensure_ascii=False, indent=2)
+            )
+            repaired = _gemini_json(
+                "You repair grading policies to satisfy deterministic validation without inventing facts.",
+                repair_prompt,
+                7000,
+                0.0,
+                reasoning=True,
+                used_model=models_used,
+            )
+            if isinstance(repaired, dict):
+                candidate = _normalize_advanced_grading_model(repaired)
+                candidate_issues = _outline_model_validation(candidate)
+                if len(candidate_issues) < len(deterministic):
+                    final, deterministic = candidate, candidate_issues
+        except Exception:
+            # A failed repair leaves the original result untouched; whatever is
+            # still unresolved surfaces as an ambiguity for the student below.
+            pass
     def _clean_ambiguity_item(v):
         """The AI can report an ambiguity as a rich dict ({'topic':..,
         'description':..}) or a plain string. Keep dicts as dicts so the
@@ -3743,6 +3800,15 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
                 if cleaned:
                     ambiguities.append(cleaned)
     ambiguities.extend(deterministic)
+    # The model chain falls back to flash tiers when a Pro model is not
+    # available on this key. That silently lowers reasoning quality on the one
+    # task where it matters most, so say so rather than hiding it.
+    if models_used and not any("pro" in str(m).lower() for m in models_used):
+        ambiguities.append(
+            "Analyzed with " + str(models_used[0]) + " because no Pro-tier Gemini model was "
+            "available for this API key. Accuracy on complex grading schemes is lower than "
+            "usual -- set GEMINI_REASONING_MODEL to a Pro model to restore it."
+        )
     for v in (facts.get("missing_or_ambiguous_information") or []):
         cleaned = _clean_ambiguity_item(v)
         if cleaned:
