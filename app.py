@@ -1313,6 +1313,100 @@ def _grading_section_candidates(text_value):
     return out
 
 
+
+def _component_keys_match(key, other):
+    """True when two normalised component keys denote the same assessment.
+
+    Loose containment is deliberate: a rule often names a component more
+    briefly than the outline did ("Labs" vs "Labs (all 5 count)"), and those
+    must resolve to one card instead of two.
+
+    Numbered siblings are the exception. Plain containment made "Lab 1" match
+    "Lab 10", so in a numbered group every member past 9 was silently dropped
+    -- a "best 10 of 13" rule produced only 9 enterable labs, making the rule
+    impossible to satisfy. When both keys end in a number they are the same
+    component only if stem and number both match.
+    """
+    if not key or not other:
+        return False
+    if key == other:
+        return True
+    a = re.match(r'^(.*?)\s*(\d+)$', key)
+    b = re.match(r'^(.*?)\s*(\d+)$', other)
+    if a and b:
+        return a.group(1) == b.group(1) and a.group(2) == b.group(2)
+    return key in other or other in key
+
+
+
+_GROUP_NOTE_RE = re.compile(r'^Counts toward\s+(.+?)\s*(?:—|--|\.|$)\s*(.*)$', re.I)
+_REQUIREMENT_NOTE = 'required minimum applies'
+
+
+def _parse_group_note(notes):
+    """Pull the parent name and rule summary out of a group-member note.
+
+    Members are tagged at registration time with notes like
+    "Counts toward Labs — best 10 of 13 counts." Returns
+    (parent_name, rule_text) or (None, '').
+    """
+    m = _GROUP_NOTE_RE.match(str(notes or '').strip())
+    if not m:
+        return None, ''
+    return (m.group(1) or '').strip(' .'), (m.group(2) or '').strip(' .')
+
+
+def _group_grade_entries(entries):
+    """Fold group members underneath the component they count toward.
+
+    The calculator used to render every registered component as an equal
+    full-size card, so an outline with 13 labs and 6 quizzes produced a wall
+    of 21 boxes with no indication that most of them rolled up into two.
+
+    Returns a list of dicts with:
+      kind      'group' | 'single' | 'requirement'
+      parent    the GradeEntry the card is built from
+      children  member entries, empty for non-groups
+      rule      human-readable selection rule, e.g. "best 10 of 13 counts"
+    """
+    entries = list(entries or [])
+    members = {}          # parent key -> [child entries]
+    rules = {}            # parent key -> rule text
+    child_ids = set()
+
+    for e in entries:
+        parent_name, rule_text = _parse_group_note(getattr(e, 'notes', ''))
+        if not parent_name or float(getattr(e, 'weight', 0) or 0) >= 0.05:
+            continue
+        for candidate in entries:
+            if candidate is e:
+                continue
+            if _component_keys_match(
+                re.sub(r'[^a-z0-9]+', ' ', parent_name.lower()).strip(),
+                re.sub(r'[^a-z0-9]+', ' ', str(candidate.name or '').lower()).strip(),
+            ):
+                members.setdefault(candidate.id, []).append(e)
+                rules.setdefault(candidate.id, rule_text)
+                child_ids.add(e.id)
+                break
+
+    groups = []
+    for e in entries:
+        if e.id in child_ids:
+            continue
+        kids = members.get(e.id) or []
+        if kids:
+            groups.append({'kind': 'group', 'parent': e, 'children': kids,
+                           'rule': rules.get(e.id, '')})
+            continue
+        notes = str(getattr(e, 'notes', '') or '').lower()
+        if _REQUIREMENT_NOTE in notes and float(getattr(e, 'weight', 0) or 0) < 0.05:
+            groups.append({'kind': 'requirement', 'parent': e, 'children': [], 'rule': ''})
+            continue
+        groups.append({'kind': 'single', 'parent': e, 'children': [], 'rule': ''})
+    return groups
+
+
 def _canonical_component_name(raw):
     raw=' '.join(str(raw or '').replace('|',' ').split()).strip(' :-–—.,;')
     raw=re.sub(r'^(?:item|component|assessment|description|weight|percentage)\s+','',raw,flags=re.I)
@@ -2763,6 +2857,7 @@ def course_workspace(course_code):
         announcements=announcements,
         course_outlines=course_outlines,
         grade_entries=grade_entries,
+        grade_groups=_group_grade_entries(grade_entries),
         outline_profile=outline_profile,
         study_artifacts=study_artifacts,
         outline_analysis=outline_analysis,
@@ -3875,7 +3970,7 @@ OUTLINE:
         # zero-weight "Labs" card next to the real one. Match the same way
         # _find_grade_row/_group_percent already do everywhere else in this
         # file: containment in either direction counts as the same component.
-        if key in existing_keys or any(key in k or k in key for k in existing_keys):
+        if key in existing_keys or any(_component_keys_match(key, k) for k in existing_keys):
             return
         existing_keys.add(key)
         sync_components.append({
