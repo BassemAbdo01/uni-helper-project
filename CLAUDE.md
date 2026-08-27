@@ -76,6 +76,24 @@ Gotchas that have already bitten:
 
 ## Outline analysis
 
+`_outline_schema()` returns the extraction schema; `_outline_analysis_prompt()`
+builds the prompt around it. Keep the schema module-level: it briefly lived
+inside the prompt builder, which put it out of scope for the route that hands
+it to `_high_accuracy_outline_analysis()`. Every analysis raised NameError, the
+broad `except Exception` around the pipeline reported it as "the AI pipeline was
+unavailable", and students got the deterministic parser's near-empty model
+behind a 35% confidence badge. `tests/test_analysis_wiring.py` runs pyflakes
+over `app.py` to catch that class of bug; install it in the venv
+(`pip install pyflakes`), it is not in requirements.txt, and the test skips
+without it.
+
+Known and unfixed: the route builds `prompt` and never sends it. The fourteen
+numbered rules therefore never reach the model on the course-workspace path --
+only the schema dict is passed to the three-stage pipeline. This predates the
+refactor. One visible consequence is that bonus components are excluded on the
+standalone path (rule 3) but survive in the pipeline's output, so a Scheme with
+a 4% bonus totals 104%.
+
 `_outline_analysis_prompt()` is the single prompt builder. Both the course
 workspace and the standalone grade-calculator analyzer call it. They used to
 carry separate copies and drifted badly -- the standalone one had shrunk to

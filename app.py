@@ -3853,17 +3853,16 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
     )
     return final
 
-def _outline_analysis_prompt(text_value, course=''):
-    """Build the outline-extraction prompt shared by every analysis entry point.
+def _outline_schema():
+    """The extraction schema, shared by the prompt builder and the audit pipeline.
 
-    Both the course-workspace analyzer and the standalone grade-calculator
-    analyzer used to carry their own copy of this schema. They drifted: the
-    standalone one shrank to four lines and a components-only schema, so the
-    same outline produced markedly worse results depending on which page the
-    student happened to use. One definition keeps every improvement here from
-    having to be made twice.
+    It lived inside _outline_analysis_prompt for one commit, which put it out
+    of scope for the caller that passes it to _high_accuracy_outline_analysis.
+    That raised NameError on every analysis, and the broad except around the
+    pipeline reported it as "the AI pipeline was unavailable" and fell back to
+    the deterministic parser, so a crash looked like a service outage.
     """
-    outline_schema = {
+    return {
         "course_title": "",
         "pass_mark": 50,
         "final_minimum": None,
@@ -3907,6 +3906,19 @@ def _outline_analysis_prompt(text_value, course=''):
         "ambiguities": [],
         "confidence": "high|medium|low",
     }
+
+
+def _outline_analysis_prompt(text_value, course=''):
+    """Build the outline-extraction prompt shared by every analysis entry point.
+
+    Both the course-workspace analyzer and the standalone grade-calculator
+    analyzer used to carry their own copy of this schema. They drifted: the
+    standalone one shrank to four lines and a components-only schema, so the
+    same outline produced markedly worse results depending on which page the
+    student happened to use. One definition keeps every improvement here from
+    having to be made twice.
+    """
+    outline_schema = _outline_schema()
     prompt = (
         f"Analyze this university course outline for {course}. Return strict JSON matching this schema:\n"
         + json.dumps(outline_schema, ensure_ascii=False, indent=2)
@@ -3978,7 +3990,7 @@ def analyze_course_outline(course_code):
         used_fallback = True
     else:
         try:
-            parsed = _high_accuracy_outline_analysis(course, row.content_text, scale_profile, outline_schema)
+            parsed = _high_accuracy_outline_analysis(course, row.content_text, scale_profile, _outline_schema())
             if not isinstance(parsed,dict): raise ValueError('Invalid outline response')
         except Exception as exc:
             app.logger.exception('High-accuracy outline analysis failed; using deterministic parser: %s', exc)
