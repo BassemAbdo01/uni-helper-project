@@ -3873,23 +3873,16 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
     )
     return final
 
-@app.route("/api/course/<course_code>/outline/analyze", methods=["POST"])
-@login_required
-def analyze_course_outline(course_code):
-    course = _normalize_course_code(course_code)
-    scale_profile = _get_user_grading_scale(current_user.id)
-    if not scale_profile.get("configured"):
-        return jsonify({"error":"Set up and confirm your university grading scale in Settings before analyzing a course outline. Nexora needs it to interpret rules such as C- correctly.","setup_required":"grading_scale"}),428
-    data = request.get_json(silent=True) or {}
-    source_uid = str(data.get('source_uid') or '')
-    query = CourseContent.query.filter_by(user_id=current_user.id, course_full=course)
-    row = query.filter_by(source_uid=source_uid).first() if source_uid else None
-    if not row:
-        row = query.filter(CourseContent.content_type=='outline').order_by(CourseContent.updated_at.desc()).first()
-    if not row:
-        return jsonify({"error":"No course outline has been detected for this course yet."}),404
-    if len((row.content_text or '').strip()) < 200:
-        return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":"Reading the course outline from Brightspace…"}),409
+def _outline_analysis_prompt(text_value, course=''):
+    """Build the outline-extraction prompt shared by every analysis entry point.
+
+    Both the course-workspace analyzer and the standalone grade-calculator
+    analyzer used to carry their own copy of this schema. They drifted: the
+    standalone one shrank to four lines and a components-only schema, so the
+    same outline produced markedly worse results depending on which page the
+    student happened to use. One definition keeps every improvement here from
+    having to be made twice.
+    """
     outline_schema = {
         "course_title": "",
         "pass_mark": 50,
@@ -3949,11 +3942,33 @@ IMPORTANT — read the whole outline before extracting anything:
 12. Detect conditional scheme logic. Example: Scheme 2 is used only if Scheme 1 is C- or higher. Put this in scheme_policies; do not treat an ineligible scheme as the winning result.
 13. Interpret every letter threshold using the student's saved university grading scale, never a hardcoded university scale.
 14. If wording is ambiguous or pages appear missing, list the uncertainty in ambiguities and lower confidence. Never invent missing rules. AI interpretation is not guaranteed to be 100% accurate and the student must confirm the result.
+15. Some outlines move weight between components according to how the student performs, e.g. "if your final exam percentage is higher than your midterm, the midterm weight transfers to the final". Arithmetically that is the same as two alternative schemes with the better result applied, and it must always be expressed that way: put the stated weighting and the transferred weighting in grading_options, keep the top-level components as the stated weighting, and record the triggering condition in rules. Do not invent a separate rule type for it, and never merge the transferred weight into components as though it always applies.
 
 OUTLINE:
 """
-        + _sanitize_extracted_text(row.content_text)[:120000]
+        + _sanitize_extracted_text(text_value)[:120000]
     )
+    return prompt
+
+
+@app.route("/api/course/<course_code>/outline/analyze", methods=["POST"])
+@login_required
+def analyze_course_outline(course_code):
+    course = _normalize_course_code(course_code)
+    scale_profile = _get_user_grading_scale(current_user.id)
+    if not scale_profile.get("configured"):
+        return jsonify({"error":"Set up and confirm your university grading scale in Settings before analyzing a course outline. Nexora needs it to interpret rules such as C- correctly.","setup_required":"grading_scale"}),428
+    data = request.get_json(silent=True) or {}
+    source_uid = str(data.get('source_uid') or '')
+    query = CourseContent.query.filter_by(user_id=current_user.id, course_full=course)
+    row = query.filter_by(source_uid=source_uid).first() if source_uid else None
+    if not row:
+        row = query.filter(CourseContent.content_type=='outline').order_by(CourseContent.updated_at.desc()).first()
+    if not row:
+        return jsonify({"error":"No course outline has been detected for this course yet."}),404
+    if len((row.content_text or '').strip()) < 200:
+        return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":"Reading the course outline from Brightspace…"}),409
+    prompt = _outline_analysis_prompt(row.content_text, course)
     used_fallback=False
     # The deterministic parser is free (no network round-trip) and, by the same
     # override rule applied below, its result wins outright whenever it already
@@ -4947,18 +4962,18 @@ def analyze_outline_generic():
         return jsonify({"success": False, "error": "The outline text is empty or too short.", "components": []}), 400
 
     try:
-        prompt = (
-            "Analyze this university course outline and return strict JSON only:\n"
-            '{"pass_mark":50,"final_minimum":null,"components":[{"name":"Assignments","weight":20,"category":"assignments","notes":""}],"component_minimums":[],"rules":[]}\n'
-            "Extract only genuine grading categories and their weights. Ignore bonus marks. "
-            "Detect any rule requiring a minimum score on the final or another component.\n\n"
-            f"OUTLINE:\n{text[:120000]}"
-        )
+        # Was a four-line prompt with a components-only schema while the course
+        # workspace analyzed the same outline against the full one. Sharing the
+        # builder means selection rules, aggregate minimums and scheme gates are
+        # recognised here too, and reasoning=True matches the tier that decision
+        # deserves on both paths.
+        prompt = _outline_analysis_prompt(text, "COURSE")
         parsed = _gemini_json(
             "You are a precise university course-outline parser. Output only valid JSON.",
             prompt,
             4000,
             0.1,
+            reasoning=True,
         )
     except Exception as exc:
         app.logger.warning("Generic Gemini outline analysis failed; using local parser: %s", exc)

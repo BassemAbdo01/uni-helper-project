@@ -15,6 +15,7 @@ no folder called `nexora`.
 | `static/` | `style.css`, `landing-v6.css`, `nexora-target.css` |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
 | `tests/` | pytest — 31 tests, all passing |
+| `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
 ## Running locally
@@ -73,7 +74,36 @@ Gotchas that have already bitten:
   escape it, so one malformed reply killed every remaining retry and model
   candidate instead of falling through.
 
-Outline-analysis prompts are the weak point, not the model. On a real Carleton
+## Outline analysis
+
+`_outline_analysis_prompt()` is the single prompt builder. Both the course
+workspace and the standalone grade-calculator analyzer call it. They used to
+carry separate copies and drifted badly -- the standalone one had shrunk to
+four lines and a components-only schema, so the same outline scored worse
+depending on which page the student used. Keep it one definition.
+
+Before and after touching that prompt, run the corpus:
+
+```bash
+set -a; . ./.env; set +a
+venv/Scripts/python.exe evals/run_outline_eval.py
+```
+
+Ten outlines, each isolating a different mechanism (dropped marks, overflow
+cap, excluded bonus, hurdle, aggregate minimum, alternative schemes, gated
+scheme, weight transfer, underspecified). Currently 10/10, including on
+flash-lite. Add a case when a new outline shape appears; the corpus is the
+only defence against tuning the prompt to whatever outline is on the desk.
+
+Two cautions learned building it. `_math1104_outline_analysis()` (app.py:1234)
+is a hardcoded parser keyed to four exact phrases from one Winter 2026 syllabus
+-- it is exactly the overfitting this corpus exists to prevent, and it breaks
+the day that outline is reworded. And the eval itself can overfit: the
+weight-transfer case originally demanded `selection_rules` and failed a correct
+answer that had used `grading_options` instead. Check the mechanism is
+represented, not that it took the shape you imagined.
+
+Prompts are the weak point, not the model. On a real Carleton
 outline, flash got all four weights right but dropped a `max of 11.5%` cap the
 prompt never asked for, and flattened a "qualifies for second marking scheme"
 threshold into a hard `component_minimum`. Fix prompts before spending money on
