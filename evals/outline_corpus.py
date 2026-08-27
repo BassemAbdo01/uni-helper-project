@@ -230,4 +230,52 @@ of term and posted to Brightspace at that time.
             "low_confidence": True,
         },
     },
+    {
+        "id": "multi_option_eligibility",
+        "why": "The shape `_math1104_outline_analysis` is hardcoded for. Four schemes whose "
+               "availability depends on how many tests the student actually wrote, selection "
+               "inside each scheme rather than across the outline, a threshold counted in "
+               "tutorials attended rather than percent, and a floor on a single test. Nothing "
+               "here is unique to that course -- multi-option evaluation is common -- so the "
+               "general path should reach it without a course-specific branch.",
+        "text": """
+Evaluation
+
+There are four options for the evaluation in this course. Your grade will be
+computed under every option you are eligible for, and the highest resulting
+grade will be awarded.
+
+Option 1: The course grade will be assigned based on the final exam only.
+  Final Exam                                   100%
+
+Option 2: Best written test, tutorials and final exam.
+  Best of the three written tests               15%
+  Tutorial attendance                            5%
+  Final Exam                                    80%
+
+Option 3: Average of best two written tests, tutorials and final exam.
+  Average of best two written tests             30%
+  Tutorial attendance                            5%
+  Final Exam                                    65%
+
+Option 4: All three written tests, tutorials and final exam.
+  Average of all three written tests            45%
+  Tutorial attendance                            5%
+  Final Exam                                    50%
+
+Options 3 and 4 require that you have written at least two and three of the
+written tests respectively. Each written test is marked out of 50. Tutorial
+attendance is worth 5% and you must attend at least two eligible tutorials.
+
+Regardless of the option used, you must obtain at least 30% on at least one
+written test, at least 30% on the final exam, and at least 50% overall in order
+to pass the course.
+""",
+        "expect": {
+            "components": [("test", 45), ("tutorial", 5), ("final", 50)],
+            "total": 100,
+            "signals": ["grading_options", "component_minimums", "selection_rules"],
+            "options_count": 4,
+        },
+    },
 ]

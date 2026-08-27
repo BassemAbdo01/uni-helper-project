@@ -89,18 +89,34 @@ set -a; . ./.env; set +a
 venv/Scripts/python.exe evals/run_outline_eval.py
 ```
 
-Ten outlines, each isolating a different mechanism (dropped marks, overflow
+Eleven outlines, each isolating a different mechanism (dropped marks, overflow
 cap, excluded bonus, hurdle, aggregate minimum, alternative schemes, gated
-scheme, weight transfer, underspecified). Currently 10/10, including on
-flash-lite. Add a case when a new outline shape appears; the corpus is the
+scheme, weight transfer, underspecified, multi-option with eligibility).
+Currently 11/11. Add a case when a new outline shape appears; the corpus is the
 only defence against tuning the prompt to whatever outline is on the desk.
 
-Two cautions learned building it. `_math1104_outline_analysis()` (app.py:1234)
-is a hardcoded parser keyed to four exact phrases from one Winter 2026 syllabus
--- it is exactly the overfitting this corpus exists to prevent, and it breaks
-the day that outline is reworded. And the eval itself can overfit: the
-weight-transfer case originally demanded `selection_rules` and failed a correct
-answer that had used `grading_options` instead. Check the mechanism is
+A course-specific parser, `_math1104_outline_analysis()`, used to sit in front
+of all of this, gated on four exact sentences from one Winter 2026 syllabus.
+Removing it turned up the same overfitting in two further layers: the shared
+`_evaluate_option()` counted eligibility by looking for grade rows literally
+named `Test 1`..`Test 3`, and `course_workspace.html` rendered an
+`eligibility.minimum_written_tests` key. Because the AI path emitted no
+eligibility at all, option gating had in fact never worked for any other
+course. Options now carry a general
+`{requires_completed, from_components, message}`, and the old key is still read
+so saved analyses keep working. Do not reintroduce a per-course branch; add a
+corpus case instead.
+
+Deleting it also exposed two defects in the deterministic fallback that the
+branch had been masking: `_looks_like_grading_label()` rejected any label
+starting with "the", killing "The average of best two written tests", while
+accepting rule prose like "Students must obtain at least" as a component. Both
+are fixed generally.
+
+The eval itself can overfit too: the weight-transfer case originally demanded
+`selection_rules` and failed a correct answer that had used `grading_options`
+instead, and the multi-option case first failed because its expected component
+list was short, not because the model was wrong. Check the mechanism is
 represented, not that it took the shape you imagined.
 
 Prompts are the weak point, not the model. On a real Carleton

@@ -191,7 +191,7 @@
               {% for option in options %}
               <article class="option-scheme-card"><strong>{{ option.option_name }}</strong><ul>
                 {% for c in option.components %}<li><span>{{ c.source or c.name or c.component or c.label or (c.source_group|join(', ')) or 'Assessment' }}</span><b>{{ c.weight }}%</b></li>{% endfor %}
-              </ul>{% if option.eligibility and option.eligibility.minimum_written_tests %}<small>Requires {{ option.eligibility.minimum_written_tests }} written test(s)</small>{% endif %}</article>
+              </ul>{% if option.eligibility and (option.eligibility.requires_completed or option.eligibility.minimum_written_tests) %}<small>{{ option.eligibility.message or ('Requires ' ~ (option.eligibility.requires_completed or option.eligibility.minimum_written_tests) ~ ' of the listed assessments') }}</small>{% endif %}</article>
               {% endfor %}
             </div>
           </section>

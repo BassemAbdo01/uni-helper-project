@@ -1198,12 +1198,33 @@ _QUALIFIER_ONLY_FRAGMENT = re.compile(
 )
 
 
+_LEADING_ARTICLE = re.compile(r'^(?:the|a|an)\s+', re.I)
+
+
+# Phrases that only occur when a regex has matched part of a sentence stating a
+# requirement, never when it has matched the name of an assessment.
+_RULE_PROSE_FRAGMENT = re.compile(r'\b(?:must|obtain|achieve)\b', re.I)
+
+
 def _looks_like_grading_label(name):
     """Reject sentence-fragment matches that only accidentally look like 'Label ... N%'."""
     lower = name.strip().lower()
     if not lower or len(lower.split()) > 8:
         return False
-    if _JUNK_FRAGMENT_STARTS.match(lower):
+    # Rule prose reliably reads as an instruction to the student rather than as
+    # the name of a thing. Without this, the sentence "Students must obtain at
+    # least 30% from at least one test, ... obtain at least 50% on the total
+    # course grade" contributed two components worth 30% and 50%, which pushed
+    # the option they trailed past any sane weight total and silently discarded
+    # the whole option.
+    if _RULE_PROSE_FRAGMENT.search(lower):
+        return False
+    # A leading article is ordinary in a real label -- "The average of best two
+    # written tests" -- but 'the' sits in the junk-start list because fragments
+    # often open with it too. Judge the phrase after the article so a genuine
+    # name is not thrown away for its first word.
+    stripped = _LEADING_ARTICLE.sub('', lower, count=1).strip() or lower
+    if _JUNK_FRAGMENT_STARTS.match(stripped):
         return False
     if any(x in lower for x in ['bonus', 'mentorship', 'claim your', 'awarded the', 'earn your', 'quiz to earn']):
         return False
@@ -1229,54 +1250,6 @@ def _component_category(name):
     if 'quiz' in lower: return 'quiz'
     if 'project' in lower: return 'project'
     return 'assessment'
-
-
-def _math1104_outline_analysis(text_value, course=''):
-    """Exact deterministic model for the MATH 1104/1107 Winter 2026 multi-option outline."""
-    text=_sanitize_extracted_text(text_value)
-    signatures=[
-        'four options for the evaluation in this course',
-        'option 1: the course grade will be assigned based on the final exam only',
-        'average of best two written tests',
-        'attend at least two tutorials',
-    ]
-    if not all(x in text.lower() for x in signatures):
-        return None
-    inputs=[
-        {'name':'Test 1','weight':0,'category':'test','default_max':50,'input_label':'Test 1 result','notes':'Enter your earned marks out of 50, or use 30/100 if you prefer a percentage.'},
-        {'name':'Test 2','weight':0,'category':'test','default_max':50,'input_label':'Test 2 result','notes':'Leave blank if not written.'},
-        {'name':'Test 3','weight':0,'category':'test','default_max':50,'input_label':'Test 3 result','notes':'Leave blank if not written.'},
-        {'name':'Tutorial attendance','weight':5,'category':'attendance','default_max':5,'input_label':'Tutorials attended','notes':'Enter the number of eligible tutorials attended, from 0 to 5.'},
-        {'name':'Final Exam','weight':0,'category':'final','default_max':100,'input_label':'Final exam result','notes':'Enter the final exam mark out of 100.'},
-    ]
-    options=[
-        {'option_name':'Option 1 — Final exam only','eligibility':{'minimum_written_tests':1},'components':[{'source':'Final Exam','method':'direct','weight':100}]},
-        {'option_name':'Option 2 — Best test','eligibility':{'minimum_written_tests':1},'components':[{'source_group':['Test 1','Test 2','Test 3'],'method':'best','count':1,'weight':15},{'source':'Tutorial attendance','method':'direct','weight':5},{'source':'Final Exam','method':'direct','weight':80}]},
-        {'option_name':'Option 3 — Best two tests','eligibility':{'minimum_written_tests':2},'components':[{'source_group':['Test 1','Test 2','Test 3'],'method':'best_average','count':2,'weight':30},{'source':'Tutorial attendance','method':'direct','weight':5},{'source':'Final Exam','method':'direct','weight':65}]},
-        {'option_name':'Option 4 — All three tests','eligibility':{'minimum_written_tests':3},'components':[{'source_group':['Test 1','Test 2','Test 3'],'method':'average','count':3,'weight':45},{'source':'Tutorial attendance','method':'direct','weight':5},{'source':'Final Exam','method':'direct','weight':50}]},
-    ]
-    rules=[
-        {'type':'any_component_minimum','components':['Test 1','Test 2','Test 3'],'minimum_percent':30,'message':'At least one written test must be 30% or higher.'},
-        {'type':'component_minimum','component':'Final Exam','minimum_percent':30,'message':'The final exam must be 30% or higher.'},
-        {'type':'overall_minimum','minimum_percent':50,'message':'The total course grade must be 50% or higher.'},
-        {'type':'raw_minimum','component':'Tutorial attendance','minimum_raw':2,'message':'At least two eligible tutorials must be attended.'},
-    ]
-    return {
-        'course_title':course or 'MATH 1104F / MATH 1107F',
-        'pass_mark':50.0,
-        'final_minimum':30.0,
-        'components':inputs,
-        'input_components':inputs,
-        'grading_options':options,
-        'pass_rules':rules,
-        'component_minimums':[{'name':'Final Exam','minimum':30,'consequence':'Fail the course if the final exam is below 30%'}],
-        'rules':[r['message'] for r in rules],
-        'important_dates':[],
-        'confidence':'high',
-        'total_weight':100.0,
-        'multiple_options':True,
-        'best_option_policy':'Calculate every eligible option and use the highest valid course grade.',
-    }
 
 
 def _extract_generic_options(text_value):
@@ -1573,8 +1546,6 @@ def _extract_generic_options(text_value):
 
 def _local_outline_analysis(text_value, course=''):
     """Section-aware deterministic parser for ordinary and multi-option outlines."""
-    special=_math1104_outline_analysis(text_value,course)
-    if special: return special
     text=_strip_bonus_sections(_sanitize_extracted_text(text_value))
     options=_extract_generic_options(text)
     best=[]; best_score=-1
@@ -3106,12 +3077,21 @@ def _evaluate_option(option,row_map,final_override=None,analysis=None):
     analysis=analysis or {}
     virtual=_apply_selection_rules(analysis,row_map)
     eligibility=option.get('eligibility') or {}
-    test_rows=[_find_grade_row(row_map,f'Test {i}') for i in (1,2,3)]
-    written=sum(1 for r in test_rows if r and r.score is not None)
-    min_written=int(eligibility.get('minimum_written_tests') or 0)
-    eligible=written>=min_written
+    # An option is often only open to a student who actually sat some number of
+    # a group of assessments. The group used to be hardcoded as 'Test 1'..'Test
+    # 3', which matched exactly one course's outline; every other multi-option
+    # course found no such rows, counted zero against a threshold of zero, and
+    # was silently treated as eligible. from_components names the group so any
+    # outline can express the rule. minimum_written_tests is still honoured so
+    # analyses saved before this change keep working.
+    required=int(eligibility.get('requires_completed') or eligibility.get('minimum_written_tests') or 0)
+    sources=[str(x) for x in (eligibility.get('from_components') or []) if str(x).strip()]
+    if not sources:
+        sources=[f'Test {i}' for i in (1,2,3)]
+    completed=sum(1 for source in sources if (lambda r: r and r.score is not None)(_find_grade_row(row_map,source)))
+    eligible=completed>=required
     if not eligible:
-        missing.append(f'Requires at least {min_written} written test(s); {written} entered.')
+        missing.append(eligibility.get('message') or f'Requires at least {required} of {len(sources)} listed assessment(s); {completed} entered.')
     for comp in option.get('components') or []:
         weight=float(comp.get('weight') or 0)
         method=str(comp.get('method') or 'direct')
@@ -3900,6 +3880,11 @@ def _outline_analysis_prompt(text_value, course=''):
                 "components": [
                     {"name": "Final Exam", "weight": 100, "category": "final", "notes": ""}
                 ],
+                "eligibility": {
+                    "requires_completed": 2,
+                    "from_components": ["Test 1", "Test 2", "Test 3"],
+                    "message": "Requires at least two written tests to have been sat.",
+                },
             }
         ],
         "important_dates": [],
@@ -3943,6 +3928,7 @@ IMPORTANT — read the whole outline before extracting anything:
 13. Interpret every letter threshold using the student's saved university grading scale, never a hardcoded university scale.
 14. If wording is ambiguous or pages appear missing, list the uncertainty in ambiguities and lower confidence. Never invent missing rules. AI interpretation is not guaranteed to be 100% accurate and the student must confirm the result.
 15. Some outlines move weight between components according to how the student performs, e.g. "if your final exam percentage is higher than your midterm, the midterm weight transfers to the final". Arithmetically that is the same as two alternative schemes with the better result applied, and it must always be expressed that way: put the stated weighting and the transferred weighting in grading_options, keep the top-level components as the stated weighting, and record the triggering condition in rules. Do not invent a separate rule type for it, and never merge the transferred weight into components as though it always applies.
+16. An alternative scheme is sometimes open only to students who actually sat some number of a group of assessments, e.g. "options 3 and 4 require that you have written at least two and three of the written tests respectively". Record that on the option itself as eligibility, naming the group in from_components using the same component names you used elsewhere, the count in requires_completed, and a plain-language message. Leave eligibility off an option that every student can use. This is about whether an option is available at all, which is not the same as a minimum mark inside it -- a mark floor belongs in component_minimums.
 
 OUTLINE:
 """
