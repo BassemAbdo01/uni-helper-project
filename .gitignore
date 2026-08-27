@@ -8,3 +8,4 @@ brightspace_feed_url.txt
 .env
 instance/
 .idea/
+.claude/

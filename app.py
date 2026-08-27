@@ -949,10 +949,13 @@ def _gemini_model_candidates(vision=False, reasoning=False):
         # whether a student is shown a correct grade. Prefer Pro-tier models
         # and fall back to flash only if the key cannot serve them at all.
         env_reasoning = os.environ.get("GEMINI_REASONING_MODEL", "").strip()
+        # "gemini-3.6-pro" is not a real model ID -- it 404s on every call and
+        # silently dropped outline analysis down to flash, defeating the whole
+        # point of this branch. Only IDs the API actually serves belong here.
         defaults = [m for m in [
             env_reasoning,
-            "gemini-3.6-pro",
             "gemini-pro-latest",
+            "gemini-3.1-pro-preview",
         ] if m] + defaults
     result = []
     for model in [*env_names, *defaults]:
@@ -999,11 +1002,21 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2, r
         # still returns immediately regardless of the timeout value.
         for attempt in range(2):
             try:
+                # Thinking models bill internal reasoning against
+                # maxOutputTokens, so a reply can be cut off before the JSON
+                # closes. Retry with a larger budget instead of replaying the
+                # same one that already ran out.
+                body["generationConfig"]["maxOutputTokens"] = (
+                    max_tokens if attempt == 0 else max(max_tokens * 2, 8192)
+                )
                 req = urllib.request.Request(endpoint, data=json.dumps(body).encode('utf-8'), headers={"Content-Type":"application/json"}, method='POST')
                 with urllib.request.urlopen(req, timeout=30) as response:
                     result = json.loads(response.read().decode('utf-8'))
-                parts = ((((result.get('candidates') or [{}])[0].get('content') or {}).get('parts')) or [])
+                candidate = (result.get('candidates') or [{}])[0]
+                parts = (((candidate.get('content') or {}).get('parts')) or [])
                 text_value = "\n".join(p.get('text','') for p in parts if isinstance(p,dict)).strip()
+                if candidate.get('finishReason') == 'MAX_TOKENS':
+                    raise ValueError('response truncated before the JSON closed')
                 if not text_value:
                     raise ValueError('Gemini returned no JSON')
                 text_value = re.sub(r'^```(?:json)?\s*|\s*```$', '', text_value, flags=re.I|re.S).strip()
@@ -1023,6 +1036,15 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2, r
                 last_error = exc
                 if attempt < 1:
                     time.sleep(1.5 * (attempt + 1))
+                    continue
+                break
+            except ValueError as exc:
+                # Covers JSONDecodeError plus the truncated/empty cases above.
+                # These used to escape the loop entirely, so one malformed
+                # reply killed every remaining retry and model candidate
+                # instead of falling through to one that works.
+                last_error = RuntimeError(f"{model}: {exc}")
+                if attempt < 1:
                     continue
                 break
     raise RuntimeError(f"Gemini could not complete the request: {type(last_error).__name__ if last_error else 'unknown error'}")
@@ -4984,9 +5006,6 @@ def analyze_outline_generic():
         "error": "" if components else "No clear grade components were detected.",
     })
 
-if __name__ == "__main__":
-    app.run(debug=True)
-
 @app.route("/api/sync/file", methods=["POST"])
 def sync_course_file():
     user = _extension_user_from_request()
@@ -5036,4 +5055,5 @@ def sync_course_file():
     db.session.commit()
     return jsonify({"ok": True, "stored_url": stored_url, "file_name": filename, "size": len(data)})
 
-
+if __name__ == "__main__":
+    app.run(debug=True)
