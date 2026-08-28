@@ -14,7 +14,7 @@ no folder called `nexora`.
 | `templates/` | 13 Jinja pages (landing, dashboard, course_workspace, grade_calculator, study_room, calendar, connect_brightspace, settings, profile, feedback, auth) |
 | `static/` | `style.css`, `landing-v6.css`, `nexora-target.css` |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 31 tests, all passing |
+| `tests/` | pytest — 67 tests. `test_routes.py` covers requests; `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -43,6 +43,32 @@ set -a; . ./.env; set +a
 - `GEMINI_API_KEY` in `.env` (gitignored). Currently a **free-tier** key, so
   Pro-tier models return 429 and every AI call lands on flash.
 - `SECRET_KEY` has a dev fallback.
+
+## Security configuration
+
+`SECRET_KEY` is **required in production and the app refuses to boot without
+it**. `IS_PRODUCTION` is derived from `DATABASE_URL` being set, which Render
+does and local development deliberately does not. The old behaviour -- falling
+back to a constant that is public in this repository -- meant anyone could
+forge a session cookie for any user id, so failing to start is the safer error.
+
+Session and remember-me cookies are Secure in production, HttpOnly, SameSite
+Lax, with a 14-day lifetime. `SESSION_COOKIE_SECURE` has to be switched off for
+tests because the test client speaks http; `tests/conftest.py` does that.
+
+Rate limits come from Flask-Limiter keyed on the account when signed in and the
+address otherwise. `AI_LIMIT` guards every Gemini-backed route because the
+shared quota is the scarce resource; `/login` and `/signup` have their own
+tighter limits. Storage is in-memory, so a limit of N is really N per worker --
+good enough to bound abuse, not a substitute for Redis.
+
+Passwords need 8+ characters (`_password_problem`). Emails are shape-checked
+with `_EMAIL_RE`. There is still **no password reset flow**, so a student who
+forgets their password cannot recover their account.
+
+Anything rendered through `innerHTML` in the templates must go through `esc()`.
+Model output, uploaded filenames and text pulled from course documents all
+reach the DOM that way.
 
 ## Deploying
 

@@ -16,6 +16,8 @@ from uuid import uuid4
 from pathlib import Path
 
 from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from flask_login import (
@@ -41,9 +43,36 @@ except Exception:  # OCR remains optional; PDF/DOCX parsing still works.
 
 app = Flask(__name__)
 
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-later")
-
 database_url = os.environ.get("DATABASE_URL")
+
+# DATABASE_URL is the most reliable signal that this is the deployed service
+# rather than someone's laptop: Render sets it, local development deliberately
+# leaves it unset so the app falls back to throwaway SQLite.
+IS_PRODUCTION = bool(database_url)
+
+_secret_key = os.environ.get("SECRET_KEY", "").strip()
+if not _secret_key:
+    if IS_PRODUCTION:
+        # Falling back to a shared constant here would sign every session cookie
+        # with a string that is public in the repository, so anyone could forge a
+        # session for any user id. Refusing to boot is far safer than serving a
+        # site whose logins can be minted by a stranger.
+        raise RuntimeError(
+            "SECRET_KEY is not set. Set it in the service environment before "
+            "starting: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+        )
+    _secret_key = "dev-secret-key-change-later"
+app.config["SECRET_KEY"] = _secret_key
+
+# Session hardening. HTTPONLY already defaults on; the rest never were.
+app.config["SESSION_COOKIE_SECURE"] = IS_PRODUCTION  # HTTPS-only in production
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # states the CSRF defence we relied on browsers to guess
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=14)
+app.config["REMEMBER_COOKIE_SECURE"] = IS_PRODUCTION
+app.config["REMEMBER_COOKIE_HTTPONLY"] = True
+app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
+
 if database_url and database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
 
@@ -56,6 +85,39 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # up to 8 outline screenshots/pages
 
 db = SQLAlchemy(app)
+
+
+def _rate_limit_identity():
+    """Limit signed-in users by account, everyone else by address.
+
+    Keying the AI routes on the account is the point: the expensive endpoints
+    all sit behind @login_required, and one authenticated student rotating
+    addresses should still not be able to spend the whole Gemini quota that
+    every other student's outline analysis depends on.
+    """
+    try:
+        if current_user.is_authenticated:
+            return f"user:{current_user.id}"
+    except Exception:
+        pass
+    return get_remote_address()
+
+
+limiter = Limiter(
+    key_func=_rate_limit_identity,
+    app=app,
+    # No shared store is configured, so counters live in each worker's memory
+    # and reset when it restarts. That is weaker than Redis -- a limit of N is
+    # effectively N per worker -- but it still turns "unbounded" into "bounded",
+    # which is the difference that matters here. Move to Redis when there is one.
+    storage_uri="memory://",
+    strategy="fixed-window",
+    headers_enabled=True,
+)
+
+# Gemini work is the scarce resource: an outline analysis is a three-stage
+# pipeline, so a handful of these is worth many ordinary requests.
+AI_LIMIT = "40 per day; 12 per hour"
 
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -1252,31 +1314,6 @@ def _component_category(name):
     return 'assessment'
 
 
-def _extract_generic_options(text_value):
-    """Extract simple alternative schemes without merging their weights."""
-    text=_strip_bonus_sections(_sanitize_extracted_text(text_value))
-    matches=list(re.finditer(r'(?im)^\s*Option\s+(\d+)\s*:\s*(.*)$',text))
-    if len(matches)<2:
-        return []
-    options=[]
-    for i,m in enumerate(matches):
-        block=text[m.start():matches[i+1].start() if i+1<len(matches) else len(text)]
-        comps=[]
-        for line in block.splitlines()[1:]:
-            line=' '.join(line.split())
-            mm=re.search(r'(?P<name>[A-Za-z][A-Za-z0-9 &/()\-]{2,100}?)\s*[:\-–—]?\s*(?P<weight>\d{1,3}(?:\.\d+)?)\s*%',line)
-            if not mm: continue
-            name=mm.group('name').strip(' :-–—')
-            if not _looks_like_grading_label(name): continue
-            weight=float(mm.group('weight'))
-            if 0<weight<=100:
-                comps.append({'source':name,'method':'direct','weight':weight})
-        total=sum(c['weight'] for c in comps)
-        if comps and 98<=total<=102:
-            options.append({'option_name':f"Option {m.group(1)}",'components':comps,'eligibility':{}})
-    return options
-
-
 def _grading_section_candidates(text_value):
     """Return likely grading/evaluation sections, ordered from most focused to full text.
 
@@ -1828,7 +1865,6 @@ def _extract_uploaded_course_file(upload):
         elif raw.startswith(b'PK\x03\x04'):
             # PPTX and DOCX are both ZIP containers. Inspect package markers.
             try:
-                import zipfile
                 with zipfile.ZipFile(io.BytesIO(raw)) as archive:
                     names = set(archive.namelist())
                 if any(name.startswith('ppt/') for name in names):
@@ -1979,6 +2015,7 @@ def process_course_content_file():
 
 
 @app.route("/api/copilot", methods=["POST"])
+@limiter.limit(AI_LIMIT)
 @login_required
 def copilot():
     """Conversational, semester-aware Nexora AI powered by Gemini."""
@@ -2214,7 +2251,33 @@ def copilot():
         return jsonify({"error": "Gemini could not respond right now. Please try again."}), 502
 
 
+# Deliberately permissive: it rejects addresses that cannot be real rather than
+# trying to decide which exotic-but-valid ones are. The only address that truly
+# validates an email is one that receives mail.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$")
+
+MIN_PASSWORD_LENGTH = 8
+
+
+def _password_problem(password):
+    """Return a message explaining why a password is unusable, or '' if it is fine.
+
+    Signup previously accepted any non-empty string, so "a" was a valid password
+    protecting a student's entire academic record. Length is the property that
+    actually resists guessing; composition rules mostly push people toward
+    predictable substitutions, so this checks length and nothing else.
+    """
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return f"Choose a password of at least {MIN_PASSWORD_LENGTH} characters."
+    if len(password) > 200:
+        return "That password is too long. Use 200 characters or fewer."
+    if not password.strip():
+        return "Your password cannot be only spaces."
+    return ""
+
+
 @app.route("/signup", methods=["GET", "POST"])
+@limiter.limit("5 per hour; 20 per day")
 def signup():
     if current_user.is_authenticated:
         return redirect(url_for("home"))
@@ -2226,6 +2289,13 @@ def signup():
 
         if not name or not email or not password:
             return render_template("signup.html", error="Please fill in all fields.")
+
+        problem = _password_problem(password)
+        if problem:
+            return render_template("signup.html", error=problem)
+
+        if not _EMAIL_RE.match(email):
+            return render_template("signup.html", error="That email address does not look right. Check it and try again.")
 
         existing_user = User.query.filter_by(email=email).first()
 
@@ -2248,6 +2318,7 @@ def signup():
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("10 per minute; 60 per hour")
 def login():
     if current_user.is_authenticated:
         return redirect(url_for("home"))
@@ -2349,6 +2420,7 @@ def grading_scale_api():
 
 
 @app.route("/api/grading-scale/analyze", methods=["POST"])
+@limiter.limit(AI_LIMIT)
 @login_required
 def analyze_grading_scale_upload():
     uploads=request.files.getlist("files") or request.files.getlist("file")
@@ -3476,6 +3548,7 @@ def ask_course_ai(course_code):
 
 
 @app.route('/api/course/<course_code>/outline/upload', methods=['POST'])
+@limiter.limit(AI_LIMIT)
 @login_required
 def upload_course_outline(course_code):
     course=_normalize_course_code(course_code)
@@ -3950,6 +4023,7 @@ OUTLINE:
 
 
 @app.route("/api/course/<course_code>/outline/analyze", methods=["POST"])
+@limiter.limit(AI_LIMIT)
 @login_required
 def analyze_course_outline(course_code):
     course = _normalize_course_code(course_code)
@@ -4126,6 +4200,7 @@ def analyze_course_outline(course_code):
 
 
 @app.route("/api/course/<course_code>/outline/correct", methods=["POST"])
+@limiter.limit(AI_LIMIT)
 @login_required
 def correct_course_outline_policy(course_code):
     """Let a student fix a specific detected value, or a wrongly-extracted
@@ -4395,6 +4470,7 @@ def confirm_course_outline_policy(course_code):
 
 
 @app.route("/api/course/<course_code>/study-tools/generate", methods=["POST"])
+@limiter.limit(AI_LIMIT)
 @login_required
 def generate_study_tool(course_code):
     course=_normalize_course_code(course_code)
@@ -4923,6 +4999,7 @@ def grade_calculator():
 
 
 @app.route("/api/analyze-outline", methods=["POST"])
+@limiter.limit(AI_LIMIT)
 @login_required
 def analyze_outline_generic():
     """Analyze an uploaded or pasted course outline and return grade components."""
@@ -5067,6 +5144,74 @@ def sync_course_file():
         content.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify({"ok": True, "stored_url": stored_url, "file_name": filename, "size": len(data)})
+
+# ============================
+# Error handling
+# ============================
+# Without these, an unhandled error rendered the bare Werkzeug page to a
+# student, and a rate-limited request looked like the site was broken rather
+# than like a limit they had hit.
+
+def _wants_json():
+    """True when the caller is the front-end's fetch() rather than a browser nav."""
+    if request.path.startswith("/api/"):
+        return True
+    return request.accept_mimetypes.best == "application/json"
+
+
+def _error_response(code, title, message):
+    if _wants_json():
+        return jsonify({"error": message}), code
+    return render_template("error.html", code=code, title=title, message=message), code
+
+
+@app.errorhandler(404)
+def handle_not_found(_exc):
+    return _error_response(404, "Page not found", "That page does not exist. It may have been renamed or removed.")
+
+
+@app.errorhandler(413)
+def handle_too_large(_exc):
+    return _error_response(
+        413, "That file is too large",
+        "Uploads are limited to 64 MB in total. Try fewer pages, or compress the screenshots first.",
+    )
+
+
+@app.errorhandler(429)
+def handle_rate_limited(exc):
+    detail = getattr(exc, "description", "") or "Too many requests."
+    return _error_response(
+        429, "Slow down for a moment",
+        f"{detail} This limit protects the shared AI quota every student's outline analysis depends on.",
+    )
+
+
+@app.errorhandler(500)
+@app.errorhandler(Exception)
+def handle_unexpected(exc):
+    # Re-raise the HTTP errors handled above so they keep their own responses.
+    from werkzeug.exceptions import HTTPException
+    if isinstance(exc, HTTPException):
+        return exc
+    app.logger.exception("Unhandled error on %s %s", request.method, request.path)
+    return _error_response(
+        500, "Something went wrong",
+        "Nexora hit an unexpected error. It has been logged. Try again, and if it keeps happening the problem is on our side, not yours.",
+    )
+
+
+@app.route("/healthz")
+@limiter.exempt
+def healthz():
+    """Cheap liveness probe: confirms the process is up and the database answers."""
+    try:
+        db.session.execute(text("SELECT 1"))
+        return jsonify({"status": "ok", "database": "ok"})
+    except Exception as exc:
+        app.logger.exception("Health check failed: %s", exc)
+        return jsonify({"status": "degraded", "database": "unreachable"}), 503
+
 
 if __name__ == "__main__":
     app.run(debug=True)

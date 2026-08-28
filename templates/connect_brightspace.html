@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <title>Connect Brightspace - Uni Helper</title>
@@ -78,7 +78,7 @@
         <div class="muted">Paste your Brightspace calendar feed link here.</div>
 
         <form method="POST" action="/save_feed" class="row2" style="margin-top:16px;">
-          <input type="text" name="feed_url" placeholder="Paste Brightspace calendar feed link" value="{{ feed_url or '' }}">
+          <input type="text" name="feed_url" placeholder="Paste Brightspace calendar feed link" value="{{ feed_url or '' }}" aria-label="Paste Brightspace calendar feed link">
           <button class="btn" type="submit">Save link</button>
         </form>
 
@@ -120,7 +120,7 @@
         <div class="muted">Only use this if the feed link does not work.</div>
 
         <form method="POST" action="/import" enctype="multipart/form-data" class="row2" style="margin-top:14px;">
-          <input type="file" name="ics_file" accept=".ics" required>
+          <input type="file" name="ics_file" accept=".ics" required aria-label="Brightspace calendar file, .ics">
           <button class="btn" type="submit">Backup import .ics</button>
         </form>
       </div>

@@ -250,8 +250,8 @@
         <article class="nxv2-quick-add">
           <header><div><span>CAPTURE</span><h3>Quick Add</h3></div><b>⌘ K</b></header>
           <form action="/tasks/add" method="post">
-            <input name="title" placeholder="Add a task or reminder…" required>
-            <input name="course" placeholder="Course (optional)">
+            <input name="title" placeholder="Add a task or reminder…" required aria-label="Add a task or reminder…">
+            <input name="course" placeholder="Course (optional)" aria-label="Course (optional)">
             <button type="submit">Add task <span>+</span></button>
           </form>
         </article>
@@ -260,7 +260,7 @@
   </main>
 </div>
 
-<div class="nxv2-command" id="commandPalette" aria-hidden="true"><div><header><span>⌕</span><input id="commandInput" placeholder="Search courses, tasks, or ask Nexora AI…"><kbd>ESC</kbd></header><section><small>QUICK ACTIONS</small><button data-command="ai">✦ Ask Nexora AI</button><a href="/calendar">□ Open calendar</a><a href="{{ url_for('connect_brightspace') }}">↻ Open Sync Center</a><a href="/dashboard?view=all#tasks">▦ View all tasks</a></section></div></div>
+<div class="nxv2-command" id="commandPalette" aria-hidden="true"><div><header><span>⌕</span><input id="commandInput" placeholder="Search courses, tasks, or ask Nexora AI…" aria-label="Search courses, tasks, or ask Nexora AI…"><kbd>ESC</kbd></header><section><small>QUICK ACTIONS</small><button data-command="ai">✦ Ask Nexora AI</button><a href="/calendar">□ Open calendar</a><a href="{{ url_for('connect_brightspace') }}">↻ Open Sync Center</a><a href="/dashboard?view=all#tasks">▦ View all tasks</a></section></div></div>
 
 <div class="nxv2-modal" id="dayModal" aria-hidden="true"><div class="nxv2-modal-card"><button class="modal-close" type="button">×</button><span class="nxv2-modal-kicker">✦ AI-GENERATED DAY</span><h2>Start My Day</h2><p>Nexora ranked your priorities and built a focused plan.</p><div id="dayPlan" class="nxv2-day-plan"></div><button class="nxv2-modal-primary" id="beginPlan" type="button">Begin first session <span>→</span></button></div></div>
 
