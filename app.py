@@ -4299,7 +4299,11 @@ def analyze_course_outline(course_code):
         return jsonify({"error":"No course outline has been detected for this course yet."}),404
     if len((row.content_text or '').strip()) < 200:
         return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":"Reading the course outline from Brightspace…"}),409
-    prompt = _outline_analysis_prompt(row.content_text, course)
+    # No prompt is built here on purpose. This route hands the outline to
+    # _high_accuracy_outline_analysis, which assembles its own three stages and
+    # gets the shared rules through _outline_extraction_rules(). A prompt was
+    # built and discarded on this line for as long as the pipeline has existed,
+    # which is how sixteen extraction rules came to be written and never sent.
     used_fallback=False
     # The deterministic parser is free (no network round-trip) and, by the same
     # override rule applied below, its result wins outright whenever it already
