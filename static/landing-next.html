@@ -21,11 +21,10 @@ body{
   -webkit-font-smoothing:antialiased;
 }
 #gl{position:fixed;inset:0;z-index:0;display:block;pointer-events:none}
-/* Graceful fallback if WebGL is unavailable: a quiet warm bloom, never a fake 3D object. */
 #glfallback{position:fixed;inset:0;z-index:0;display:none;
-  background:radial-gradient(46% 52% at 74% 46%, rgba(224,163,64,.12), transparent 70%)}
+  background:radial-gradient(46% 52% at 74% 46%, rgba(224,163,64,.10), transparent 70%)}
 #grain{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.05;
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E")}
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E")}
 .content{position:relative;z-index:2}
 .shell{max-width:1280px;margin:0 auto;padding:0 clamp(24px,5vw,76px)}
 
@@ -55,15 +54,14 @@ a:focus-visible{outline:1px solid var(--accent);outline-offset:4px}
   transition:opacity 1s var(--ease),filter 1s var(--ease),transform 1s var(--ease)}
 .rv.in{opacity:1;filter:blur(0);transform:none}
 
-/* Text keeps the left half; the object owns the right. They never overlap. */
 .hero{min-height:100vh;display:flex;align-items:center;padding:150px 0 96px}
-.hero-copy{max-width:min(600px,52%)}
+.hero-copy{max-width:min(580px,50%)}
 @media (max-width:900px){.hero-copy{max-width:100%}}
 .eyebrow{font-size:11px;letter-spacing:.34em;text-transform:uppercase;color:var(--fg-3);
   margin:0 0 38px;display:flex;align-items:center;gap:15px;font-weight:500}
 .eyebrow::before{content:"";width:42px;height:1px;background:var(--accent);opacity:.75}
 h1{font-family:"Fraunces",Georgia,serif;font-weight:300;
-  font-size:clamp(3.1rem,6.6vw,5.9rem);line-height:.95;letter-spacing:-.043em;
+  font-size:clamp(3rem,6.2vw,5.6rem);line-height:.96;letter-spacing:-.043em;
   margin:0 0 34px;text-wrap:balance;font-variation-settings:"SOFT" 0,"WONK" 1}
 h1 em{font-style:italic;font-weight:400;color:var(--accent)}
 .lede{font-size:1.08rem;color:var(--fg-2);max-width:40ch;margin:0 0 42px;line-height:1.72}
@@ -72,27 +70,25 @@ h1 em{font-style:italic;font-weight:400;color:var(--accent)}
   letter-spacing:.28em;text-transform:uppercase;color:var(--fg-3);display:flex;align-items:center;gap:13px}
 .scrollcue span{width:1px;height:32px;background:linear-gradient(var(--accent),transparent)}
 
-.chapter{min-height:92vh;display:flex;align-items:center;padding:110px 0}
-.chapter-in{max-width:560px}
-.chapter.right .chapter-in{margin-left:auto}
+.chapter{min-height:96vh;display:flex;align-items:center;padding:110px 0}
+.chapter-in{max-width:min(540px,50%)}
+@media (max-width:900px){.chapter-in{max-width:100%}}
 .num{font-family:"Fraunces",serif;font-size:12px;letter-spacing:.3em;color:var(--accent);margin:0 0 26px}
-h2{font-family:"Fraunces",Georgia,serif;font-weight:300;font-size:clamp(2.1rem,4.4vw,3.4rem);
-  line-height:1.04;letter-spacing:-.034em;margin:0 0 22px;text-wrap:balance}
+h2{font-family:"Fraunces",Georgia,serif;font-weight:300;font-size:clamp(2.1rem,4.2vw,3.2rem);
+  line-height:1.05;letter-spacing:-.034em;margin:0 0 22px;text-wrap:balance}
 h2 em{font-style:italic;color:var(--accent);font-weight:400}
-.chapter p{color:var(--fg-2);font-size:1.03rem;max-width:43ch;margin:0 0 28px}
+.chapter p{color:var(--fg-2);font-size:1.03rem;max-width:41ch;margin:0 0 28px}
 .detail{list-style:none;padding:0;margin:0;border-top:1px solid var(--rule)}
 .detail li{display:grid;grid-template-columns:auto 1fr;gap:20px;align-items:baseline;
   padding:14px 0;border-bottom:1px solid var(--rule);font-size:14.4px;color:var(--fg-2)}
 .detail b{color:var(--fg);font-weight:500;white-space:nowrap}
 
-.close{min-height:84vh;display:flex;align-items:center;padding:110px 0 120px}
-.close h2{font-size:clamp(2.4rem,5.6vw,4.4rem);max-width:14ch;margin-bottom:32px}
+.close{min-height:88vh;display:flex;align-items:center;padding:110px 0 120px}
+.close h2{font-size:clamp(2.4rem,5.2vw,4.2rem);max-width:14ch;margin-bottom:32px}
 footer{border-top:1px solid var(--rule);padding:28px 0 42px;color:var(--fg-3);font-size:12.5px}
 .foot-in{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
-.swatch{color:var(--fg-3);text-decoration:none;border-bottom:1px solid var(--rule-2)}
-.swatch:hover{color:var(--accent)}
 
-@media (max-width:900px){.nav-l{display:none}.chapter.right .chapter-in{margin-left:0}}
+@media (max-width:900px){.nav-l{display:none}}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}
   .rv{opacity:1;filter:none;transform:none;transition:none}.btn{transition:none}}
 </style>
@@ -127,8 +123,8 @@ footer{border-top:1px solid var(--rule);padding:28px 0 42px;color:var(--fg-3);fo
 
   <section class="chapter" id="sync"><div class="shell"><div class="chapter-in">
     <p class="num rv">01 — Sync</p>
-    <h2 class="rv">Everything in Brightspace, <em>without</em> Brightspace.</h2>
-    <p class="rv">The extension reads your courses, deadlines, announcements and lecture files, and keeps them current. You stop checking six course pages to find out what is due.</p>
+    <h2 class="rv">Six course pages, <em>one</em> place.</h2>
+    <p class="rv">The extension reads your courses, deadlines, announcements and lecture files, and keeps them current. You stop checking six tabs to find out what is due.</p>
     <ul class="detail rv">
       <li><b>Courses</b><span>Discovered automatically, each with its own workspace</span></li>
       <li><b>Deadlines</b><span>Assignments, quizzes and labs on one timeline</span></li>
@@ -137,7 +133,7 @@ footer{border-top:1px solid var(--rule);padding:28px 0 42px;color:var(--fg-3);fo
     </ul>
   </div></div></section>
 
-  <section class="chapter right" id="grades"><div class="shell"><div class="chapter-in">
+  <section class="chapter" id="grades"><div class="shell"><div class="chapter-in">
     <p class="num rv">02 — Grades</p>
     <h2 class="rv">It reads the paragraph that <em>decides</em> your grade.</h2>
     <p class="rv">Best ten of twelve labs. A final you must reach 50% on regardless of your total. A second scheme that only opens if the first reaches C-. Nexora extracts all of it, then tells you what you need.</p>
@@ -169,10 +165,7 @@ footer{border-top:1px solid var(--rule);padding:28px 0 42px;color:var(--fg-3);fo
 
   <footer><div class="shell foot-in">
     <span>Nexora — concept build</span>
-    <span>Material:
-      <a class="swatch" href="?m=metal">metal</a> ·
-      <a class="swatch" href="?m=glass">glass</a>
-    </span>
+    <span>Scattered pages resolving into order</span>
   </div></footer>
 </div>
 
@@ -187,7 +180,7 @@ footer{border-top:1px solid var(--rule);padding:28px 0 42px;color:var(--fg-3);fo
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-/* ---- blur-to-focus reveals (independent of WebGL) ---- */
+/* ---- blur-to-focus reveals, independent of WebGL ---- */
 const io = new IntersectionObserver((es) => {
   es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
 }, { threshold: .18, rootMargin: '0px 0px -8% 0px' });
@@ -199,149 +192,216 @@ document.querySelectorAll('.rv').forEach((el, i) => {
 const canvas = document.getElementById('gl');
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-/* ---- degrade gracefully rather than shipping a broken canvas ---- */
-function giveUp() {
+let renderer = null;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
+} catch (err) {
+  console.warn('WebGL unavailable:', err);
   canvas.style.display = 'none';
   document.getElementById('glfallback').style.display = 'block';
 }
-let renderer;
-try {
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
-} catch (err) { console.warn('WebGL unavailable:', err); giveUp(); }
 
 if (renderer) {
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.15;
+  renderer.toneMappingExposure = 1.12;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 100);
-  camera.position.set(0, 0, 5.4);
+  const camera = new THREE.PerspectiveCamera(40, 1, .1, 100);
+  camera.position.set(0, 0, 7.2);
 
-  /* The environment is what sells it. Without reflections a metal sphere reads
-     as matte plastic -- which is exactly how the previous attempt failed.
-     RoomEnvironment builds a studio procedurally, so there is no HDRI to fetch
-     and nothing to 404 on a cold free-tier instance. */
   const pmrem = new THREE.PMREMGenerator(renderer);
-  pmrem.compileEquirectangularShader();
-  const envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
-  scene.environment = envRT.texture;
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), .04).texture;
 
-  /* Geometry: a smooth icosphere, then displaced along its normals by layered
-     trig so the silhouette is never a perfect circle. A plain sphere is what
-     reads as a balloon; an irregular one reads as a body with volume. */
-  const geo = new THREE.IcosahedronGeometry(1.28, 64);
-  const pos = geo.attributes.position;
-  const v = new THREE.Vector3();
-  for (let i = 0; i < pos.count; i++) {
-    v.fromBufferAttribute(pos, i);
-    const n = v.clone().normalize();
-    const d =
-      0.085 * Math.sin(n.x * 2.1 + n.y * 1.7) +
-      0.060 * Math.sin(n.y * 3.3 - n.z * 2.4) +
-      0.040 * Math.sin(n.z * 4.6 + n.x * 3.1);
-    v.addScaledVector(n, d);
-    pos.setXYZ(i, v.x, v.y, v.z);
+  /* A page is a very thin box, not a plane: the edge is what catches the key
+     light and tells you the thing has thickness. */
+  const N = 32;
+  const geo = new THREE.BoxGeometry(.62, .86, .014);
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#8E877C'),
+    metalness: 1, roughness: .19,
+    clearcoat: 1, clearcoatRoughness: .14,
+    envMapIntensity: 1.3,
+  });
+
+  const group = new THREE.Group();
+  scene.add(group);
+
+  /* Deterministic pseudo-random, so the "chaos" is the same every load and can
+     be tuned rather than re-rolled on every refresh. */
+  let seed = 20260830;
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+  const between = (a, b) => a + (b - a) * rnd();
+
+  const q = new THREE.Quaternion();
+  const e = new THREE.Euler();
+  function pose(x, y, z, rx, ry, rz, s) {
+    e.set(rx, ry, rz);
+    return { p: new THREE.Vector3(x, y, z), q: new THREE.Quaternion().setFromEuler(e), s: s };
   }
-  geo.computeVertexNormals();
 
-  const wantGlass = new URLSearchParams(location.search).get('m') === 'glass';
-  const material = wantGlass
-    ? new THREE.MeshPhysicalMaterial({
-        transmission: .92, thickness: 1.5, ior: 1.5, roughness: .09,
-        clearcoat: 1, clearcoatRoughness: .06, metalness: 0,
-        attenuationColor: new THREE.Color('#E0A340'), attenuationDistance: 1.4,
-        envMapIntensity: 1.5,
-      })
-    : new THREE.MeshPhysicalMaterial({
-        // Colour comes from the lights and the environment, not a flat fill.
-        color: new THREE.Color('#8A8378'),
-        metalness: 1, roughness: .17,
-        clearcoat: 1, clearcoatRoughness: .12,
-        envMapIntensity: 1.35,
-      });
+  /* --- formation 0: scattered. six tabs, an unread outline, deadlines you are
+         already behind on. loose, tumbled, no two alike. --- */
+  const CHAOS = [];
+  for (let i = 0; i < N; i++) {
+    CHAOS.push(pose(
+      between(-2.6, 2.6), between(-2.4, 2.4), between(-3.4, 1.2),
+      between(-Math.PI, Math.PI), between(-Math.PI, Math.PI), between(-Math.PI, Math.PI),
+      between(.85, 1.15)
+    ));
+  }
 
-  const mesh = new THREE.Mesh(geo, material);
-  scene.add(mesh);
+  /* --- formation 1: one tidy stack. everything in one place. --- */
+  const STACK = [];
+  for (let i = 0; i < N; i++) {
+    STACK.push(pose(
+      between(-.035, .035), -1.15 + i * .072, between(-.035, .035),
+      -Math.PI / 2 + between(-.012, .012), between(-.05, .05), between(-.03, .03),
+      1
+    ));
+  }
 
-  /* Key light upper-left for a sharp specular; a dim warm rim from the
-     opposite side to separate the silhouette from a near-black page. */
-  const key = new THREE.DirectionalLight('#FFF2DC', 3.1);
-  key.position.set(-4.2, 4.6, 3.4);
+  /* --- formation 2: a weighted column. the four graded components, each band
+         as tall as its share of the grade: 10 / 10 / 20 / 60. --- */
+  const COLUMN = [];
+  {
+    const bands = [3, 3, 6, 20];           // 32 pages, split by weight
+    let y = -1.55;
+    bands.forEach((count) => {
+      for (let k = 0; k < count; k++) {
+        COLUMN.push(pose(
+          between(-.02, .02), y, between(-.02, .02),
+          -Math.PI / 2, between(-.02, .02), 0,
+          1.32
+        ));
+        y += .062;
+      }
+      y += .20;                            // a clear gap between components
+    });
+  }
+
+  /* --- formation 3: a card grid. lectures turned into practice. --- */
+  const GRID = [];
+  {
+    const cols = 8, rows = 4, gx = .78, gy = 1.02;
+    for (let i = 0; i < N; i++) {
+      const c = i % cols, r = Math.floor(i / cols);
+      GRID.push(pose(
+        (c - (cols - 1) / 2) * gx,
+        ((rows - 1) / 2 - r) * gy,
+        0,
+        0, between(-.05, .05), 0,
+        1
+      ));
+    }
+  }
+
+  const FORMATIONS = [CHAOS, STACK, COLUMN, GRID];
+
+  const cards = [];
+  for (let i = 0; i < N; i++) {
+    const m = new THREE.Mesh(geo, mat);
+    group.add(m);
+    cards.push({ m, stagger: rnd() * .34, spin: between(-.22, .22) });
+  }
+
+  /* Lighting: a warm key upper-left for the specular that runs along the edges,
+     a dim amber rim opposite so the silhouette separates from a near-black
+     page, and low ambient so the shadow side is dark but not dead. */
+  const key = new THREE.DirectionalLight('#FFF3E0', 3.4);
+  key.position.set(-4.6, 5.2, 3.8);
   scene.add(key);
-
-  const rim = new THREE.PointLight('#E0A340', 26, 22, 2);
-  rim.position.set(4.6, -2.2, -3.2);
+  const rim = new THREE.PointLight('#E0A340', 34, 26, 2);
+  rim.position.set(5.2, -2.6, -3.6);
   scene.add(rim);
+  scene.add(new THREE.AmbientLight('#5E6472', .34));
 
-  scene.add(new THREE.AmbientLight('#5A6070', .35));
-
-  /* ---- placement: the object owns the right side and never sits under text ---- */
+  /* The formation owns the right-hand space; the copy keeps the left. */
   function layout() {
     const w = innerWidth, h = innerHeight;
     renderer.setSize(w, h);
     camera.aspect = w / h;
     const narrow = w < 900;
-    camera.position.z = narrow ? 6.6 : 5.4;
-    // Shifting the camera left pushes the mesh visually right, off the copy.
-    camera.setViewOffset(w, h, narrow ? 0 : -w * 0.19, narrow ? h * 0.10 : 0, w, h);
+    camera.position.z = narrow ? 9.2 : 7.2;
+    camera.setViewOffset(w, h, narrow ? 0 : -w * .20, narrow ? h * .08 : 0, w, h);
     camera.updateProjectionMatrix();
   }
   layout();
   addEventListener('resize', layout);
 
-  /* ---- damped pointer follow: eased, never instant, never linear ---- */
-  const target = { x: 0, y: 0 };
-  const cur = { x: 0, y: 0 };
-  addEventListener('pointermove', (e) => {
-    target.x = (e.clientX / innerWidth - .5) * 2;
-    target.y = (e.clientY / innerHeight - .5) * 2;
-  }, { passive: true });
-
-  let scrollN = 0, scrollCur = 0;
+  let scrollT = 0, scrollC = 0;
   function readScroll() {
     const max = document.documentElement.scrollHeight - innerHeight;
-    scrollN = max > 0 ? scrollY / max : 0;
+    scrollT = max > 0 ? scrollY / max : 0;
   }
   addEventListener('scroll', readScroll, { passive: true });
   readScroll();
+  scrollC = scrollT;
 
-  /* ---- pause when the hero is off screen ---- */
-  let live = true;
-  new IntersectionObserver(
-    (es) => { live = es[0].isIntersecting; },
-    { rootMargin: '200px' }
-  ).observe(document.querySelector('.hero'));
+  const ptr = { x: 0, y: 0 }, ptrC = { x: 0, y: 0 };
+  addEventListener('pointermove', (ev) => {
+    ptr.x = (ev.clientX / innerWidth - .5) * 2;
+    ptr.y = (ev.clientY / innerHeight - .5) * 2;
+  }, { passive: true });
 
+  let awake = !document.hidden;
+  document.addEventListener('visibilitychange', () => { awake = !document.hidden; });
+
+  const easeInOut = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const tmpP = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
   const clock = new THREE.Clock();
-  const SPIN = (Math.PI * 2) / 52;          // one revolution per ~52s
 
   function frame() {
     requestAnimationFrame(frame);
+    if (!awake) { clock.getDelta(); return; }
     const dt = Math.min(clock.getDelta(), .05);
-    if (!live) return;
 
-    if (!reduced) mesh.rotation.y += SPIN * dt;
+    /* Frame-rate independent smoothing, so the easing is identical at 60Hz and
+       144Hz and the formation never snaps or overshoots. */
+    scrollC += (scrollT - scrollC) * (1 - Math.pow(.0025, dt));
+    ptrC.x += (ptr.x - ptrC.x) * (1 - Math.pow(.0022, dt));
+    ptrC.y += (ptr.y - ptrC.y) * (1 - Math.pow(.0022, dt));
 
-    // Exponential smoothing -- frame-rate independent, and it eases in without
-    // ever overshooting the way a spring with too little damping would.
-    const k = 1 - Math.pow(0.0016, dt);
-    cur.x += (target.x - cur.x) * k;
-    cur.y += (target.y - cur.y) * k;
-    scrollCur += (scrollN - scrollCur) * (1 - Math.pow(0.004, dt));
+    const span = FORMATIONS.length - 1;
+    const at = Math.min(scrollC, .9999) * span;
+    const i0 = Math.floor(at), i1 = Math.min(i0 + 1, span);
+    const local = at - i0;
+    const t = clock.elapsedTime;
 
-    mesh.rotation.x = cur.y * .26;
-    mesh.rotation.z = -cur.x * .10;
-    mesh.position.x = cur.x * .18;
-    mesh.position.y = -cur.y * .14 - scrollCur * .55;
-    const s = 1 + scrollCur * .12;
-    mesh.scale.setScalar(s);
+    for (let i = 0; i < N; i++) {
+      const c = cards[i];
+      // Stagger so the formation resolves as a ripple, not a single snap.
+      const k = easeInOut(Math.min(Math.max((local - c.stagger) / (1 - .34), 0), 1));
+      const A = FORMATIONS[i0][i], B = FORMATIONS[i1][i];
+
+      tmpP.copy(A.p).lerp(B.p, k);
+      tmpQ.copy(A.q).slerp(B.q, k);
+
+      // Only the scattered state drifts; order, once reached, stays still.
+      const loose = (1 - k) * (i0 === 0 ? 1 : 0);
+      c.m.position.set(
+        tmpP.x + Math.sin(t * .32 + i) * .05 * loose,
+        tmpP.y + Math.cos(t * .27 + i * 1.7) * .05 * loose,
+        tmpP.z
+      );
+      c.m.quaternion.copy(tmpQ);
+      if (loose > .001 && !reduced) c.m.rotateY(t * c.spin * loose);
+      const s = A.s + (B.s - A.s) * k;
+      c.m.scale.setScalar(s);
+    }
+
+    group.rotation.y = ptrC.x * .17;
+    group.rotation.x = ptrC.y * .12;
+    group.position.y = -scrollC * .30;
 
     renderer.render(scene, camera);
   }
   frame();
+
+  // A signal that the module reached the end of setup, so a blank canvas can be
+  // told apart from a module that failed to load.
+  document.documentElement.dataset.gl = 'ready';
 }
 </script>
 </body>
