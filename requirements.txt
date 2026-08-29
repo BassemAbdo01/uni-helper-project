@@ -4,6 +4,8 @@ gunicorn
 Flask-SQLAlchemy
 Flask-Login
 Flask-Limiter
+sentry-sdk[flask]
+redis
 psycopg2-binary
 pypdf
 python-pptx

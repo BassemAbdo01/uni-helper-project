@@ -41,6 +41,28 @@ try:
 except Exception:  # OCR remains optional; PDF/DOCX parsing still works.
     Image = ImageOps = ImageEnhance = ImageFilter = pytesseract = None
 
+# Error reporting is opt-in: without SENTRY_DSN this is inert, so the app runs
+# unchanged for anyone who has not set one up. Until something like this is
+# configured, a crash in production is only discovered by a student hitting it
+# and telling you.
+_sentry_dsn = os.environ.get("SENTRY_DSN", "").strip()
+if _sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.flask import FlaskIntegration
+
+        sentry_sdk.init(
+            dsn=_sentry_dsn,
+            integrations=[FlaskIntegration()],
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
+            # Grades, marks and outline text are the student's private record and
+            # have no place in an error report.
+            send_default_pii=False,
+            environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
+        )
+    except Exception:  # never let monitoring take the site down
+        pass
+
 app = Flask(__name__)
 
 database_url = os.environ.get("DATABASE_URL")
@@ -103,14 +125,21 @@ def _rate_limit_identity():
     return get_remote_address()
 
 
+# With no shared store, counters live in each gunicorn worker's memory, so a
+# limit of N is really N per worker and resets on restart. That still turns
+# "unbounded" into "bounded", but the numbers mean what they say only when the
+# workers share a store. Point REDIS_URL at a Redis / Render Key Value instance
+# and the configured limits become exact, with no code change.
+RATE_LIMIT_STORAGE = (
+    os.environ.get("RATE_LIMIT_STORAGE_URI", "").strip()
+    or os.environ.get("REDIS_URL", "").strip()
+    or "memory://"
+)
+
 limiter = Limiter(
     key_func=_rate_limit_identity,
     app=app,
-    # No shared store is configured, so counters live in each worker's memory
-    # and reset when it restarts. That is weaker than Redis -- a limit of N is
-    # effectively N per worker -- but it still turns "unbounded" into "bounded",
-    # which is the difference that matters here. Move to Redis when there is one.
-    storage_uri="memory://",
+    storage_uri=RATE_LIMIT_STORAGE,
     strategy="fixed-window",
     headers_enabled=True,
 )

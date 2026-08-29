@@ -57,7 +57,9 @@ Lax, with a 14-day lifetime. `SESSION_COOKIE_SECURE` has to be switched off for
 tests because the test client speaks http; `tests/conftest.py` does that.
 
 Rate limits come from Flask-Limiter keyed on the account when signed in and the
-address otherwise. `AI_LIMIT` guards every Gemini-backed route because the
+address otherwise. Storage follows `RATE_LIMIT_STORAGE_URI` or `REDIS_URL`,
+falling back to per-worker memory -- in that state a limit of N is really N per
+worker, so point it at Render Key Value to make the numbers exact. `AI_LIMIT` guards every Gemini-backed route because the
 shared quota is the scarce resource; `/login` and `/signup` have their own
 tighter limits. Storage is in-memory, so a limit of N is really N per worker --
 good enough to bound abuse, not a substitute for Redis.
@@ -69,6 +71,25 @@ forgets their password cannot recover their account.
 Anything rendered through `innerHTML` in the templates must go through `esc()`.
 Model output, uploaded filenames and text pulled from course documents all
 reach the DOM that way.
+
+## Concurrency
+
+`gunicorn.conf.py` runs `gthread` workers, not the default sync worker. An
+outline analysis spends 37-39 seconds waiting on Google, and a sync worker
+serves one request start to finish, so N simultaneous analyses previously
+occupied N workers and every other request -- dashboard, landing page, login --
+queued behind workers that were idle but unavailable. Threads let a worker
+waiting on a socket serve other requests. 2 workers x 8 threads by default,
+overridable with `WEB_CONCURRENCY` and `GUNICORN_THREADS`.
+
+This is a mitigation. The real fix is to run the analysis outside the request
+and have the browser poll, which the front end is already shaped for. That
+refactor has to move a 172-line route off `current_user` and add a jobs table,
+so it needs its own pass with the UI actually verified.
+
+Set `SENTRY_DSN` to turn on error reporting; without it the integration is
+inert. PII is deliberately not sent -- grades and outline text are the
+student's private record.
 
 ## Deploying
 
