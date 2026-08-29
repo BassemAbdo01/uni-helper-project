@@ -2503,6 +2503,17 @@ def reset_password(token):
     user = db.session.get(User, row.user_id)
     if not user:
         return render_template("reset_password.html", token=token, invalid=True), 400
+
+    if check_password_hash(user.password_hash, password):
+        # The reason that matters here is the student who reset because they
+        # think someone else got in. Letting them re-set the same password ends
+        # that flow looking successful while changing nothing. For the ordinary
+        # case -- forgot it, remembered halfway through -- knowing they guessed
+        # right is more useful than a silent no-op, so say that instead.
+        return render_template(
+            "reset_password.html", token=token, invalid=False,
+            error="That is already your password. Choose a different one, or go back and log in with it.")
+
     user.password_hash = generate_password_hash(password)
     row.used_at = datetime.utcnow()
     # Any other outstanding link for this account is now stale.

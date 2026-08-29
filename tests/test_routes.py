@@ -341,3 +341,22 @@ def test_a_model_that_returns_429_is_parked_and_skipped():
         nexora._mark_gemini_model_unavailable(m, 600)
     assert nexora._usable_gemini_models(chain) == chain
     nexora._gemini_model_cooldowns.clear()
+
+
+def test_reset_refuses_the_password_already_in_use(client, mailbox):
+    """A student resetting because they think they were hacked must not be able
+    to end the flow with the same password they started with."""
+    signup(client)
+    client.get("/logout")
+    client.post("/forgot-password", data={"email": "student@carleton.ca"})
+    token = _reset_token_from(mailbox)
+
+    response = client.post(f"/reset-password/{token}", data={"password": "correct-horse-battery"})
+    assert response.status_code == 200
+    assert b"already your password" in response.data
+    assert client.get("/dashboard").status_code in (301, 302), "refused reset still signed them in"
+
+    # The link must survive the refusal, or a slip costs them the whole flow.
+    assert client.post(f"/reset-password/{token}",
+                       data={"password": "a-genuinely-new-one"}).status_code in (301, 302)
+    assert client.get("/dashboard").status_code == 200
