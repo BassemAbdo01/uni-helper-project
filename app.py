@@ -162,6 +162,9 @@ SMTP_USER = os.environ.get("SMTP_USER", "").strip()
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", "").strip() or SMTP_USER
 SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").strip().lower() not in ("0", "false", "no")
+# Someone locked out of their account cannot reach the in-app feedback page, so
+# telling them to "contact support" is only useful with an address attached.
+SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "").strip()
 PASSWORD_RESET_TTL = timedelta(hours=1)
 
 
@@ -2450,7 +2453,8 @@ def forgot_password():
     if current_user.is_authenticated:
         return redirect(url_for("home"))
     if request.method == "GET":
-        return render_template("forgot_password.html", configured=email_is_configured())
+        return render_template("forgot_password.html", configured=email_is_configured(),
+                               support_email=SUPPORT_EMAIL)
 
     email = (request.form.get("email") or "").strip().lower()
     # The same answer regardless of whether the account exists: anything else
@@ -2459,7 +2463,7 @@ def forgot_password():
                     "The link expires in one hour.")
     if not email_is_configured():
         return render_template("forgot_password.html", configured=False,
-                               error="Password reset is not available yet. Please contact support.")
+                               support_email=SUPPORT_EMAIL)
 
     user = User.query.filter_by(email=email).first()
     if user:

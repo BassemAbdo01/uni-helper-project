@@ -231,7 +231,9 @@ def test_reset_is_refused_honestly_when_email_is_not_configured(client):
     assert not nexora.email_is_configured()          # no SMTP env in tests
     response = client.post("/forgot-password", data={"email": "student@carleton.ca"})
     assert response.status_code == 200
-    assert b"not available yet" in response.data
+    assert b"isn&#39;t switched on yet" in response.data or b"isn't switched on yet" in response.data
+    # No input to type an address into, because nothing could be sent to it.
+    assert b'name="email"' not in response.data
 
 
 def test_reset_link_lets_a_student_set_a_new_password(client, mailbox):
