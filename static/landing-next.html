@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nexora — concept</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600&family=Archivo:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#0A0A0A; --fg:#F0F0F0; --fg-2:#96928D; --fg-3:#5A5651;
+  --rule:#1B1A18; --rule-2:#2A2825; --accent:#E0A340;
+  --ease:cubic-bezier(.22,.61,.36,1);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--bg);color:var(--fg);overflow-x:hidden;
+  font-family:"Archivo",ui-sans-serif,system-ui,sans-serif;font-size:17px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+#gl{position:fixed;inset:0;z-index:0;display:block;pointer-events:none}
+/* Graceful fallback if WebGL is unavailable: a quiet warm bloom, never a fake 3D object. */
+#glfallback{position:fixed;inset:0;z-index:0;display:none;
+  background:radial-gradient(46% 52% at 74% 46%, rgba(224,163,64,.12), transparent 70%)}
+#grain{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.05;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E")}
+.content{position:relative;z-index:2}
+.shell{max-width:1280px;margin:0 auto;padding:0 clamp(24px,5vw,76px)}
+
+nav{position:absolute;top:0;left:0;right:0;z-index:20}
+.nav-in{display:flex;align-items:center;justify-content:space-between;padding:32px 0}
+.brand{font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:19px;letter-spacing:-.02em;
+  display:flex;align-items:center;gap:11px}
+.brand i{width:6px;height:6px;border-radius:50%;background:var(--accent);font-style:normal}
+.nav-l{display:flex;gap:34px;font-size:14px;color:var(--fg-2)}
+.nav-l a{color:inherit;text-decoration:none;transition:color .3s var(--ease)}
+.nav-l a:hover{color:var(--fg)}
+
+.btn{--lift:0px;display:inline-flex;align-items:center;gap:11px;font-size:14.5px;font-weight:500;
+  padding:14px 26px;border-radius:2px;text-decoration:none;cursor:pointer;
+  background:var(--accent);color:#0A0A0A;border:1px solid var(--accent);
+  transform:translateY(var(--lift)) scale(1);box-shadow:0 1px 2px rgba(0,0,0,.5);
+  transition:transform .42s var(--ease),box-shadow .42s var(--ease),background .42s var(--ease)}
+.btn:hover{--lift:-2px;transform:translateY(var(--lift)) scale(1.018);
+  box-shadow:0 18px 42px -18px rgba(224,163,64,.5),0 2px 6px rgba(0,0,0,.6)}
+.btn:active{transform:translateY(0) scale(.995);transition-duration:.09s}
+.btn.quiet{background:transparent;color:var(--fg);border-color:var(--rule-2)}
+.btn.quiet:hover{border-color:var(--fg-3);background:rgba(240,240,240,.03);
+  box-shadow:0 18px 40px -22px rgba(0,0,0,.9)}
+a:focus-visible{outline:1px solid var(--accent);outline-offset:4px}
+
+.rv{opacity:0;filter:blur(13px);transform:translateY(15px);
+  transition:opacity 1s var(--ease),filter 1s var(--ease),transform 1s var(--ease)}
+.rv.in{opacity:1;filter:blur(0);transform:none}
+
+/* Text keeps the left half; the object owns the right. They never overlap. */
+.hero{min-height:100vh;display:flex;align-items:center;padding:150px 0 96px}
+.hero-copy{max-width:min(600px,52%)}
+@media (max-width:900px){.hero-copy{max-width:100%}}
+.eyebrow{font-size:11px;letter-spacing:.34em;text-transform:uppercase;color:var(--fg-3);
+  margin:0 0 38px;display:flex;align-items:center;gap:15px;font-weight:500}
+.eyebrow::before{content:"";width:42px;height:1px;background:var(--accent);opacity:.75}
+h1{font-family:"Fraunces",Georgia,serif;font-weight:300;
+  font-size:clamp(3.1rem,6.6vw,5.9rem);line-height:.95;letter-spacing:-.043em;
+  margin:0 0 34px;text-wrap:balance;font-variation-settings:"SOFT" 0,"WONK" 1}
+h1 em{font-style:italic;font-weight:400;color:var(--accent)}
+.lede{font-size:1.08rem;color:var(--fg-2);max-width:40ch;margin:0 0 42px;line-height:1.72}
+.acts{display:flex;gap:13px;flex-wrap:wrap}
+.scrollcue{position:absolute;bottom:42px;left:clamp(24px,5vw,76px);font-size:10.5px;
+  letter-spacing:.28em;text-transform:uppercase;color:var(--fg-3);display:flex;align-items:center;gap:13px}
+.scrollcue span{width:1px;height:32px;background:linear-gradient(var(--accent),transparent)}
+
+.chapter{min-height:92vh;display:flex;align-items:center;padding:110px 0}
+.chapter-in{max-width:560px}
+.chapter.right .chapter-in{margin-left:auto}
+.num{font-family:"Fraunces",serif;font-size:12px;letter-spacing:.3em;color:var(--accent);margin:0 0 26px}
+h2{font-family:"Fraunces",Georgia,serif;font-weight:300;font-size:clamp(2.1rem,4.4vw,3.4rem);
+  line-height:1.04;letter-spacing:-.034em;margin:0 0 22px;text-wrap:balance}
+h2 em{font-style:italic;color:var(--accent);font-weight:400}
+.chapter p{color:var(--fg-2);font-size:1.03rem;max-width:43ch;margin:0 0 28px}
+.detail{list-style:none;padding:0;margin:0;border-top:1px solid var(--rule)}
+.detail li{display:grid;grid-template-columns:auto 1fr;gap:20px;align-items:baseline;
+  padding:14px 0;border-bottom:1px solid var(--rule);font-size:14.4px;color:var(--fg-2)}
+.detail b{color:var(--fg);font-weight:500;white-space:nowrap}
+
+.close{min-height:84vh;display:flex;align-items:center;padding:110px 0 120px}
+.close h2{font-size:clamp(2.4rem,5.6vw,4.4rem);max-width:14ch;margin-bottom:32px}
+footer{border-top:1px solid var(--rule);padding:28px 0 42px;color:var(--fg-3);font-size:12.5px}
+.foot-in{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.swatch{color:var(--fg-3);text-decoration:none;border-bottom:1px solid var(--rule-2)}
+.swatch:hover{color:var(--accent)}
+
+@media (max-width:900px){.nav-l{display:none}.chapter.right .chapter-in{margin-left:0}}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}
+  .rv{opacity:1;filter:none;transform:none;transition:none}.btn{transition:none}}
+</style>
+</head>
+<body>
+
+<canvas id="gl" aria-hidden="true"></canvas>
+<div id="glfallback" aria-hidden="true"></div>
+<div id="grain" aria-hidden="true"></div>
+
+<div class="content">
+  <nav><div class="shell nav-in">
+    <div class="brand"><i></i>Nexora</div>
+    <div class="nav-l"><a href="#sync">Sync</a><a href="#grades">Grades</a><a href="#study">Study</a></div>
+    <a class="btn quiet" href="#">Start free</a>
+  </div></nav>
+
+  <section class="hero">
+    <div class="shell">
+      <div class="hero-copy">
+        <p class="eyebrow rv">The intelligent student OS</p>
+        <h1 class="rv">Your semester, <em>solved</em> before it starts.</h1>
+        <p class="lede rv">Nexora pulls your whole term out of Brightspace, understands the rules that decide your grade, and turns your lectures into something you can actually study.</p>
+        <div class="acts rv">
+          <a class="btn" href="#">Start free</a>
+          <a class="btn quiet" href="#sync">See how it works</a>
+        </div>
+      </div>
+    </div>
+    <div class="scrollcue"><span></span>Scroll</div>
+  </section>
+
+  <section class="chapter" id="sync"><div class="shell"><div class="chapter-in">
+    <p class="num rv">01 — Sync</p>
+    <h2 class="rv">Everything in Brightspace, <em>without</em> Brightspace.</h2>
+    <p class="rv">The extension reads your courses, deadlines, announcements and lecture files, and keeps them current. You stop checking six course pages to find out what is due.</p>
+    <ul class="detail rv">
+      <li><b>Courses</b><span>Discovered automatically, each with its own workspace</span></li>
+      <li><b>Deadlines</b><span>Assignments, quizzes and labs on one timeline</span></li>
+      <li><b>Files</b><span>Slides and outlines pulled in as they are posted</span></li>
+      <li><b>Auto-sync</b><span>Runs on an interval, so the term stays current</span></li>
+    </ul>
+  </div></div></section>
+
+  <section class="chapter right" id="grades"><div class="shell"><div class="chapter-in">
+    <p class="num rv">02 — Grades</p>
+    <h2 class="rv">It reads the paragraph that <em>decides</em> your grade.</h2>
+    <p class="rv">Best ten of twelve labs. A final you must reach 50% on regardless of your total. A second scheme that only opens if the first reaches C-. Nexora extracts all of it, then tells you what you need.</p>
+    <ul class="detail rv">
+      <li><b>Dropped marks</b><span>Best-n-of-m applied for you</span></li>
+      <li><b>Hurdles</b><span>Minimums that override the total</span></li>
+      <li><b>Alternate schemes</b><span>Every eligible one computed, the best applied</span></li>
+      <li><b>Bonuses</b><span>Added on top, so 104% shows as 104%</span></li>
+    </ul>
+  </div></div></section>
+
+  <section class="chapter" id="study"><div class="shell"><div class="chapter-in">
+    <p class="num rv">03 — Study</p>
+    <h2 class="rv">Your lectures, turned into <em>practice</em>.</h2>
+    <p class="rv">Point at any slide deck you have synced. Nexora writes flashcards, quizzes, summaries and study guides from it, each cited back to the slide it came from, so you can check it rather than trust it.</p>
+    <ul class="detail rv">
+      <li><b>Flashcards</b><span>Front and back, drawn from your own material</span></li>
+      <li><b>Quizzes</b><span>Multiple choice with worked explanations</span></li>
+      <li><b>Summaries</b><span>Key concepts, with the slide reference kept</span></li>
+      <li><b>Copilot</b><span>Ask anything, answered against your course</span></li>
+    </ul>
+  </div></div></section>
+
+  <section class="close"><div class="shell">
+    <h2 class="rv">Know where you stand in week one.</h2>
+    <p class="lede rv">Not in April, when the arithmetic finally catches up with you.</p>
+    <div class="acts rv"><a class="btn" href="#">Start free</a></div>
+  </div></section>
+
+  <footer><div class="shell foot-in">
+    <span>Nexora — concept build</span>
+    <span>Material:
+      <a class="swatch" href="?m=metal">metal</a> ·
+      <a class="swatch" href="?m=glass">glass</a>
+    </span>
+  </div></footer>
+</div>
+
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+/* ---- blur-to-focus reveals (independent of WebGL) ---- */
+const io = new IntersectionObserver((es) => {
+  es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+}, { threshold: .18, rootMargin: '0px 0px -8% 0px' });
+document.querySelectorAll('.rv').forEach((el, i) => {
+  el.style.transitionDelay = Math.min(i, 6) * 70 + 'ms';
+  io.observe(el);
+});
+
+const canvas = document.getElementById('gl');
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---- degrade gracefully rather than shipping a broken canvas ---- */
+function giveUp() {
+  canvas.style.display = 'none';
+  document.getElementById('glfallback').style.display = 'block';
+}
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
+} catch (err) { console.warn('WebGL unavailable:', err); giveUp(); }
+
+if (renderer) {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 100);
+  camera.position.set(0, 0, 5.4);
+
+  /* The environment is what sells it. Without reflections a metal sphere reads
+     as matte plastic -- which is exactly how the previous attempt failed.
+     RoomEnvironment builds a studio procedurally, so there is no HDRI to fetch
+     and nothing to 404 on a cold free-tier instance. */
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  const envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
+  scene.environment = envRT.texture;
+
+  /* Geometry: a smooth icosphere, then displaced along its normals by layered
+     trig so the silhouette is never a perfect circle. A plain sphere is what
+     reads as a balloon; an irregular one reads as a body with volume. */
+  const geo = new THREE.IcosahedronGeometry(1.28, 64);
+  const pos = geo.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const n = v.clone().normalize();
+    const d =
+      0.085 * Math.sin(n.x * 2.1 + n.y * 1.7) +
+      0.060 * Math.sin(n.y * 3.3 - n.z * 2.4) +
+      0.040 * Math.sin(n.z * 4.6 + n.x * 3.1);
+    v.addScaledVector(n, d);
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  geo.computeVertexNormals();
+
+  const wantGlass = new URLSearchParams(location.search).get('m') === 'glass';
+  const material = wantGlass
+    ? new THREE.MeshPhysicalMaterial({
+        transmission: .92, thickness: 1.5, ior: 1.5, roughness: .09,
+        clearcoat: 1, clearcoatRoughness: .06, metalness: 0,
+        attenuationColor: new THREE.Color('#E0A340'), attenuationDistance: 1.4,
+        envMapIntensity: 1.5,
+      })
+    : new THREE.MeshPhysicalMaterial({
+        // Colour comes from the lights and the environment, not a flat fill.
+        color: new THREE.Color('#8A8378'),
+        metalness: 1, roughness: .17,
+        clearcoat: 1, clearcoatRoughness: .12,
+        envMapIntensity: 1.35,
+      });
+
+  const mesh = new THREE.Mesh(geo, material);
+  scene.add(mesh);
+
+  /* Key light upper-left for a sharp specular; a dim warm rim from the
+     opposite side to separate the silhouette from a near-black page. */
+  const key = new THREE.DirectionalLight('#FFF2DC', 3.1);
+  key.position.set(-4.2, 4.6, 3.4);
+  scene.add(key);
+
+  const rim = new THREE.PointLight('#E0A340', 26, 22, 2);
+  rim.position.set(4.6, -2.2, -3.2);
+  scene.add(rim);
+
+  scene.add(new THREE.AmbientLight('#5A6070', .35));
+
+  /* ---- placement: the object owns the right side and never sits under text ---- */
+  function layout() {
+    const w = innerWidth, h = innerHeight;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    const narrow = w < 900;
+    camera.position.z = narrow ? 6.6 : 5.4;
+    // Shifting the camera left pushes the mesh visually right, off the copy.
+    camera.setViewOffset(w, h, narrow ? 0 : -w * 0.19, narrow ? h * 0.10 : 0, w, h);
+    camera.updateProjectionMatrix();
+  }
+  layout();
+  addEventListener('resize', layout);
+
+  /* ---- damped pointer follow: eased, never instant, never linear ---- */
+  const target = { x: 0, y: 0 };
+  const cur = { x: 0, y: 0 };
+  addEventListener('pointermove', (e) => {
+    target.x = (e.clientX / innerWidth - .5) * 2;
+    target.y = (e.clientY / innerHeight - .5) * 2;
+  }, { passive: true });
+
+  let scrollN = 0, scrollCur = 0;
+  function readScroll() {
+    const max = document.documentElement.scrollHeight - innerHeight;
+    scrollN = max > 0 ? scrollY / max : 0;
+  }
+  addEventListener('scroll', readScroll, { passive: true });
+  readScroll();
+
+  /* ---- pause when the hero is off screen ---- */
+  let live = true;
+  new IntersectionObserver(
+    (es) => { live = es[0].isIntersecting; },
+    { rootMargin: '200px' }
+  ).observe(document.querySelector('.hero'));
+
+  const clock = new THREE.Clock();
+  const SPIN = (Math.PI * 2) / 52;          // one revolution per ~52s
+
+  function frame() {
+    requestAnimationFrame(frame);
+    const dt = Math.min(clock.getDelta(), .05);
+    if (!live) return;
+
+    if (!reduced) mesh.rotation.y += SPIN * dt;
+
+    // Exponential smoothing -- frame-rate independent, and it eases in without
+    // ever overshooting the way a spring with too little damping would.
+    const k = 1 - Math.pow(0.0016, dt);
+    cur.x += (target.x - cur.x) * k;
+    cur.y += (target.y - cur.y) * k;
+    scrollCur += (scrollN - scrollCur) * (1 - Math.pow(0.004, dt));
+
+    mesh.rotation.x = cur.y * .26;
+    mesh.rotation.z = -cur.x * .10;
+    mesh.position.x = cur.x * .18;
+    mesh.position.y = -cur.y * .14 - scrollCur * .55;
+    const s = 1 + scrollCur * .12;
+    mesh.scale.setScalar(s);
+
+    renderer.render(scene, camera);
+  }
+  frame();
+}
+</script>
+</body>
+</html>
