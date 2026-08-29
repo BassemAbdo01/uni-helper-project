@@ -56,7 +56,7 @@ def score(case, parsed):
 
     components = [c for c in (parsed.get("components") or []) if isinstance(c, dict)]
 
-    for needle, weight in expect["components"]:
+    for needle, weight in (expect["components"] or []):
         match = _find(components, needle)
         if match is None:
             problems.append(f"missing component ~{needle!r}")
@@ -73,7 +73,11 @@ def score(case, parsed):
         if extra > 0:
             names = [c.get("name") for c in components]
             problems.append(f"{extra} unexpected component(s): {names}")
-    elif components:
+    elif expect["components"] is not None and components:
+        # An empty list means the outline states no weights, so any component is
+        # invented. None means the top-level list is not what this case is about
+        # -- for a multi-scheme outline it is legitimately ambiguous which scheme
+        # belongs there, and the per-option checks below carry the real assertion.
         problems.append(f"invented {len(components)} component(s) from an outline with no weights")
 
     if expect.get("total") is not None:
@@ -99,25 +103,54 @@ def score(case, parsed):
         if got != expect["options_count"]:
             problems.append(f"{got} grading_options, expected {expect['options_count']}")
 
+    if expect.get("options_total") is not None:
+        for option in parsed.get("grading_options") or []:
+            comps = [c for c in (option.get("components") or []) if isinstance(c, dict)]
+            total = sum(float(c.get("weight") or 0) for c in comps)
+            if comps and abs(total - expect["options_total"]) > 0.01:
+                problems.append(f"{option.get('option_name')!r} totals {total}, expected {expect['options_total']}")
+            for banned in expect.get("must_not_contain", []):
+                if _find(comps, banned) is not None:
+                    problems.append(f"{option.get('option_name')!r} counted excluded item ~{banned!r}")
+
     if expect.get("low_confidence") and parsed.get("confidence") == "high":
         problems.append("confidence 'high' on an outline that omits its weights")
 
     return problems
 
 
-def run(cases, show_raw=False):
+_TEST_SCALE = {
+    "configured": True,
+    "university_name": "Test University",
+    "scale": [{"letter": "A", "min": 80}, {"letter": "B", "min": 70}, {"letter": "C", "min": 60},
+              {"letter": "C-", "min": 57}, {"letter": "D", "min": 50}, {"letter": "F", "min": 0}],
+}
+
+
+def run(cases, show_raw=False, pipeline=False):
+    """pipeline=True exercises the three-stage compiler a course workspace uses.
+
+    The single call and the pipeline build different prompts, so a rule can be
+    right on one path and missing on the other -- which is exactly how bonus
+    components survived into a scheme and made its weights total 104%.
+    """
     results = []
     for case in cases:
         used = []
         try:
-            parsed = app._gemini_json(
-                "You are a precise university course-outline parser. Output only valid JSON.",
-                app._outline_analysis_prompt(case["text"], "TEST 1000"),
-                4000,
-                0.1,
-                reasoning=True,
-                used_model=used,
-            )
+            if pipeline:
+                parsed = app._high_accuracy_outline_analysis(
+                    "TEST 1000", case["text"], _TEST_SCALE, app._outline_schema())
+                used = ["pipeline"]
+            else:
+                parsed = app._gemini_json(
+                    "You are a precise university course-outline parser. Output only valid JSON.",
+                    app._outline_analysis_prompt(case["text"], "TEST 1000"),
+                    4000,
+                    0.1,
+                    reasoning=True,
+                    used_model=used,
+                )
         except Exception as exc:  # a crash is itself a result worth recording
             print(f"[ERROR] {case['id']}: {type(exc).__name__}: {exc}")
             results.append((case["id"], ["call failed"]))
@@ -141,6 +174,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--case", help="run a single case by id")
     ap.add_argument("--raw", action="store_true", help="dump the parsed JSON")
+    ap.add_argument("--pipeline", action="store_true",
+                    help="run the three-stage compiler instead of a single call")
     args = ap.parse_args()
 
     selected = [c for c in CASES if not args.case or c["id"] == args.case]
@@ -148,4 +183,4 @@ if __name__ == "__main__":
         sys.exit(f"no such case: {args.case}")
     if not os.environ.get("GEMINI_API_KEY"):
         sys.exit("GEMINI_API_KEY not set -- source .env first")
-    run(selected, show_raw=args.raw)
+    run(selected, show_raw=args.raw, pipeline=args.pipeline)

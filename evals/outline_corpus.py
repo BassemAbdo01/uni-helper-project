@@ -278,4 +278,43 @@ to pass the course.
             "options_count": 4,
         },
     },
+    {
+        "id": "two_column_schemes_with_bonus",
+        "why": "A real Carleton outline. One row per component and a column per scheme, so "
+               "each component carries two different weights, and a bonus row sits in the "
+               "same table as the graded ones. The bonus is what made Scheme 2 total 104%: "
+               "the rule excluding it existed but was never sent to the pipeline. Also "
+               "carries a prerequisite letter rule that must not become a course-fail rule.",
+        "text": """
+To pass the course, students must pass the final examination (i.e., achieve at least 50%), and
+achieve at least 4/10 on the lab component and at least 4/10 on the assignment component. For
+students who pass the final exam and meet these requirements, a numeric mark out of 100 will be
+calculated by weighting the course components according to Scheme 1.
+
+If you meet the above requirements and the grade under Scheme 1 is lower than C-, this will be the
+final grade.
+
+If you meet the above requirements and the letter grade under Scheme 1 is C- or higher, then a
+second numeric mark will be calculated using Scheme 2, and this mark will be converted to a second
+letter grade. The final grade will be the higher of the two letter grades.
+
+Component                     Required                        Scheme 1   Scheme 2
+Assignments (best 2 out of 3) at least 4/10                   0%         10% (max of 12%)
+Labs (best 10 out of 12)      at least 4/10                   0%         10% (max of 11.5%)
+Bonus: Class Participation    see attendance details below    0%         4% (bonus)
+Midterm                       see Missed Midterm below        30%        20%
+Final exam                    at least 50/100                 70%        60%
+
+Note: SYSC 1006/2006 with a minimum grade of C- is a prerequisite for SYSC 2100 and several 3000
+and 4000 level SYSC courses.
+""",
+        "expect": {
+            "components": None,   # ambiguous which scheme belongs at top level; options carry the assertion
+            "total": None,
+            "signals": ["grading_options", "component_minimums", "scheme_policies"],
+            "options_count": 2,
+            "options_total": 100,
+            "must_not_contain": ["bonus", "participation"],
+        },
+    },
 ]

@@ -3750,6 +3750,10 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
         "scheme eligibility as scheme_policies; prerequisite letter rules separately from "
         "course-pass rules. Return strict JSON matching this schema:\n"
         + json.dumps(schema, ensure_ascii=False, indent=2)
+        # These rules were built by the route and thrown away, so the compiler
+        # worked from the schema alone and had never been told to drop bonus
+        # marks or to keep a prerequisite letter rule out of the pass rules.
+        + "\n\n" + _outline_extraction_rules()
         + "\nCONFIRMED UNIVERSITY SCALE:\n"
         + scale
         + "\nEXTRACTED FACTS:\n"
@@ -3783,6 +3787,10 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
         "an integer from 0 to 100 (a percentage, e.g. 96 for 96% confident) — never a 0-1 "
         "fraction. Return strict JSON matching:\n"
         + json.dumps(audit_schema, ensure_ascii=False, indent=2)
+        # Audit against the same rules the compiler was given, so a bonus that
+        # slipped through, or a prerequisite rule recorded as a course fail, is
+        # caught here rather than shown to the student.
+        + "\n\nTHE RULES THE MODEL WAS COMPILED AGAINST:\n" + _outline_extraction_rules()
         + "\nSOURCE:\n"
         + excerpt
         + "\nFACTS:\n"
@@ -3926,6 +3934,37 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
     )
     return final
 
+def _outline_extraction_rules():
+    """The extraction rules, shared by the single-call prompt and the pipeline.
+
+    These were written into the analyze route and then never sent: the route
+    built its prompt and discarded it, so only the bare schema reached
+    _high_accuracy_outline_analysis. Every instruction here -- exclude bonus
+    marks, keep alternative schemes separate, distinguish a prerequisite
+    letter rule from a course-fail one, never invent missing values -- was
+    dead text on the path that actually runs for a course workspace. The
+    visible symptom was a bonus component surviving into a scheme, so its
+    weights totalled 104%.
+    """
+    return """IMPORTANT — read the whole outline before extracting anything:
+1. Some outlines define ONE fixed grading scheme (a single components list). If so, leave grading_options empty and put everything in components; weights should total 100.
+2. Some outlines define MULTIPLE ALTERNATIVE grading schemes (e.g. "Option 1: Final exam 100%", "Option 2: best test 15% + tutorials 5% + final 80%") where the student's final grade is whichever option gives them the best result. If you see this pattern, put EACH option as its own entry in grading_options (each with its own components list summing to 100), and set the top-level `components` to the most detailed/informative option (usually the one with the most components) as the default shown to the student. Add a rule noting that alternate options exist and the best one is applied automatically.
+3. IGNORE bonus marks, extra-credit quizzes, optional mentorship-meeting bonuses, or any "1% bonus" style paragraphs — these are not part of the graded weighting scheme and must never appear in components or grading_options. A percentage inside a sentence like "complete the quiz to earn your 1%" is a bonus incentive, not a graded component; do not extract it.
+4. Only extract an item as a component if it is a genuine named grading category from a grading breakdown/table (e.g. "Midterm", "Labs", "Assignments", "Final Exam", "Tutorial attendance", "Term Tests") — never a sentence fragment.
+5. Detect every special pass/fail rule (minimum score on the final exam, labs, midterms, tutorial attendance requirements, overall minimum grade) and put numeric thresholds in component_minimums. Never invent missing values.
+6. Grading tables may be headed Assessment Breakdown, Assessment Distribution, Grade Distribution, Evaluation, Marking Scheme, Basis of Grade, or similar. Treat all of these as equivalent.
+7. Ignore explanatory dates/descriptions between an assessment name and its weight. Example: 'Midterm Exam I Closed book (Weekend of Jan 31) 20%' means Midterm 1 = 20%.
+8. If there are several alternative options, never add their weights together. Return each option separately.
+9. Detect letter-grade rules such as "C- or better". Put them in letter_requirements. Distinguish scope: use "course_pass" only if the outline says the student fails the course below that letter; use "prerequisite" when it only controls prerequisite eligibility. Never turn a prerequisite requirement into a course FAIL rule.
+10. Detect best/drop/replacement policies such as best 1 of 2 midterms, best 2 of 3 assignments, drop the lowest quiz, or final replaces a missed test. Put executable rules in selection_rules.
+11. Detect aggregate requirements such as "theory component (quiz + tutorial + final) must be at least 50%". Put them in derived_components and in pass_rules using type aggregate_minimum with the included component names.
+12. Detect conditional scheme logic. Example: Scheme 2 is used only if Scheme 1 is C- or higher. Put this in scheme_policies; do not treat an ineligible scheme as the winning result.
+13. Interpret every letter threshold using the student's saved university grading scale, never a hardcoded university scale.
+14. If wording is ambiguous or pages appear missing, list the uncertainty in ambiguities and lower confidence. Never invent missing rules. AI interpretation is not guaranteed to be 100% accurate and the student must confirm the result.
+15. Some outlines move weight between components according to how the student performs, e.g. "if your final exam percentage is higher than your midterm, the midterm weight transfers to the final". Arithmetically that is the same as two alternative schemes with the better result applied, and it must always be expressed that way: put the stated weighting and the transferred weighting in grading_options, keep the top-level components as the stated weighting, and record the triggering condition in rules. Do not invent a separate rule type for it, and never merge the transferred weight into components as though it always applies.
+16. An alternative scheme is sometimes open only to students who actually sat some number of a group of assessments, e.g. "options 3 and 4 require that you have written at least two and three of the written tests respectively". Record that on the option itself as eligibility, naming the group in from_components using the same component names you used elsewhere, the count in requires_completed, and a plain-language message. Leave eligibility off an option that every student can use. This is about whether an option is available at all, which is not the same as a minimum mark inside it -- a mark floor belongs in component_minimums."""
+
+
 def _outline_schema():
     """The extraction schema, shared by the prompt builder and the audit pipeline.
 
@@ -3997,23 +4036,7 @@ def _outline_analysis_prompt(text_value, course=''):
         + json.dumps(outline_schema, ensure_ascii=False, indent=2)
         + """
 
-IMPORTANT — read the whole outline before extracting anything:
-1. Some outlines define ONE fixed grading scheme (a single components list). If so, leave grading_options empty and put everything in components; weights should total 100.
-2. Some outlines define MULTIPLE ALTERNATIVE grading schemes (e.g. "Option 1: Final exam 100%", "Option 2: best test 15% + tutorials 5% + final 80%") where the student's final grade is whichever option gives them the best result. If you see this pattern, put EACH option as its own entry in grading_options (each with its own components list summing to 100), and set the top-level `components` to the most detailed/informative option (usually the one with the most components) as the default shown to the student. Add a rule noting that alternate options exist and the best one is applied automatically.
-3. IGNORE bonus marks, extra-credit quizzes, optional mentorship-meeting bonuses, or any "1% bonus" style paragraphs — these are not part of the graded weighting scheme and must never appear in components or grading_options. A percentage inside a sentence like "complete the quiz to earn your 1%" is a bonus incentive, not a graded component; do not extract it.
-4. Only extract an item as a component if it is a genuine named grading category from a grading breakdown/table (e.g. "Midterm", "Labs", "Assignments", "Final Exam", "Tutorial attendance", "Term Tests") — never a sentence fragment.
-5. Detect every special pass/fail rule (minimum score on the final exam, labs, midterms, tutorial attendance requirements, overall minimum grade) and put numeric thresholds in component_minimums. Never invent missing values.
-6. Grading tables may be headed Assessment Breakdown, Assessment Distribution, Grade Distribution, Evaluation, Marking Scheme, Basis of Grade, or similar. Treat all of these as equivalent.
-7. Ignore explanatory dates/descriptions between an assessment name and its weight. Example: 'Midterm Exam I Closed book (Weekend of Jan 31) 20%' means Midterm 1 = 20%.
-8. If there are several alternative options, never add their weights together. Return each option separately.
-9. Detect letter-grade rules such as "C- or better". Put them in letter_requirements. Distinguish scope: use "course_pass" only if the outline says the student fails the course below that letter; use "prerequisite" when it only controls prerequisite eligibility. Never turn a prerequisite requirement into a course FAIL rule.
-10. Detect best/drop/replacement policies such as best 1 of 2 midterms, best 2 of 3 assignments, drop the lowest quiz, or final replaces a missed test. Put executable rules in selection_rules.
-11. Detect aggregate requirements such as "theory component (quiz + tutorial + final) must be at least 50%". Put them in derived_components and in pass_rules using type aggregate_minimum with the included component names.
-12. Detect conditional scheme logic. Example: Scheme 2 is used only if Scheme 1 is C- or higher. Put this in scheme_policies; do not treat an ineligible scheme as the winning result.
-13. Interpret every letter threshold using the student's saved university grading scale, never a hardcoded university scale.
-14. If wording is ambiguous or pages appear missing, list the uncertainty in ambiguities and lower confidence. Never invent missing rules. AI interpretation is not guaranteed to be 100% accurate and the student must confirm the result.
-15. Some outlines move weight between components according to how the student performs, e.g. "if your final exam percentage is higher than your midterm, the midterm weight transfers to the final". Arithmetically that is the same as two alternative schemes with the better result applied, and it must always be expressed that way: put the stated weighting and the transferred weighting in grading_options, keep the top-level components as the stated weighting, and record the triggering condition in rules. Do not invent a separate rule type for it, and never merge the transferred weight into components as though it always applies.
-16. An alternative scheme is sometimes open only to students who actually sat some number of a group of assessments, e.g. "options 3 and 4 require that you have written at least two and three of the written tests respectively". Record that on the option itself as eligibility, naming the group in from_components using the same component names you used elsewhere, the count in requires_completed, and a plain-language message. Leave eligibility off an option that every student can use. This is about whether an option is available at all, which is not the same as a minimum mark inside it -- a mark floor belongs in component_minimums.
+""" + _outline_extraction_rules() + """
 
 OUTLINE:
 """
