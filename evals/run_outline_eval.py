@@ -38,6 +38,12 @@ def _find(components, needle):
     return None
 
 
+def _is_bonus(comp):
+    """Match the same signal app.py uses to separate bonus weight from the base."""
+    blob = f"{comp.get('name') or ''} {comp.get('category') or ''}"
+    return bool(re.search(r"bonus|extra\s*credit", blob, re.I))
+
+
 def _walk(node):
     """Yield every string in a nested structure, for signal keyword checks."""
     if isinstance(node, str):
@@ -54,7 +60,11 @@ def score(case, parsed):
     expect = case["expect"]
     problems = []
 
-    components = [c for c in (parsed.get("components") or []) if isinstance(c, dict)]
+    all_components = [c for c in (parsed.get("components") or []) if isinstance(c, dict)]
+    bonus_components = [c for c in all_components if _is_bonus(c)]
+    # Everything below reasons about the base scheme; a bonus sits on top of it
+    # and legitimately pushes the achievable total past 100.
+    components = [c for c in all_components if not _is_bonus(c)]
 
     for needle, weight in (expect["components"] or []):
         match = _find(components, needle)
@@ -87,7 +97,19 @@ def score(case, parsed):
 
     for banned in expect.get("must_not_contain", []):
         if _find(components, banned) is not None:
-            problems.append(f"counted excluded item ~{banned!r}")
+            problems.append(f"counted excluded item ~{banned!r} in the base scheme")
+
+    if expect.get("bonus"):
+        needle, amount = expect["bonus"]
+        match = _find(bonus_components, needle)
+        if match is None:
+            problems.append(f"bonus ~{needle!r} was dropped; a student who earned it would be under-reported")
+        else:
+            got = float(match.get("weight") or 0)
+            if abs(got - amount) > 0.01:
+                problems.append(f"bonus {match.get('name')!r} weighted {got}, expected {amount}")
+    elif bonus_components and expect.get("no_bonus_expected"):
+        problems.append(f"invented a bonus: {[c.get('name') for c in bonus_components]}")
 
     for signal in expect.get("signals", []):
         if signal == "cap":
@@ -103,15 +125,25 @@ def score(case, parsed):
         if got != expect["options_count"]:
             problems.append(f"{got} grading_options, expected {expect['options_count']}")
 
-    if expect.get("options_total") is not None:
+    if expect.get("options_base_total") is not None:
+        # A bonus is additive: it sits on top of a scheme whose other components
+        # already total 100, so the raw total legitimately exceeds 100 and only
+        # the base is worth asserting.
         for option in parsed.get("grading_options") or []:
             comps = [c for c in (option.get("components") or []) if isinstance(c, dict)]
-            total = sum(float(c.get("weight") or 0) for c in comps)
-            if comps and abs(total - expect["options_total"]) > 0.01:
-                problems.append(f"{option.get('option_name')!r} totals {total}, expected {expect['options_total']}")
+            if not comps:
+                continue
+            base = sum(float(c.get("weight") or 0) for c in comps if not _is_bonus(c))
+            if abs(base - expect["options_base_total"]) > 0.01:
+                problems.append(f"{option.get('option_name')!r} base weight {base}, expected {expect['options_base_total']}")
             for banned in expect.get("must_not_contain", []):
                 if _find(comps, banned) is not None:
                     problems.append(f"{option.get('option_name')!r} counted excluded item ~{banned!r}")
+
+    for needle in expect.get("some_option_contains", []):
+        options = parsed.get("grading_options") or []
+        if not any(_find(o.get("components") or [], needle) for o in options):
+            problems.append(f"no scheme contains ~{needle!r}, which a student can actually earn")
 
     if expect.get("low_confidence") and parsed.get("confidence") == "high":
         problems.append("confidence 'high' on an outline that omits its weights")

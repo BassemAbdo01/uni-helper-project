@@ -121,6 +121,22 @@ Gotchas that have already bitten:
   escape it, so one malformed reply killed every remaining retry and model
   candidate instead of falling through.
 
+## Bonus marks
+
+Grade points are summed without normalising (`contribution = pct/100 * weight`
+in `_evaluate_option`), so a component weighted 4 adds exactly 4 points. That
+makes a bonus work correctly as an ordinary component: a student who aces a
+scheme whose base totals 100 and also earns a 4% bonus finishes at 104, which is
+right. `_check_total` already knows this and excludes bonus weight, detected by
+`bonus|extra credit` in the name or category, before flagging a total.
+
+So a bonus must be RECORDED, never dropped. Dropping one silently under-reports
+every student who earned it. Rule 3 briefly said to ignore bonuses, which was
+harmless only while the rules never reached the pipeline; delivering them made
+the app start discarding earned marks. Record any bonus whose amount the outline
+states, wherever it is stated; only a bonus with no stated amount belongs in
+`rules` instead.
+
 ## Outline analysis
 
 `_outline_schema()` returns the extraction schema; `_outline_analysis_prompt()`

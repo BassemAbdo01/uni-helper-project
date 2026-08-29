@@ -79,8 +79,11 @@ shown.
         },
     },
     {
-        "id": "bonus_excluded",
-        "why": "Extra credit is phrased like a component and must still not be counted.",
+        "id": "prose_bonus",
+        "why": "A bonus stated in a sentence rather than in the table. It still has a stated "
+               "amount a student can earn, so it must be recorded -- grade points are summed "
+               "without normalising, so recording it is what credits the student. What it must "
+               "NOT do is join the base scheme and dilute the other weights.",
         "text": """
 Assessment Distribution
 
@@ -94,9 +97,9 @@ cannot raise a failing grade to a pass.
 """,
         "expect": {
             "components": [("problem set", 25), ("midterm", 30), ("final", 45)],
-            "total": 100,
+            "total": 100,          # base only; the bonus is checked separately
             "signals": [],
-            "must_not_contain": ["bonus", "tutorial"],
+            "bonus": ("tutorial", 3),
         },
     },
     {
@@ -284,7 +287,10 @@ to pass the course.
                "each component carries two different weights, and a bonus row sits in the "
                "same table as the graded ones. The bonus is what made Scheme 2 total 104%: "
                "the rule excluding it existed but was never sent to the pipeline. Also "
-               "carries a prerequisite letter rule that must not become a course-fail rule.",
+               "carries a prerequisite letter rule that must not become a course-fail rule. The "
+               "bonus must SURVIVE: grade points are summed without normalising, so a 4% bonus "
+               "component adds exactly 4 points and a student who earns it genuinely finishes at "
+               "104%. Dropping it under-reports every student who did the work.",
         "text": """
 To pass the course, students must pass the final examination (i.e., achieve at least 50%), and
 achieve at least 4/10 on the lab component and at least 4/10 on the assignment component. For
@@ -313,8 +319,8 @@ and 4000 level SYSC courses.
             "total": None,
             "signals": ["grading_options", "component_minimums", "scheme_policies"],
             "options_count": 2,
-            "options_total": 100,
-            "must_not_contain": ["bonus", "participation"],
+            "options_base_total": 100,
+            "some_option_contains": ["participation"],
         },
     },
 ]
