@@ -204,3 +204,138 @@ def test_production_refuses_to_boot_without_a_secret_key():
                             capture_output=True, text=True, timeout=120)
     assert result.returncode != 0, "app booted in production with no SECRET_KEY"
     assert "SECRET_KEY is not set" in result.stderr
+
+
+# --------------------------------------------------------------------------
+# Password reset
+# --------------------------------------------------------------------------
+
+@pytest.fixture()
+def mailbox(monkeypatch):
+    """Capture outgoing mail instead of sending it."""
+    import app as nexora
+    sent = []
+    monkeypatch.setattr(nexora, "email_is_configured", lambda: True)
+    monkeypatch.setattr(nexora, "send_email",
+                        lambda to, subject, body: sent.append({"to": to, "subject": subject, "body": body}) or True)
+    return sent
+
+
+def _reset_token_from(mailbox):
+    link = next(w for w in mailbox[-1]["body"].split() if "/reset-password/" in w)
+    return link.rsplit("/", 1)[1]
+
+
+def test_reset_is_refused_honestly_when_email_is_not_configured(client):
+    import app as nexora
+    assert not nexora.email_is_configured()          # no SMTP env in tests
+    response = client.post("/forgot-password", data={"email": "student@carleton.ca"})
+    assert response.status_code == 200
+    assert b"not available yet" in response.data
+
+
+def test_reset_link_lets_a_student_set_a_new_password(client, mailbox):
+    signup(client)
+    client.get("/logout")
+
+    client.post("/forgot-password", data={"email": "student@carleton.ca"})
+    token = _reset_token_from(mailbox)
+
+    assert client.get(f"/reset-password/{token}").status_code == 200
+    assert client.post(f"/reset-password/{token}",
+                       data={"password": "a-brand-new-password"}).status_code in (301, 302)
+    assert client.get("/dashboard").status_code == 200     # signed in by the reset
+
+    client.get("/logout")
+    login(client, password="correct-horse-battery")        # the old one
+    assert client.get("/dashboard").status_code in (301, 302)
+    login(client, password="a-brand-new-password")
+    assert client.get("/dashboard").status_code == 200
+
+
+def test_reset_response_does_not_reveal_whether_an_account_exists(client, mailbox):
+    signup(client)
+    client.get("/logout")
+    known = client.post("/forgot-password", data={"email": "student@carleton.ca"}).data
+    unknown = client.post("/forgot-password", data={"email": "nobody@nowhere.test"}).data
+    assert known == unknown, "the reply differs, so this form enumerates accounts"
+
+
+def test_reset_token_is_single_use(client, mailbox):
+    signup(client)
+    client.get("/logout")
+    client.post("/forgot-password", data={"email": "student@carleton.ca"})
+    token = _reset_token_from(mailbox)
+    client.post(f"/reset-password/{token}", data={"password": "a-brand-new-password"})
+    assert client.get(f"/reset-password/{token}").status_code == 400
+
+
+def test_reset_token_is_stored_hashed(client, mailbox):
+    import app as nexora
+    signup(client)
+    client.get("/logout")
+    client.post("/forgot-password", data={"email": "student@carleton.ca"})
+    token = _reset_token_from(mailbox)
+    with nexora.app.app_context():
+        rows = nexora.PasswordResetToken.query.all()
+        assert rows
+        assert all(token not in (r.token_hash or "") for r in rows)
+
+
+def test_expired_reset_token_is_rejected(client, mailbox):
+    import app as nexora
+    from app import db
+    from datetime import datetime, timedelta
+    signup(client)
+    client.get("/logout")
+    client.post("/forgot-password", data={"email": "student@carleton.ca"})
+    token = _reset_token_from(mailbox)
+    with nexora.app.app_context():
+        row = nexora.PasswordResetToken.query.first()
+        row.expires_at = datetime.utcnow() - timedelta(minutes=1)
+        db.session.commit()
+    assert client.get(f"/reset-password/{token}").status_code == 400
+
+
+def test_reset_rejects_a_short_password(client, mailbox):
+    signup(client)
+    client.get("/logout")
+    client.post("/forgot-password", data={"email": "student@carleton.ca"})
+    token = _reset_token_from(mailbox)
+    response = client.post(f"/reset-password/{token}", data={"password": "abc"})
+    assert b"at least 8 characters" in response.data
+
+
+# --------------------------------------------------------------------------
+# Gemini degradation
+# --------------------------------------------------------------------------
+
+def test_an_unusable_fallback_is_refused_rather_than_shown():
+    """A near-empty policy with a Confirm button under it is worse than an error."""
+    import app as nexora
+    assert nexora._fallback_is_usable({"components": [{"name": "Final", "weight": 100}]})
+    assert nexora._fallback_is_usable({"grading_options": [{"option_name": "A"}]})
+    assert not nexora._fallback_is_usable({"components": []})
+    assert not nexora._fallback_is_usable({"components": [{"name": "Final", "weight": 12}]})
+    assert not nexora._fallback_is_usable({})
+
+
+def test_quota_errors_are_worded_differently_from_faults():
+    import app as nexora
+    assert nexora._looks_like_quota_error(RuntimeError("model: HTTP 429: quota exceeded"))
+    assert nexora._looks_like_quota_error(RuntimeError("rate limit reached"))
+    assert not nexora._looks_like_quota_error(RuntimeError("connection reset"))
+
+
+def test_a_model_that_returns_429_is_parked_and_skipped():
+    import app as nexora
+    nexora._gemini_model_cooldowns.clear()
+    chain = ["model-a", "model-b", "model-c"]
+    assert nexora._usable_gemini_models(chain) == chain
+    nexora._mark_gemini_model_unavailable("model-a", 600)
+    assert nexora._usable_gemini_models(chain) == ["model-b", "model-c"]
+    # Never let a cooldown be the reason there is nothing left to try.
+    for m in chain:
+        nexora._mark_gemini_model_unavailable(m, 600)
+    assert nexora._usable_gemini_models(chain) == chain
+    nexora._gemini_model_cooldowns.clear()

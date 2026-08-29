@@ -8,6 +8,9 @@ import hashlib
 import secrets
 import io
 import time
+import threading
+import smtplib
+from email.message import EmailMessage
 import zipfile
 import base64
 from datetime import datetime, date, timedelta
@@ -147,6 +150,51 @@ limiter = Limiter(
 # Gemini work is the scarce resource: an outline analysis is a three-stage
 # pipeline, so a handful of these is worth many ordinary requests.
 AI_LIMIT = "40 per day; 12 per hour"
+
+# Email is configured entirely from the environment so any SMTP provider works
+# without a code change -- Gmail with an app password costs nothing and is
+# plenty at student volume, and moving to a dedicated sender later is a matter
+# of changing these values. When nothing is configured the app says so honestly
+# rather than accepting a reset request it cannot fulfil.
+SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or 587)
+SMTP_USER = os.environ.get("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM = os.environ.get("SMTP_FROM", "").strip() or SMTP_USER
+SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").strip().lower() not in ("0", "false", "no")
+PASSWORD_RESET_TTL = timedelta(hours=1)
+
+
+def email_is_configured():
+    return bool(SMTP_HOST and SMTP_FROM)
+
+
+def send_email(to_address, subject, body):
+    """Send a plain-text message. Returns True on success, False on failure.
+
+    Never raises: a failure to send must not turn into a 500 that tells the
+    caller which addresses exist.
+    """
+    if not email_is_configured():
+        app.logger.warning("Email requested but SMTP is not configured; dropping message to %s", to_address)
+        return False
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = SMTP_FROM
+    message["To"] = to_address
+    message.set_content(body)
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            if SMTP_USE_TLS:
+                server.starttls()
+            if SMTP_USER:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(message)
+        return True
+    except Exception as exc:
+        app.logger.exception("Could not send email to %s: %s", to_address, exc)
+        return False
+
 
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -300,6 +348,21 @@ class HiddenCourse(db.Model):
     id = db.Column(db.String(64), primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
     course_code = db.Column(db.String(40), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class PasswordResetToken(db.Model):
+    """A single-use, expiring password reset link.
+
+    Only a hash of the token is stored. The plain token exists in the emailed
+    link and nowhere else, so reading this table does not let anyone reset an
+    account -- the same reasoning that applies to password_hash.
+    """
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    token_hash = db.Column(db.String(128), nullable=False, index=True)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
@@ -1056,6 +1119,65 @@ def _gemini_model_candidates(vision=False, reasoning=False):
     return result
 
 
+# A model that just answered 429 will answer 429 again, and on a free key the
+# Pro-tier candidates do so on every single call. Remembering that for a few
+# minutes stops each request paying the same toll, which matters most precisely
+# when quota is short. Kept in memory deliberately: it is a hint, not state
+# worth a database round trip, and each worker learns it within one request.
+_QUOTA_COOLDOWN_SECONDS = 600
+_MISSING_MODEL_COOLDOWN_SECONDS = 86400
+_gemini_model_cooldowns = {}
+_gemini_cooldown_lock = threading.Lock()
+
+
+def _looks_like_quota_error(exc):
+    """Tell 'we are out of quota' apart from 'something broke'.
+
+    They need different words: one is a wait, the other is a fault, and telling
+    a student to try again in a few minutes when the daily quota is gone just
+    makes them try again in a few minutes.
+    """
+    text = str(exc or "")
+    return "429" in text or "quota" in text.lower() or "rate limit" in text.lower()
+
+
+def _fallback_is_usable(parsed):
+    """Is the deterministic parse complete enough to put in front of a student?
+
+    Weights that do not add up are the tell. A parse with no components at all,
+    or one whose total is nowhere near 100, has not understood the outline --
+    presenting it as a policy to confirm invites the student to accept a grading
+    scheme that will quietly mis-state their grade all term.
+    """
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get('grading_options'):
+        return True
+    components = [c for c in (parsed.get('components') or []) if isinstance(c, dict)]
+    if not components:
+        return False
+    total = sum(float(c.get('weight') or 0) for c in components)
+    return 90.0 <= total <= 110.0
+
+
+def _mark_gemini_model_unavailable(model, seconds):
+    with _gemini_cooldown_lock:
+        _gemini_model_cooldowns[model] = time.time() + seconds
+
+
+def _usable_gemini_models(models):
+    """Drop candidates known to be unavailable, unless that would leave none.
+
+    Falling back to the full list when everything is cooling down matters: a
+    cooldown is a guess, and a wrong guess must never be the reason a student
+    gets no analysis at all.
+    """
+    now = time.time()
+    with _gemini_cooldown_lock:
+        usable = [m for m in models if _gemini_model_cooldowns.get(m, 0) <= now]
+    return usable or list(models)
+
+
 def _gemini_http_detail(exc):
     try:
         raw = exc.read().decode("utf-8", "replace")
@@ -1071,7 +1193,7 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2, r
     api_key = (os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip())
     if not api_key:
         raise RuntimeError("Gemini is not configured")
-    models = _gemini_model_candidates(vision=False, reasoning=reasoning)
+    models = _usable_gemini_models(_gemini_model_candidates(vision=False, reasoning=reasoning))
     body = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -1117,7 +1239,20 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2, r
             except urllib.error.HTTPError as exc:
                 detail = _gemini_http_detail(exc)
                 last_error = RuntimeError(f"{model}: HTTP {exc.code}: {detail}")
-                if exc.code in (429, 500, 502, 503, 504) and attempt < 1:
+                if exc.code == 429:
+                    # Quota, not a blip. Retrying the same model 1.5s later spends
+                    # another request to be told the same thing, and on a free key
+                    # the Pro candidates 429 on every call -- roughly eight doomed
+                    # requests per outline analysis, against the very quota the
+                    # rest of the pipeline needs. Park the model and move on.
+                    _mark_gemini_model_unavailable(model, _QUOTA_COOLDOWN_SECONDS)
+                    break
+                if exc.code == 404:
+                    # This id is not served for this key at all; nothing will
+                    # change within the life of the process.
+                    _mark_gemini_model_unavailable(model, _MISSING_MODEL_COOLDOWN_SECONDS)
+                    break
+                if exc.code in (500, 502, 503, 504) and attempt < 1:
                     time.sleep(1.5 * (attempt + 1))
                     continue
                 # 400/403/404 usually means this specific model is unavailable
@@ -2303,6 +2438,74 @@ def _password_problem(password):
     if not password.strip():
         return "Your password cannot be only spaces."
     return ""
+
+
+def _hash_reset_token(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+@limiter.limit("5 per hour; 20 per day")
+def forgot_password():
+    if current_user.is_authenticated:
+        return redirect(url_for("home"))
+    if request.method == "GET":
+        return render_template("forgot_password.html", configured=email_is_configured())
+
+    email = (request.form.get("email") or "").strip().lower()
+    # The same answer regardless of whether the account exists: anything else
+    # turns this form into a way to discover who has an account here.
+    sent_message = ("If an account exists for that address, a reset link is on its way. "
+                    "The link expires in one hour.")
+    if not email_is_configured():
+        return render_template("forgot_password.html", configured=False,
+                               error="Password reset is not available yet. Please contact support.")
+
+    user = User.query.filter_by(email=email).first()
+    if user:
+        PasswordResetToken.query.filter_by(user_id=user.id, used_at=None).delete()
+        token = secrets.token_urlsafe(32)
+        db.session.add(PasswordResetToken(
+            id=uuid4().hex, user_id=user.id, token_hash=_hash_reset_token(token),
+            expires_at=datetime.utcnow() + PASSWORD_RESET_TTL))
+        db.session.commit()
+        link = url_for("reset_password", token=token, _external=True)
+        send_email(
+            user.email,
+            "Reset your Nexora password",
+            f"Hi {user.name},\n\n"
+            f"Use this link to choose a new password:\n{link}\n\n"
+            "The link works once and expires in one hour.\n\n"
+            "If you did not ask for this, you can ignore this email -- your password has not changed.\n",
+        )
+    return render_template("forgot_password.html", configured=True, sent=sent_message)
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+@limiter.limit("10 per hour; 40 per day")
+def reset_password(token):
+    row = PasswordResetToken.query.filter_by(token_hash=_hash_reset_token(token), used_at=None).first()
+    if not row or row.expires_at < datetime.utcnow():
+        return render_template("reset_password.html", token=token, invalid=True), 400
+
+    if request.method == "GET":
+        return render_template("reset_password.html", token=token, invalid=False)
+
+    password = request.form.get("password") or ""
+    problem = _password_problem(password)
+    if problem:
+        return render_template("reset_password.html", token=token, invalid=False, error=problem)
+
+    user = db.session.get(User, row.user_id)
+    if not user:
+        return render_template("reset_password.html", token=token, invalid=True), 400
+    user.password_hash = generate_password_hash(password)
+    row.used_at = datetime.utcnow()
+    # Any other outstanding link for this account is now stale.
+    PasswordResetToken.query.filter_by(user_id=user.id, used_at=None).delete()
+    db.session.commit()
+    login_user(user)
+    return redirect(url_for("home"))
 
 
 @app.route("/signup", methods=["GET", "POST"])
@@ -4120,8 +4323,27 @@ def analyze_course_outline(course_code):
             if not isinstance(parsed,dict): raise ValueError('Invalid outline response')
         except Exception as exc:
             app.logger.exception('High-accuracy outline analysis failed; using deterministic parser: %s', exc)
+            # The fallback is a genuine safety net for outlines with a clear
+            # table, but on prose-heavy ones it returns almost nothing. Offering
+            # that as a grading policy with a Confirm button under it is the
+            # worst behaviour available: a student can accept a near-empty model
+            # believing Nexora read their outline, and every grade they see
+            # afterwards is computed from it. Refuse rather than mislead.
+            if not _fallback_is_usable(local_parsed):
+                detail = 'quota' if _looks_like_quota_error(exc) else 'error'
+                message = (
+                    "Nexora's AI has hit its usage limit for now, so it could not read this "
+                    "outline. Please try again later."
+                    if detail == 'quota' else
+                    "Nexora could not analyze this outline right now. Please try again in a few minutes."
+                )
+                return jsonify({
+                    "error": message,
+                    "retryable": True,
+                    "reason": detail,
+                }), 503
             parsed=local_parsed
-            parsed.setdefault('ambiguities',[]).append('The multi-pass AI verification pipeline was unavailable; deterministic fallback was used. Review carefully.')
+            parsed.setdefault('ambiguities',[]).append('The multi-pass AI verification pipeline was unavailable; a simpler parser read the outline instead. Check every component and rule below especially carefully.')
             parsed['confidence']='low'
             parsed['confidence_score']=35
             used_fallback=True

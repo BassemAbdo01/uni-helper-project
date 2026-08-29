@@ -121,6 +121,39 @@ Gotchas that have already bitten:
   escape it, so one malformed reply killed every remaining retry and model
   candidate instead of falling through.
 
+## Email and password reset
+
+SMTP is configured entirely from the environment (`SMTP_HOST`, `SMTP_PORT`,
+`SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_USE_TLS`), so any provider
+works without a code change -- Gmail with an app password is free and plenty at
+student volume. With nothing configured, `/forgot-password` says so plainly
+instead of accepting a request it cannot fulfil.
+
+Reset tokens are stored as a SHA-256 hash, never in the clear, on the same
+reasoning as `password_hash`: reading the table must not let anyone reset an
+account. They are single-use, expire after an hour, and issuing a new one
+invalidates the rest. `/forgot-password` returns an identical response whether
+or not the address exists -- anything else turns it into a way to discover who
+has an account.
+
+## Gemini quota behaviour
+
+The free key cannot serve Pro-tier models, so `gemini-pro-latest` and
+`gemini-3.1-pro-preview` return 429 on every call. `_gemini_json` now parks a
+model that answers 429 for ten minutes and one that answers 404 for a day, and
+skips parked models on later calls -- roughly eight doomed requests per outline
+analysis, against the very quota the pipeline needs. `_usable_gemini_models`
+falls back to the full list when everything is parked, so a wrong guess can
+never be why a student gets nothing.
+
+When the pipeline fails and the deterministic fallback is too thin to be
+trusted -- no components, or a weight total nowhere near 100 -- the route
+returns 503 with an honest message rather than rendering a near-empty policy
+with a Confirm button under it. `_fallback_is_usable` draws that line, and
+`_looks_like_quota_error` decides whether the student is told to wait or told
+something broke. A clean table outline still uses the fallback; the gate only
+catches the cases where it understood nothing.
+
 ## Bonus marks
 
 Grade points are summed without normalising (`contribution = pct/100 * weight`
