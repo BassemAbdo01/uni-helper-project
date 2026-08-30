@@ -1,39 +1,39 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Feedback - Uni Helper</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
+{% extends "app_base.html" %}
+{% set nav_active = 'feedback' %}
+{% block title %}Send feedback — Nexora{% endblock %}
 
-<body>
-  <main class="landing">
-    <section class="landing-hero" style="max-width:620px;">
-      <div class="landing-badge">Help improve Uni Helper</div>
-      <h1 style="font-size:38px;">Send feedback</h1>
+{% block head %}
+<style>
+.narrow{max-width:620px}
+</style>
+{% endblock %}
 
-      <p>
-        Found something confusing? Want a new feature? Send your feedback here.
-      </p>
+{% block body %}
+<div class="top">
+  <div>
+    <p class="eyebrow">Help improve Nexora</p>
+    <h1>Send feedback</h1>
+    <p class="lede">Found something confusing? Missing a feature? Tell us plainly — it goes straight to the person building this.</p>
+  </div>
+</div>
 
-      {% if error %}
-        <p style="color:#ff3b30; font-weight:900;">{{ error }}</p>
-      {% endif %}
+<div class="narrow">
+  {% if error %}<div class="note bad">{{ error }}</div>{% endif %}
+  {% if success %}<div class="note good">{{ success }}</div>{% endif %}
 
-      {% if success %}
-        <p style="color:#16a34a; font-weight:900;">{{ success }}</p>
-      {% endif %}
-
-      <form method="POST" class="formstack" style="margin-top:22px;">
-        <textarea name="message" placeholder="Write your feedback here..." required></textarea>
+  <section class="card">
+    <header><div><span class="k">In your words</span><h2>What happened?</h2></div></header>
+    <div class="body pad">
+      <form method="POST">
+        <div class="field">
+          <label for="message">Your feedback</label>
+          <textarea id="message" name="message" required
+                    placeholder="What were you trying to do, and what got in the way?"></textarea>
+          <p class="hint">Your account is attached, so there is no need to include your email.</p>
+        </div>
         <button class="btn" type="submit">Send feedback</button>
       </form>
-
-      <div class="landing-actions">
-        <a class="btn secondary landing-btn" href="/dashboard">Back to dashboard</a>
-      </div>
-    </section>
-  </main>
-</body>
-</html>
+    </div>
+  </section>
+</div>
+{% endblock %}

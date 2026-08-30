@@ -1,191 +1,166 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Connect Brightspace - Uni Helper</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
+{% extends "app_base.html" %}
+{% set nav_active = 'connect_brightspace' %}
+{% block title %}Brightspace sync — Nexora{% endblock %}
 
-<body>
-  <div class="app">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-dot"></div>
-        <div>
-          <div class="brand-title">Uni Helper</div>
-          <div class="brand-sub">Brightspace Sync</div>
-        </div>
-      </div>
+{% block head %}
+<style>
+.narrow{max-width:760px}
+.inline{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap}
+.inline > *:first-child{flex:1;min-width:220px}
+.inline .btn{flex:none}
 
-      <nav class="nav">
-        <a class="nav-item" href="/dashboard">
-          <span class="nav-ic">🏠</span> Dashboard
-        </a>
+.state{display:flex;gap:12px;align-items:flex-start;padding:14px 15px;border-radius:6px;
+  border:1px solid var(--line);background:var(--surface-2)}
+.state i{width:8px;height:8px;border-radius:50%;flex:none;margin-top:6px;background:var(--fg-3);
+  font-style:normal}
+.state.success{border-color:rgba(127,176,138,.35)}
+.state.success i{background:var(--green)}
+.state.error{border-color:rgba(201,112,92,.35)}
+.state.error i{background:var(--red)}
+.state strong{display:block;font-size:14.5px;font-weight:500}
+.state span{display:block;color:var(--fg-2);font-size:13.5px;margin-top:3px}
 
-        <a class="nav-item" href="/calendar">
-          <span class="nav-ic">🗓️</span> Calendar
-        </a>
+.steps{counter-reset:step;list-style:none;margin:0;padding:0}
+.steps li{counter-increment:step;position:relative;padding:0 0 16px 34px;font-size:14px;color:var(--fg-2)}
+.steps li:last-child{padding-bottom:0}
+.steps li::before{content:counter(step,decimal-leading-zero);position:absolute;left:0;top:1px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--amber)}
+.steps li strong{color:var(--fg);font-weight:500}
 
-        <a class="nav-item active" href="/connect-brightspace">
-          <span class="nav-ic">🔄</span> Connect Brightspace
-        </a>
-      </nav>
+.keybox{margin-top:14px;padding:13px 15px;border-radius:6px;border:1px solid var(--line-2);
+  background:var(--surface-3)}
+.keybox code{display:block;font-family:var(--mono);font-size:12.5px;word-break:break-all;
+  user-select:all;color:var(--amber);margin-top:7px}
+input[type=file]{width:100%;padding:11px 13px;border-radius:5px;border:1px dashed var(--line-2);
+  background:var(--surface-2);color:var(--fg-2);font-family:inherit;font-size:13.5px}
+input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border-radius:4px;
+  border:1px solid var(--line-2);background:var(--surface-3);color:var(--fg);font:inherit;
+  font-size:12.5px;cursor:pointer}
+</style>
+{% endblock %}
 
-      <div class="sidebar-footer">
-  <div class="account-menu">
-    <button class="account-button" id="accountButton" type="button">
-      <div class="account-avatar">
-        {{ user.name[0]|upper if user and user.name else "U" }}
-      </div>
-
-      <div class="account-text">
-        <div class="account-name">{{ user.name if user else "Student" }}</div>
-        <div class="account-email">{{ user.email if user else "" }}</div>
-      </div>
-
-      <div class="account-caret">⌄</div>
-    </button>
-
-    <div class="account-dropdown" id="accountDropdown">
-      <a href="/profile">Profile</a>
-            {% if user and user.email == "bassemtamer2016@gmail.com" %}
-        <a href="/admin/feedback">Feedback</a>
-      {% else %}
-        <a href="/feedback">Feedback</a>
-      {% endif %}
-      <a href="/settings">Grading Scale</a>
-      <a class="logout-link" href="/logout">Log out</a>
-    </div>
+{% block body %}
+<div class="top">
+  <div>
+    <p class="eyebrow">Nexora sync</p>
+    <h1>Bring Brightspace <em>in</em>.</h1>
+    <p class="lede">
+      Courses, images, deadlines, lectures, assignments, quizzes, resources and
+      announcements — imported into the workspace they belong to.
+    </p>
   </div>
-
-  <button class="theme-toggle" id="themeToggle" type="button">
-    🌙 Dark mode
-  </button>
+  <div class="actions">
+    <a class="btn" href="/sync">Sync now</a>
+  </div>
 </div>
-    </aside>
 
-    <main class="main">
-      <div class="topbar">
+<div class="narrow">
+  <section class="card">
+    <header><div><span class="k">Where things stand</span><h2>Sync status</h2></div></header>
+    <div class="body pad">
+      <div class="state {{ sync_status }}">
+        <i></i>
         <div>
-          <div class="page-title">Nexora Sync</div>
-          <div class="page-sub">Import your courses, course images, deadlines, lectures, assignments, quizzes, resources, and announcements.</div>
+          <strong>
+            {% if sync_status == 'success' %}Connected and synchronized
+            {% elif sync_status == 'error' %}Synchronization needs attention
+            {% else %}Not synchronized yet{% endif %}
+          </strong>
+          <span>{{ sync_message }}</span>
+          <span>Last successful sync: {{ last_sync_text }}</span>
         </div>
       </div>
+    </div>
+  </section>
 
-      <div class="card">
-        <div class="h2">Brightspace Calendar Sync</div>
-        <div class="muted">Paste your Brightspace calendar feed link here.</div>
-
-        <form method="POST" action="/save_feed" class="row2" style="margin-top:16px;">
-          <input type="text" name="feed_url" placeholder="Paste Brightspace calendar feed link" value="{{ feed_url or '' }}" aria-label="Paste Brightspace calendar feed link">
-          <button class="btn" type="submit">Save link</button>
-        </form>
-
-        <div style="margin-top:16px;">
-          <div class="muted">Last successful sync: {{ last_sync_text }}</div>
-
-          <div class="sync-result sync-{{ sync_status }}" style="margin-top:12px; padding:12px 14px; border-radius:12px; border:1px solid rgba(125, 100, 255, .25); background:rgba(125, 100, 255, .08);">
-            <strong style="display:block; margin-bottom:4px;">
-              {% if sync_status == 'success' %}✓ Connected and synchronized
-              {% elif sync_status == 'error' %}⚠ Synchronization needs attention
-              {% else %}Brightspace is not synchronized yet{% endif %}
-            </strong>
-            <span class="muted">{{ sync_message }}</span>
+  <section class="card">
+    <header><div><span class="k">Deadlines</span><h2>Calendar feed</h2></div></header>
+    <div class="body pad">
+      <form method="POST" action="/save_feed">
+        <div class="field">
+          <label for="feed_url">Brightspace calendar feed link</label>
+          <div class="inline">
+            <input type="text" id="feed_url" name="feed_url" value="{{ feed_url or '' }}"
+                   placeholder="https://brightspace…/d2l/le/calendar/feed/…"
+                   aria-label="Paste Brightspace calendar feed link">
+            <button class="btn" type="submit">Save link</button>
           </div>
-
-          <a class="btn" href="/sync" style="display:inline-block; margin-top:12px;">Sync now</a>
+          <p class="hint">In Brightspace: Calendar &rarr; Subscribe &rarr; copy the feed address.</p>
         </div>
+      </form>
+    </div>
+  </section>
+
+  <section class="card">
+    <header><div><span class="k">Everything else</span><h2>Nexora Sync extension</h2></div></header>
+    <div class="body pad">
+      <ol class="steps">
+        <li><strong>Install the extension</strong> in Chrome.</li>
+        <li><strong>Generate a key</strong> below and paste it into the extension.</li>
+        <li><strong>Open Brightspace</strong> — it finds your enrolled courses, then routes each
+            section's content into Lectures, Assignments, Quizzes, Resources and Announcements.</li>
+      </ol>
+
+      <div class="actions" style="margin-top:18px">
+        <a class="btn" href="https://brightspace.carleton.ca/d2l/home" target="_blank" rel="noopener">
+          Open Brightspace and start import
+        </a>
+        <button class="btn quiet" id="generateExtensionKey" type="button">Generate extension key</button>
       </div>
 
-
-      <div class="card" style="margin-top:18px;">
-        <div class="h2">Nexora Sync Extension</div>
-        <div style="margin:14px 0;padding:14px;border-radius:14px;background:linear-gradient(135deg,rgba(111,76,255,.15),rgba(41,199,255,.08));border:1px solid rgba(130,105,255,.3)">
-          <strong style="display:block;margin-bottom:5px">Automatic course discovery</strong>
-          <span class="muted">Open Brightspace through Nexora, then the extension discovers your enrolled courses and imports each course image and visible content into the correct workspace.</span>
-          <a class="btn" href="https://brightspace.carleton.ca/d2l/home" target="_blank" rel="noopener" style="display:inline-block;margin-top:12px">Open Brightspace and start import</a>
-        </div>
-        <div class="muted">Install the extension, generate a key, then click “Open Brightspace and start import.” It first copies your courses and images, then scans course sections and routes content into Lectures, Assignments, Quizzes, Resources, and Announcements.</div>
-        <button class="btn" id="generateExtensionKey" type="button" style="margin-top:14px;">Generate extension key</button>
-        <div id="extensionKeyBox" style="display:none;margin-top:12px;padding:12px;border-radius:12px;background:rgba(125,100,255,.08);border:1px solid rgba(125,100,255,.25)">
-          <div class="muted" style="margin-bottom:6px;">Paste this key into the Nexora Sync browser extension:</div>
-          <code id="extensionKey" style="display:block;word-break:break-all;user-select:all"></code>
-        </div>
-        <p class="muted" style="margin-top:12px;">The extension uses the student’s existing Brightspace session. Nexora never receives or stores their Brightspace password.</p>
+      <div class="keybox" id="extensionKeyBox" hidden>
+        <span class="k">Paste this into the extension</span>
+        <code id="extensionKey"></code>
       </div>
 
-      <div class="card" style="margin-top:18px;">
-        <div class="h2">Backup import</div>
-        <div class="muted">Only use this if the feed link does not work.</div>
+      <p class="hint" style="margin-top:14px">
+        The extension works through your existing Brightspace session. Nexora never receives
+        or stores your Brightspace password.
+      </p>
+    </div>
+  </section>
 
-        <form method="POST" action="/import" enctype="multipart/form-data" class="row2" style="margin-top:14px;">
-          <input type="file" name="ics_file" accept=".ics" required aria-label="Brightspace calendar file, .ics">
-          <button class="btn" type="submit">Backup import .ics</button>
-        </form>
-      </div>
-    </main>
-  </div>
+  <section class="card">
+    <header><div><span class="k">Fallback</span><h2>Backup import</h2></div></header>
+    <div class="body pad">
+      <form method="POST" action="/import" enctype="multipart/form-data">
+        <div class="field">
+          <label for="ics_file">Calendar file (.ics)</label>
+          <div class="inline">
+            <input type="file" id="ics_file" name="ics_file" accept=".ics" required
+                   aria-label="Brightspace calendar file, .ics">
+            <button class="btn quiet" type="submit">Import file</button>
+          </div>
+          <p class="hint">Only worth doing if the feed link will not save.</p>
+        </div>
+      </form>
+    </div>
+  </section>
+</div>
+{% endblock %}
 
-  <script>
-    const savedTheme = localStorage.getItem("theme");
-    const themeToggle = document.getElementById("themeToggle");
+{% block scripts %}
+<script>
+(() => {
+  "use strict";
+  const button = document.getElementById('generateExtensionKey');
+  const box = document.getElementById('extensionKeyBox');
+  const key = document.getElementById('extensionKey');
 
-    function applyTheme(theme){
-      if(theme === "dark"){
-        document.body.classList.add("dark-mode");
-        if(themeToggle) themeToggle.textContent = "☀️ Light mode";
-      } else {
-        document.body.classList.remove("dark-mode");
-        if(themeToggle) themeToggle.textContent = "🌙 Dark mode";
-      }
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.textContent = 'Generating…';
+    try {
+      const res = await fetch('/api/sync/extension-key', { method: 'POST' });
+      const data = await res.json();
+      key.textContent = data.token || '';
+      box.hidden = false;
+      button.textContent = 'Regenerate extension key';
+    } catch {
+      button.textContent = 'Could not generate a key — try again';
     }
-
-    applyTheme(savedTheme || "light");
-
-    if(themeToggle){
-      themeToggle.addEventListener("click", function(){
-        const isDark = document.body.classList.contains("dark-mode");
-        const nextTheme = isDark ? "light" : "dark";
-        localStorage.setItem("theme", nextTheme);
-        applyTheme(nextTheme);
-      });
-    }
-
-const extensionButton = document.getElementById("generateExtensionKey");
-if(extensionButton){
-  extensionButton.addEventListener("click", async function(){
-    extensionButton.disabled = true;
-    extensionButton.textContent = "Generating…";
-    try{
-      const response = await fetch("/api/sync/extension-key", {method:"POST"});
-      const data = await response.json();
-      document.getElementById("extensionKey").textContent = data.token || "";
-      document.getElementById("extensionKeyBox").style.display = "block";
-      extensionButton.textContent = "Regenerate extension key";
-    }catch(error){
-      extensionButton.textContent = "Could not generate key";
-    }
-    extensionButton.disabled = false;
+    button.disabled = false;
   });
-}
-
-const accountButton = document.getElementById("accountButton");
-const accountDropdown = document.getElementById("accountDropdown");
-
-if(accountButton && accountDropdown){
-  accountButton.addEventListener("click", function(){
-    accountDropdown.classList.toggle("show");
-  });
-
-  document.addEventListener("click", function(event){
-    if(!accountButton.contains(event.target) && !accountDropdown.contains(event.target)){
-      accountDropdown.classList.remove("show");
-    }
-  });
-}
-
-
-  </script>
-</body>
-</html>
+})();
+</script>
+{% endblock %}

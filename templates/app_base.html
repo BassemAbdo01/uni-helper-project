@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}Nexora{% endblock %}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600&family=Archivo:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="{{ url_for('static', filename='nexora-app.css') }}">
+{% block head %}{% endblock %}
+</head>
+<body>
+<div id="grain" aria-hidden="true"></div>
+
+{# The rail reads sync state off current_user rather than a template variable,
+   so a page can extend this base without its route having to pass anything. #}
+{% set nav = nav_active | default(request.endpoint, true) %}
+<div class="shell">
+  <aside class="rail">
+    <a class="brand" href="{{ url_for('landing') }}"><i></i>Nexora</a>
+
+    <nav class="railnav" aria-label="Sections">
+      <a {% if nav == 'home' %}class="on" aria-current="page"{% endif %} href="{{ url_for('home') }}"><b></b>Dashboard</a>
+      <a {% if nav == 'calendar_page' %}class="on" aria-current="page"{% endif %} href="{{ url_for('calendar_page') }}"><b></b>Calendar</a>
+      <a {% if nav == 'grade_calculator' %}class="on" aria-current="page"{% endif %} href="{{ url_for('grade_calculator') }}"><b></b>Grades</a>
+      <a {% if nav == 'study_room' %}class="on" aria-current="page"{% endif %} href="{{ url_for('study_room') }}"><b></b>Study room</a>
+      <a {% if nav == 'connect_brightspace' %}class="on" aria-current="page"{% endif %} href="{{ url_for('connect_brightspace') }}"><b></b>Brightspace</a>
+      <a {% if nav == 'settings' %}class="on" aria-current="page"{% endif %} href="{{ url_for('settings') }}"><b></b>Settings</a>
+      <a {% if nav == 'feedback' %}class="on" aria-current="page"{% endif %} href="{{ url_for('feedback') }}"><b></b>Feedback</a>
+    </nav>
+
+    <div class="railcap">
+      <div class="sync">
+        {% if current_user.is_authenticated and current_user.last_sync %}
+          <span class="lbl"><i></i>Auto-sync</span>
+          <p>{{ current_user.last_sync.strftime('%b %d at %I:%M %p') }}</p>
+        {% else %}
+          <span class="lbl off"><i></i>Not synced</span>
+          <p>Nexora has no course data yet.</p>
+        {% endif %}
+        <a href="{{ url_for('connect_brightspace') }}">Manage sync &rarr;</a>
+      </div>
+      <a class="me" href="{{ url_for('profile') }}">
+        <span class="av">{{ (current_user.name[:1] if current_user.is_authenticated and current_user.name else 'S')|upper }}</span>
+        <span>
+          <strong>{{ current_user.name if current_user.is_authenticated else 'Student' }}</strong>
+          <small>View profile</small>
+        </span>
+      </a>
+    </div>
+  </aside>
+
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class="flashes">
+          {% for category, message in messages %}<li class="{{ category }}">{{ message }}</li>{% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+    {% block body %}{% endblock %}
+  </main>
+</div>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

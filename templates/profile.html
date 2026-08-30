@@ -1,38 +1,79 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Profile - Uni Helper</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
+{% extends "app_base.html" %}
+{% set nav_active = 'profile' %}
+{% block title %}Profile — Nexora{% endblock %}
 
-<body>
-  <main class="landing">
-    <section class="landing-hero" style="max-width:560px;">
-      <div class="landing-badge">Your account</div>
-      <h1 style="font-size:38px;">Profile</h1>
+{% block head %}
+<style>
+.narrow{max-width:560px}
+.idcard{display:flex;align-items:center;gap:16px;padding:18px}
+.idcard .av{width:56px;height:56px;border-radius:50%;flex:none;display:grid;place-items:center;
+  background:var(--amber);color:#140F09;font-family:var(--serif);font-weight:600;font-size:23px}
+.idcard div{min-width:0}
+.idcard strong{display:block;font-size:17px;font-weight:500}
+.idcard span.mail{display:block;color:var(--fg-2);font-size:13.5px;margin-top:2px;overflow-wrap:anywhere}
+.rows{padding:0 18px 6px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:14px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row .k{margin:0}
+.row a{font-size:13.5px;color:var(--amber);text-decoration:none;white-space:nowrap}
+.row p{margin:5px 0 0;font-size:13.5px;color:var(--fg-2)}
+</style>
+{% endblock %}
 
-      <div class="profile-page-avatar">
-        {{ user.name[0]|upper if user and user.name else "U" }}
+{% block body %}
+<div class="top">
+  <div>
+    <p class="eyebrow">Your account</p>
+    <h1>Profile</h1>
+    <p class="lede">Who Nexora thinks you are, and where the rest of your settings live.</p>
+  </div>
+  <div class="actions">
+    <a class="btn danger" href="{{ url_for('logout') }}">Log out</a>
+  </div>
+</div>
+
+<div class="narrow">
+  <section class="card">
+    <div class="idcard">
+      <span class="av">{{ user.name[:1]|upper if user and user.name else 'S' }}</span>
+      <div>
+        <strong>{{ user.name }}</strong>
+        <span class="mail">{{ user.email }}</span>
       </div>
+    </div>
+  </section>
 
-      <div class="profile-page-info">
-        <div><strong>Name:</strong> {{ user.name }}</div>
-        <div><strong>Email:</strong> {{ user.email }}</div>
+  <section class="card">
+    <header><div><span class="k">Elsewhere</span><h2>Account settings</h2></div></header>
+    <div class="rows">
+      <div class="row">
+        <div>
+          <span class="k">Grading scale</span>
+          <p>Your university's letter-grade thresholds, used by every course.</p>
+        </div>
+        <a href="{{ url_for('settings') }}">Open &rarr;</a>
       </div>
+      <div class="row">
+        <div>
+          <span class="k">Brightspace</span>
+          <p>Sync status, calendar feed and the browser extension.</p>
+        </div>
+        <a href="{{ url_for('connect_brightspace') }}">Open &rarr;</a>
+      </div>
+      <div class="row">
+        <div>
+          <span class="k">Feedback</span>
+          <p>Tell us what is confusing or missing.</p>
+        </div>
+        <a href="{{ url_for('feedback') }}">Open &rarr;</a>
+      </div>
+    </div>
+  </section>
 
-      <div class="landing-actions">
-        <a class="btn landing-btn" href="/dashboard">Back to dashboard</a>
-        <a class="btn secondary landing-btn" href="/settings">Grading scale</a>
-        <a class="btn secondary landing-btn" href="/feedback">Send feedback</a>
-        <a class="btn danger landing-btn" href="/logout">Log out</a>
-      </div>
-
-      <div class="landing-note">
-        Profile picture and password changes are coming later. Looking for your university's letter-grade scale instead? That's under <a href="/settings" style="color:#c4b5fd">Grading scale</a>.
-      </div>
-    </section>
-  </main>
-</body>
-</html>
+  <div class="note">
+    Changing your name, email or password from here is not built yet. If you are
+    locked out, <a href="{{ url_for('forgot_password') }}" style="color:var(--amber)">reset your password</a>.
+  </div>
+</div>
+{% endblock %}

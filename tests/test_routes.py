@@ -397,24 +397,23 @@ def test_landing_still_carries_the_scene_and_the_product_panels(client):
     assert "Concept build" not in body       # placeholder footer is gone
 
 
-def test_dashboard_serves_both_the_live_page_and_the_redesign(client):
-    """The redesign is a second template on the same route, so it reads exactly
-    the data the live page does and cannot drift from it."""
+def test_dashboard_serves_the_redesign(client):
+    """The redesign replaced the old dashboard outright; ?v=next was the preview
+    flag while both existed and must not resurrect the retired template."""
     signup(client)
 
-    live = client.get("/dashboard").get_data(as_text=True)
-    assert "nxv2-" in live, "the live dashboard should be untouched"
+    body = client.get("/dashboard").get_data(as_text=True)
+    assert "nxv2-" not in body, "the old dashboard markup should be gone"
+    assert "Fraunces" in body and "nexora-app.css" in body   # shares the site's design
+    assert "Mission control" in body
 
-    nxt = client.get("/dashboard?v=next").get_data(as_text=True)
-    assert "nxv2-" not in nxt
-    assert "Fraunces" in nxt and "--amber" in nxt      # shares the site's design
-    assert "Mission control" in nxt
+    assert client.get("/dashboard?v=next").get_data(as_text=True) == body
 
 
 def test_dashboard_redesign_survives_an_empty_account(client):
     """A brand new student has no courses, tasks, deadlines or updates, which is
     exactly the state every empty-state branch has to handle."""
     signup(client, email="brand.new@carleton.ca")
-    body = client.get("/dashboard?v=next").get_data(as_text=True)
+    body = client.get("/dashboard").get_data(as_text=True)
     assert "Connect Brightspace" in body
     assert "Your week is clear" in body

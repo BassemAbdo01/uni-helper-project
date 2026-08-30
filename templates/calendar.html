@@ -1,164 +1,96 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Calendar - Uni Helper</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
+{% extends "app_base.html" %}
+{% set nav_active = 'calendar_page' %}
+{% block title %}Calendar — Nexora{% endblock %}
 
-<body>
-  <div class="app">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-dot"></div>
-        <div>
-          <div class="brand-title">Uni Helper</div>
-          <div class="brand-sub">Calendar</div>
-        </div>
-      </div>
+{% block head %}
+<style>
+/* Eight course hues, all pulled toward the page's own palette so a busy month
+   reads as one surface rather than a bag of highlighter colours. */
+.cal{--c0:#E8A94A;--c1:#7FB08A;--c2:#7892C8;--c3:#C9705C;--c4:#C4A47C;--c5:#8FA6B2;--c6:#B08FA8;--c7:#9BAF7E}
 
-      <nav class="nav">
-        <a class="nav-item" href="/dashboard">
-          <span class="nav-ic">🏠</span> Dashboard
-        </a>
+.monthnav{display:flex;align-items:center;gap:8px}
+.monthnav a{display:grid;place-items:center;width:34px;height:34px;border-radius:5px;
+  border:1px solid var(--line-2);color:var(--fg-2);text-decoration:none;font-size:15px;
+  transition:border-color .2s var(--ease),color .2s var(--ease)}
+.monthnav a:hover{border-color:var(--fg-3);color:var(--fg)}
+.monthnav strong{font-family:var(--serif);font-weight:400;font-size:1.06rem;min-width:9.5ch;
+  text-align:center}
 
-        <a class="nav-item active" href="/calendar">
-          <span class="nav-ic">🗓️</span> Calendar
-        </a>
+.weekhead,.month{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px}
+.weekhead{padding:0 0 8px}
+.weekhead span{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--fg-3);padding-left:2px}
+.month{background:var(--line);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.day{background:var(--surface);min-height:118px;padding:8px 8px 10px;display:flex;flex-direction:column;gap:5px}
+.day.blank{background:var(--bg)}
+.day .n{font-family:var(--mono);font-size:11px;color:var(--fg-3);font-variant-numeric:tabular-nums}
+.day.today{background:var(--surface-2)}
+.day.today .n{color:#140F09;background:var(--amber);border-radius:3px;padding:1px 5px;
+  align-self:flex-start;font-weight:500}
+.ev{border-left:2px solid var(--ev,var(--amber));border-radius:0 4px 4px 0;padding:5px 7px;
+  background:var(--surface-2);min-width:0}
+.day.today .ev{background:var(--surface-3)}
+.ev strong{display:block;font-size:11.5px;font-weight:500;line-height:1.3;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+/* A month cell is narrow; truncating this to "SYSC2004 - Overd..." loses the
+   half that matters, so it wraps onto a second line instead. */
+.ev small{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.06em;color:var(--fg-3);
+  margin-top:3px;line-height:1.45}
 
-        <a class="nav-item" href="/connect-brightspace">
-          <span class="nav-ic">🔄</span> Connect Brightspace
-        </a>
-      </nav>
-
-      <div class="sidebar-footer">
-  <div class="account-menu">
-    <button class="account-button" id="accountButton" type="button">
-      <div class="account-avatar">
-        {{ user.name[0]|upper if user and user.name else "U" }}
-      </div>
-
-      <div class="account-text">
-        <div class="account-name">{{ user.name if user else "Student" }}</div>
-        <div class="account-email">{{ user.email if user else "" }}</div>
-      </div>
-
-      <div class="account-caret">⌄</div>
-    </button>
-
-    <div class="account-dropdown" id="accountDropdown">
-      <a href="/profile">Profile</a>
-      {% if user and user.email == "bassemtamer2016@gmail.com" %}
-        <a href="/admin/feedback">Feedback</a>
-      {% else %}
-        <a href="/feedback">Feedback</a>
-      {% endif %}
-      <a href="/settings">Grading Scale</a>
-      <a class="logout-link" href="/logout">Log out</a>
-    </div>
-  </div>
-
-  <button class="theme-toggle" id="themeToggle" type="button">
-    🌙 Dark mode
-  </button>
-</div>
-    </aside>
-
-    <main class="main">
-      <div class="topbar">
-        <div>
-          <div class="page-title">Calendar</div>
-          <div class="page-sub">Monthly view of your deadlines.</div>
-        </div>
-
-        <div class="tabs">
-          <a class="pilltab" href="/calendar?month={{ prev_month }}">Previous</a>
-          <a class="pilltab active" href="/calendar">{{ month_title }}</a>
-          <a class="pilltab" href="/calendar?month={{ next_month }}">Next</a>
-        </div>
-      </div>
-
-      <div class="card calendar-page">
-        <div class="calendar-grid calendar-head">
-          <div>Mon</div>
-          <div>Tue</div>
-          <div>Wed</div>
-          <div>Thu</div>
-          <div>Fri</div>
-          <div>Sat</div>
-          <div>Sun</div>
-        </div>
-
-        <div class="calendar-grid">
-          {% for week in weeks %}
-            {% for day in week %}
-              {% if day %}
-                <div class="month-day {% if day.is_today %}today-box{% endif %}">
-                  <div class="month-day-number">{{ day.day }}</div>
-
-                  <div class="month-tasks">
-                    {% for task in day.tasks %}
-                      <div class="month-task course-color-{{ task.color_index }}">
-                        <div class="month-task-title">{{ task.title }}</div>
-                        <div class="month-task-meta">
-                          {% if task.course %}{{ task.course }} • {% endif %}{{ task.status }}
-                        </div>
-                      </div>
-                    {% endfor %}
-                  </div>
-                </div>
-              {% else %}
-                <div class="month-day empty-day"></div>
-              {% endif %}
-            {% endfor %}
-          {% endfor %}
-        </div>
-      </div>
-    </main>
-  </div>
-
-  <script>
-    const savedTheme = localStorage.getItem("theme");
-    const themeToggle = document.getElementById("themeToggle");
-
-    function applyTheme(theme){
-      if(theme === "dark"){
-        document.body.classList.add("dark-mode");
-        if(themeToggle) themeToggle.textContent = "☀️ Light mode";
-      } else {
-        document.body.classList.remove("dark-mode");
-        if(themeToggle) themeToggle.textContent = "🌙 Dark mode";
-      }
-    }
-
-    applyTheme(savedTheme || "light");
-
-    if(themeToggle){
-      themeToggle.addEventListener("click", function(){
-        const isDark = document.body.classList.contains("dark-mode");
-        const nextTheme = isDark ? "light" : "dark";
-        localStorage.setItem("theme", nextTheme);
-        applyTheme(nextTheme);
-      });
-    }
-  
-  const accountButton = document.getElementById("accountButton");
-const accountDropdown = document.getElementById("accountDropdown");
-
-if(accountButton && accountDropdown){
-  accountButton.addEventListener("click", function(){
-    accountDropdown.classList.toggle("show");
-  });
-
-  document.addEventListener("click", function(event){
-    if(!accountButton.contains(event.target) && !accountDropdown.contains(event.target)){
-      accountDropdown.classList.remove("show");
-    }
-  });
+/* A seven-column month is unreadable on a phone, so it becomes a list of the
+   days that actually have something on them. */
+@media (max-width:760px){
+  .weekhead{display:none}
+  .month{grid-template-columns:1fr;background:none;border:0;border-radius:0;gap:0}
+  .day{min-height:0;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;
+    flex-direction:row;align-items:flex-start;gap:12px;padding:12px}
+  .day.blank,.day:not(.today):not(:has(.ev)){display:none}
+  .day .n{padding-top:2px;min-width:3ch}
+  .day > .evs{flex:1;display:flex;flex-direction:column;gap:5px;min-width:0}
 }
-  
-  
-  </script>
-</body>
-</html>
+.evs{display:flex;flex-direction:column;gap:5px;min-width:0}
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="top">
+  <div>
+    <p class="eyebrow">Every deadline, in order</p>
+    <h1>Calendar</h1>
+    <p class="lede">Everything Nexora has imported, laid out by the day it is due.</p>
+  </div>
+  <div class="monthnav">
+    <a href="{{ url_for('calendar_page') }}?month={{ prev_month }}" aria-label="Previous month">&lsaquo;</a>
+    <strong>{{ month_title }}</strong>
+    <a href="{{ url_for('calendar_page') }}?month={{ next_month }}" aria-label="Next month">&rsaquo;</a>
+  </div>
+</div>
+
+<div class="cal">
+  <div class="weekhead" aria-hidden="true">
+    <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+  </div>
+
+  <div class="month">
+    {% for week in weeks %}
+      {% for day in week %}
+        {% if day %}
+          <div class="day{% if day.is_today %} today{% endif %}">
+            <span class="n">{{ day.day }}</span>
+            <div class="evs">
+              {% for task in day.tasks %}
+                <div class="ev" style="--ev:var(--c{{ task.color_index }})">
+                  <strong>{{ task.title }}</strong>
+                  <small>{% if task.course %}{{ task.course }} &middot; {% endif %}{{ task.status }}</small>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+        {% else %}
+          <div class="day blank"></div>
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

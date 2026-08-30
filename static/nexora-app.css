@@ -1,0 +1,190 @@
+/* Nexora app shell.
+   Same tokens as landing.html and auth_base.html, so moving from the marketing
+   page into the product is a continuation rather than a change of address.
+
+   This file exists because the old dashboard hardcoded 324 colour values across
+   446 rule blocks: retargeting a variable could not reach it, and every new page
+   started by copying the last one. Ten app pages share this one sheet, so a
+   change to a token or a component lands everywhere at once. Page-specific rules
+   belong in that page's {% block head %}, not here. */
+
+:root{
+  --bg:#151310; --surface:#1E1B17; --surface-2:#262218; --surface-3:#2E2920;
+  --line:#37322B; --line-2:#4A443B;
+  --fg:#F7F4EF; --fg-2:#B8B1A5; --fg-3:#857E74;
+  --amber:#E8A94A; --amber-soft:rgba(232,169,74,.13);
+  --green:#7FB08A; --green-soft:rgba(127,176,138,.12);
+  --red:#C9705C; --red-soft:rgba(201,112,92,.11);
+  --blue:#7892C8;
+  --ease:cubic-bezier(.22,.61,.36,1);
+  --rail:248px;
+  --serif:"Fraunces",Georgia,"Times New Roman",serif;
+  --sans:"Archivo",ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font-family:var(--sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+.mono{font-family:var(--mono)}
+:where(a,button,input,select,textarea,summary):focus-visible{outline:1px solid var(--amber);outline-offset:3px}
+
+#grain{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.035;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E")}
+
+/* ============================ shell ============================ */
+.shell{position:relative;z-index:1;display:grid;grid-template-columns:var(--rail) 1fr;min-height:100vh}
+main{padding:30px clamp(18px,3.4vw,44px) 72px;min-width:0}
+
+.rail{border-right:1px solid var(--line);padding:22px 18px;display:flex;flex-direction:column;gap:26px;
+  position:sticky;top:0;height:100vh;background:rgba(30,27,23,.55)}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;font-family:var(--serif);
+  font-weight:600;font-size:18px;letter-spacing:-.02em;padding:0 8px;flex:none}
+.brand i{width:6px;height:6px;border-radius:50%;background:var(--amber);font-style:normal;flex:none}
+.railnav{display:flex;flex-direction:column;gap:2px}
+.railnav a{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:6px;
+  text-decoration:none;color:var(--fg-2);font-size:14px;
+  transition:background .2s var(--ease),color .2s var(--ease)}
+.railnav a:hover{background:var(--surface);color:var(--fg)}
+.railnav a.on{background:var(--surface-2);color:var(--fg)}
+.railnav a b{width:5px;height:5px;border-radius:50%;background:var(--amber);opacity:0;flex:none}
+.railnav a.on b{opacity:1}
+.railcap{margin-top:auto;display:flex;flex-direction:column;gap:12px}
+.sync{border:1px solid var(--line);border-radius:8px;padding:12px 13px;background:var(--surface)}
+.sync .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--fg-3);display:flex;align-items:center;gap:7px}
+.sync .lbl i{width:6px;height:6px;border-radius:50%;background:var(--green);font-style:normal;flex:none}
+.sync .lbl.off i{background:var(--fg-3)}
+.sync p{margin:7px 0 0;font-size:12.5px;color:var(--fg-2)}
+.sync a{display:inline-block;margin-top:9px;font-size:12.5px;color:var(--amber);text-decoration:none}
+.me{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;background:var(--surface);
+  text-decoration:none}
+.me:hover{background:var(--surface-2)}
+.me .av{width:30px;height:30px;border-radius:50%;flex:none;display:grid;place-items:center;
+  background:var(--amber);color:#140F09;font-weight:600;font-size:13px}
+.me span{display:flex;flex-direction:column;min-width:0}
+.me strong{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.me small{font-size:11px;color:var(--fg-3)}
+
+/* The rail is a full screen of navigation on a phone if it just stacks, so
+   below 1000px it becomes a bar: brand, a horizontally scrolling nav, avatar. */
+@media (max-width:1000px){
+  .shell{grid-template-columns:1fr}
+  .rail{position:sticky;top:0;z-index:20;height:auto;flex-direction:row;align-items:center;gap:14px;
+    padding:11px 14px;border-right:0;border-bottom:1px solid var(--line);
+    background:rgba(21,19,16,.95);backdrop-filter:blur(10px)}
+  .brand{padding:0}
+  .railnav{flex-direction:row;gap:4px;overflow-x:auto;flex:1;scrollbar-width:none;-ms-overflow-style:none}
+  .railnav::-webkit-scrollbar{display:none}
+  .railnav a{padding:7px 11px;white-space:nowrap;font-size:13px}
+  .railnav a b{display:none}
+  .railcap{margin-top:0;flex-direction:row;align-items:center;gap:8px}
+  .sync{display:none}
+  .me{padding:0;background:none}
+  .me span{display:none}
+}
+
+/* ============================ page header ============================ */
+.top{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap;
+  margin-bottom:28px}
+.eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.24em;text-transform:uppercase;
+  color:var(--amber);margin:0 0 12px}
+h1{font-family:var(--serif);font-weight:300;font-size:clamp(1.75rem,3vw,2.5rem);line-height:1.1;
+  letter-spacing:-.03em;margin:0 0 8px}
+h1 em{font-style:italic;font-weight:400;color:var(--amber)}
+.lede{margin:0;color:var(--fg-2);font-size:14.5px;max-width:64ch}
+.actions{display:flex;gap:10px;flex-wrap:wrap}
+
+/* ============================ controls ============================ */
+.btn{--lift:0px;display:inline-flex;align-items:center;justify-content:center;gap:9px;
+  padding:11px 20px;border-radius:5px;background:var(--amber);color:#140F09;border:1px solid var(--amber);
+  cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;text-decoration:none;
+  transform:translateY(var(--lift));box-shadow:0 1px 2px rgba(0,0,0,.5);
+  transition:transform .35s var(--ease),box-shadow .35s var(--ease),border-color .25s var(--ease),
+    background .25s var(--ease)}
+.btn:hover{--lift:-2px;box-shadow:0 16px 34px -16px rgba(232,169,74,.5)}
+.btn.quiet{background:transparent;color:var(--fg);border-color:var(--line-2);font-weight:500}
+.btn.quiet:hover{border-color:var(--fg-3);background:rgba(245,242,237,.04);box-shadow:none}
+.btn.danger{background:transparent;color:var(--red);border-color:rgba(201,112,92,.4);font-weight:500}
+.btn.danger:hover{background:var(--red-soft);border-color:var(--red);box-shadow:none}
+.btn.sm{padding:8px 14px;font-size:13px}
+.btn[disabled],.btn[aria-disabled="true"]{opacity:.5;pointer-events:none}
+
+label{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--fg-3);margin-bottom:7px}
+/* Selected by exclusion, not by listing types: <input> with no type attribute
+   is a text field, and an [type=text] list silently skips it -- which is how the
+   grade calculator's readonly total ended up rendering as a white browser box. */
+input:where(:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=submit]):not([type=button])),
+select,textarea{
+  width:100%;padding:11px 13px;border-radius:5px;border:1px solid var(--line-2);background:var(--surface-2);
+  color:var(--fg);font-family:inherit;font-size:14.5px;transition:border-color .2s var(--ease)}
+input:where([readonly]){background:var(--surface-3);color:var(--fg-2);border-color:var(--line)}
+input:where([readonly]):focus{border-color:var(--line)}
+input:focus,select:focus,textarea:focus{border-color:var(--amber);outline:none}
+input::placeholder,textarea::placeholder{color:var(--fg-3)}
+textarea{resize:vertical;min-height:110px;line-height:1.6}
+.field{margin-bottom:16px}
+.hint{margin:6px 0 0;font-size:12.5px;color:var(--fg-3)}
+
+/* ============================ cards ============================ */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:9px;margin-bottom:22px}
+.card > header{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:15px 18px;border-bottom:1px solid var(--line)}
+.card h2{font-family:var(--serif);font-weight:400;font-size:1.06rem;letter-spacing:-.01em;margin:0}
+.card h3{font-family:var(--serif);font-weight:400;font-size:.98rem;margin:0}
+.k{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--fg-3);display:block;margin-bottom:5px}
+.card header a{font-size:13px;color:var(--fg-2);text-decoration:none;white-space:nowrap}
+.card header a:hover{color:var(--amber)}
+.body{padding:6px 18px 16px}
+.body.pad{padding:18px}
+
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(196px,1fr));gap:1px;
+  background:var(--line);border:1px solid var(--line);border-radius:9px;overflow:hidden;margin-bottom:28px}
+.cell{background:var(--surface);padding:16px 18px}
+.cell .k{margin-bottom:0}
+.cell .v{font-family:var(--serif);font-size:1.75rem;font-weight:400;line-height:1.1;letter-spacing:-.03em;
+  margin:7px 0 3px;font-variant-numeric:tabular-nums}
+.cell .s{font-size:12.5px;color:var(--fg-2)}
+.cell.warn .v{color:var(--amber)}
+.cell.bad .v{color:var(--red)}
+.cell.good .v{color:var(--green)}
+
+/* ============================ bits ============================ */
+.tag{display:inline-block;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;
+  text-transform:uppercase;padding:3px 8px;border-radius:3px;border:1px solid var(--line-2);
+  color:var(--fg-3);white-space:nowrap}
+.tag.now{color:var(--red);border-color:rgba(201,112,92,.4);background:var(--red-soft)}
+.tag.soon{color:var(--amber);border-color:rgba(232,169,74,.4);background:var(--amber-soft)}
+.tag.ok{color:var(--green);border-color:rgba(127,176,138,.4);background:var(--green-soft)}
+
+.bar{height:3px;background:var(--surface-3);border-radius:2px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--amber)}
+
+.empty{padding:26px 18px;text-align:center;color:var(--fg-3);font-size:13.5px}
+.empty a{color:var(--amber);text-decoration:none}
+.empty strong{display:block;color:var(--fg-2);font-weight:500;font-size:14.5px;margin-bottom:5px}
+
+.note{border:1px solid var(--line);border-left:2px solid var(--amber);border-radius:5px;
+  padding:12px 15px;background:var(--surface-2);font-size:13.5px;color:var(--fg-2);margin-bottom:18px}
+.note.bad{border-left-color:var(--red)}
+.note.good{border-left-color:var(--green)}
+
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-3);
+  text-align:left;font-weight:400;padding:0 12px 10px;border-bottom:1px solid var(--line)}
+td{padding:12px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.scroll{overflow-x:auto}
+
+/* ============================ flashes ============================ */
+.flashes{list-style:none;margin:0 0 20px;padding:0;display:flex;flex-direction:column;gap:8px}
+.flashes li{border:1px solid var(--line);border-left:2px solid var(--amber);border-radius:5px;
+  padding:11px 15px;background:var(--surface-2);font-size:13.5px;color:var(--fg-2)}
+.flashes li.error{border-left-color:var(--red)}
+.flashes li.success{border-left-color:var(--green)}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}

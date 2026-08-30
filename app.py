@@ -793,31 +793,43 @@ def build_grouped_cards(raw_tasks):
 # ============================
 # UI buckets
 # ============================
+def decorate_card(c):
+    """Add the display fields every template reads off a card.
+
+    This used to live inside group_for_ui, so only cards that went through the
+    bucketing had status_label/main_due_pretty. The dashboard builds a second,
+    unbucketed list for its course cards and deadline rail, which is why every
+    course read "No date" and every deadline pill was empty regardless of the
+    dates actually in the database."""
+    status, label = status_for(c.get("main_due_raw", ""))
+    c2 = dict(c)
+
+    c2["status"] = status
+    c2["status_label"] = label
+    c2["main_due_pretty"] = pretty_date(c.get("main_due_raw", ""))
+    c2["due_pretty"] = pretty_date(c.get("due_raw", ""))
+    c2["opens_pretty"] = pretty_date(c.get("opens_raw", ""))
+    c2["closes_pretty"] = pretty_date(c.get("closes_raw", ""))
+
+    has_due = bool(c.get("due_raw"))
+
+    if has_due:
+        c2["show_opens"] = False
+        c2["show_closes"] = False
+    else:
+        main = c.get("main_due_raw", "")
+        c2["show_opens"] = bool(c.get("opens_raw")) and (c.get("opens_raw") != main)
+        c2["show_closes"] = bool(c.get("closes_raw")) and (c.get("closes_raw") != main)
+
+    return c2
+
+
 def group_for_ui(cards):
     groups = {"overdue": [], "today": [], "panic": [], "soon": [], "later": [], "nodate": []}
 
     for c in cards:
-        status, label = status_for(c.get("main_due_raw", ""))
-        c2 = dict(c)
-
-        c2["status"] = status
-        c2["status_label"] = label
-        c2["main_due_pretty"] = pretty_date(c.get("main_due_raw", ""))
-        c2["due_pretty"] = pretty_date(c.get("due_raw", ""))
-        c2["opens_pretty"] = pretty_date(c.get("opens_raw", ""))
-        c2["closes_pretty"] = pretty_date(c.get("closes_raw", ""))
-
-        has_due = bool(c.get("due_raw"))
-
-        if has_due:
-            c2["show_opens"] = False
-            c2["show_closes"] = False
-        else:
-            main = c.get("main_due_raw", "")
-            c2["show_opens"] = bool(c.get("opens_raw")) and (c.get("opens_raw") != main)
-            c2["show_closes"] = bool(c.get("closes_raw")) and (c.get("closes_raw") != main)
-
-        groups[status].append(c2)
+        c2 = decorate_card(c)
+        groups[c2["status"]].append(c2)
 
     return groups
 
@@ -2817,7 +2829,7 @@ def home():
     reminders = reminders[:5]
 
     # Dashboard V2 helper data
-    dashboard_cards = sort_cards(view_filter(build_grouped_cards(raw_tasks), "all"))
+    dashboard_cards = [decorate_card(c) for c in sort_cards(view_filter(build_grouped_cards(raw_tasks), "all"))]
 
     course_map = {}
 
@@ -2968,11 +2980,8 @@ def home():
         group["courses"].append(card)
     course_groups=sorted(grouped_courses.values(),key=lambda g:(g["year"],term_rank.get(g["season"].lower(),4)),reverse=True)
 
-    # ?v=next renders the redesigned dashboard against exactly the same data.
-    # Keeping both behind one route means the preview cannot drift from the
-    # live page's variables the way a separate copy would.
     return render_template(
-        "index_next.html" if request.args.get("v") == "next" else "index.html",
+        "index.html",
         groups=groups,
         view=view,
         summary=summary,
@@ -2999,7 +3008,7 @@ def home():
 @login_required
 def study_room():
     raw_tasks = load_tasks()
-    cards = sort_cards(view_filter(build_grouped_cards(raw_tasks), "all"))
+    cards = [decorate_card(c) for c in sort_cards(view_filter(build_grouped_cards(raw_tasks), "all"))]
     active = [c for c in cards if not c.get("completed")][:12]
     deadlines = []
     for c in active:
@@ -5291,7 +5300,10 @@ def sync_now():
 @app.route("/grade-calculator")
 @login_required
 def grade_calculator():
-    return render_template("grade_calculator.html")
+    # The calculator converts a running total into a letter, so it needs the
+    # student's own scale rather than a hardcoded one.
+    return render_template("grade_calculator.html",
+                           grading_scale=_get_user_grading_scale(current_user.id))
 
 
 @app.route("/api/analyze-outline", methods=["POST"])

@@ -3,35 +3,162 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Nexora · Immersive Study Room</title>
+  <title>Study room — Nexora</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600&family=Archivo:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="{{ url_for('static', filename='nexora-app.css') }}">
   <style>
-    :root{--bg:#03040a;--panel:#0c1020e8;--line:#282f50;--text:#f7f8ff;--muted:#98a3c3;--purple:#8b5cf6;--purple2:#6d28d9;--green:#42e3a4;--amber:#ffbd66;--red:#ff6b8c}
-    *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#03040a;color:var(--text);font-family:Inter,sans-serif}button,a{font:inherit}.app{height:100%;display:grid;grid-template-columns:220px 1fr;background:radial-gradient(circle at 60% -10%,#36157455,transparent 42%),#04050b}.sidebar{position:relative;z-index:20;border-right:1px solid #1c2240;background:#070916f2;padding:18px 14px;display:flex;flex-direction:column}.brand{display:flex;align-items:center;gap:11px;color:#fff;text-decoration:none;font:800 20px Space Grotesk}.gem{width:34px;height:39px;background:linear-gradient(145deg,#b18cff,#4f22c9);clip-path:polygon(50% 0,100% 25%,82% 76%,50% 100%,18% 76%,0 25%);filter:drop-shadow(0 0 18px #8b5cf6)}.nav{display:grid;gap:7px;margin-top:30px}.nav a{display:flex;align-items:center;gap:10px;color:#aab3cf;text-decoration:none;padding:12px 13px;border-radius:11px}.nav a:hover,.nav a.active{color:#fff;background:linear-gradient(90deg,#4c228f,#7c3aed)}.profile{margin-top:auto;border-top:1px solid #202746;padding:15px 8px 4px}.profile strong{display:block}.profile small{color:var(--muted)}
-    .stage{position:relative;min-width:0;overflow:hidden}.topbar{position:absolute;z-index:12;top:18px;left:22px;right:22px;display:flex;align-items:center;justify-content:space-between;pointer-events:none}.title{pointer-events:auto;background:#070a16c7;border:1px solid #2d3559;border-radius:15px;padding:11px 14px;backdrop-filter:blur(16px);box-shadow:0 10px 40px #0008}.title strong{font:700 18px Space Grotesk}.title span{display:block;color:var(--muted);font-size:11px;margin-top:3px}.top-actions{display:flex;gap:9px;pointer-events:auto}.btn{border:1px solid #31395e;background:#0a0e1dcc;color:#e7ebff;border-radius:12px;padding:10px 13px;cursor:pointer;backdrop-filter:blur(12px)}.btn:hover{border-color:#8b5cf6;box-shadow:0 0 26px #7c3aed44}.btn.primary{border:0;background:linear-gradient(90deg,#6d28d9,#9333ea);font-weight:800}
-    #roomCanvas{position:absolute;inset:0;width:100%;height:100%;display:block}.vignette{position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 52% 44%,transparent 25%,#02030a55 67%,#02030ad9 100%)}.grain{position:absolute;inset:0;pointer-events:none;opacity:.12;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.86' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.35'/%3E%3C/svg%3E")}.statusbar{position:absolute;z-index:10;left:50%;bottom:18px;transform:translateX(-50%);display:flex;gap:8px;align-items:center;border:1px solid #31395e;background:#070a16d6;border-radius:999px;padding:8px 12px;color:#aeb7d3;font-size:11px;backdrop-filter:blur(14px)}.statusbar i{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 14px var(--green)}
-    .label{position:absolute;z-index:11;transform:translate(-50%,-50%);border:1px solid #7f5be688;background:#090d1dde;color:#fff;border-radius:13px;padding:9px 11px;cursor:pointer;box-shadow:0 12px 40px #000a,0 0 24px #7c3aed35;backdrop-filter:blur(13px);transition:.18s}.label:hover,.label.focused{transform:translate(-50%,-58%) scale(1.06);border-color:#c4b5fd;box-shadow:0 18px 55px #000c,0 0 36px #8b5cf677}.label strong{display:flex;align-items:center;gap:7px;font-size:13px}.label small{display:block;color:#aab3cc;margin-top:3px}.label .dot{width:7px;height:7px;border-radius:50%;background:#ad8bff;box-shadow:0 0 14px #ad8bff}.label.timer strong{font-size:18px}.tooltip{position:absolute;z-index:14;display:none;pointer-events:none;max-width:230px;background:#080b19e8;border:1px solid #384066;border-radius:12px;padding:10px 11px;color:#e8ebf8;font-size:12px;box-shadow:0 14px 45px #000b;backdrop-filter:blur(14px)}
-    .drawer{position:absolute;z-index:30;right:18px;top:84px;bottom:18px;width:min(430px,calc(100% - 36px));transform:translateX(calc(100% + 30px));transition:transform .42s cubic-bezier(.2,.8,.2,1);border:1px solid #303858;border-radius:22px;background:linear-gradient(155deg,#10152bfa,#080b18f7);box-shadow:0 35px 100px #000d;backdrop-filter:blur(20px);display:flex;flex-direction:column}.drawer.open{transform:none}.drawer-head{display:flex;justify-content:space-between;align-items:center;padding:18px 18px 15px;border-bottom:1px solid #242b49}.drawer-head h2{margin:0;font:700 23px Space Grotesk}.drawer-head p{margin:4px 0 0;color:var(--muted);font-size:12px}.iconbtn{border:1px solid #333b61;background:#0b1020;color:#fff;border-radius:10px;padding:8px 10px;cursor:pointer}.drawer-body{padding:16px;overflow:auto}.list{display:grid;gap:10px}.item{border:1px solid #293151;border-radius:15px;padding:13px;background:#0a0f20;display:flex;justify-content:space-between;gap:12px;align-items:center}.item strong{display:block}.meta{color:var(--muted);font-size:12px;margin-top:4px}.pill{font-size:11px;border-radius:999px;padding:5px 8px;background:#21164b;color:#c4b5fd}.course-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.course{position:relative;overflow:hidden;border:1px solid #2d3559;border-radius:16px;padding:14px;min-height:125px;color:#fff;text-decoration:none;background:radial-gradient(circle at 80% 0,#7c3aed33,transparent 42%),#0a0f20}.course:hover{border-color:#8b5cf6;transform:translateY(-2px)}.course b{font-size:16px}.focus-card{text-align:center;padding:20px;border:1px solid #30385d;border-radius:20px;background:radial-gradient(circle at 50% 20%,#7c3aed33,transparent 42%),#090d1c}.focus-clock{font-size:68px;letter-spacing:-.06em;font-weight:800;margin:10px 0}.focus-controls{display:flex;justify-content:center;gap:9px}.scene-controls{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}.scene-controls button{border:1px solid #30385c;background:#0a0e1d;color:#e7eaff;border-radius:11px;padding:10px;cursor:pointer}.scene-controls button.active{background:#6d28d9;border-color:#9f7aea}.notebook{background:linear-gradient(90deg,#f4eddc 0 48%,#d8cbaa 50%,#f6efdf 52% 100%);color:#222;border-radius:14px;padding:18px;box-shadow:inset 0 0 0 1px #b5a987}.notebook h3{font-family:Georgia,serif;margin-top:0}.check{display:flex;gap:9px;padding:9px 0;border-bottom:1px dashed #a99d80}.check input{accent-color:#6d28d9}.transition{position:fixed;z-index:100;inset:0;background:#02030a;opacity:0;pointer-events:none}.transition.go{animation:portal 1.05s cubic-bezier(.18,.82,.2,1) forwards}@keyframes portal{0%{opacity:0;clip-path:circle(0 at 58% 44%)}25%{opacity:1}100%{opacity:1;clip-path:circle(150% at 58% 44%)}}
-    .loading{position:absolute;z-index:50;inset:0;display:grid;place-items:center;background:#03040a;transition:opacity .5s}.loading.hide{opacity:0;pointer-events:none}.loader{width:44px;height:44px;border:3px solid #2b3150;border-top-color:#9f7aea;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
-    @media(max-width:900px){.app{grid-template-columns:1fr}.sidebar{display:none}.topbar{left:12px;right:12px;top:12px}.title span{display:none}.drawer{right:10px;top:76px;bottom:10px}.label{font-size:11px;padding:7px 9px}.course-grid{grid-template-columns:1fr}}
+/* The study room is the one page that cannot use the app shell: it is a
+   full-bleed WebGL stage with no scroll. It takes its tokens from
+   nexora-app.css and rebuilds only the chrome that floats over the canvas. */
+html,body{height:100%;overflow:hidden}
+.app{height:100%;display:grid;grid-template-columns:var(--rail) 1fr;background:var(--bg)}
+.sidebar{position:relative;z-index:20;border-right:1px solid var(--line);background:rgba(30,27,23,.66);
+  padding:22px 18px;display:flex;flex-direction:column;gap:26px}
+.sidebar .brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--fg);
+  font-family:var(--serif);font-weight:600;font-size:18px;letter-spacing:-.02em;padding:0 8px}
+.sidebar .brand i{width:6px;height:6px;border-radius:50%;background:var(--amber);font-style:normal}
+.profile{margin-top:auto;padding:11px 10px;border-radius:8px;background:var(--surface)}
+.profile strong{display:block;font-size:13.5px;font-weight:500}
+.profile small{color:var(--fg-3);font-size:11px}
+
+.stage{position:relative;min-width:0;overflow:hidden}
+#roomCanvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.vignette{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(circle at 52% 44%,transparent 26%,rgba(21,19,16,.42) 68%,rgba(21,19,16,.86) 100%)}
+.grain{position:absolute;inset:0;pointer-events:none;opacity:.05;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E")}
+
+.topbar{position:absolute;z-index:12;top:18px;left:22px;right:22px;display:flex;align-items:flex-start;
+  justify-content:space-between;gap:16px;pointer-events:none}
+.title{pointer-events:auto}
+.title span.k{font-family:var(--mono);font-size:10px;letter-spacing:.24em;text-transform:uppercase;
+  color:var(--amber);display:block;margin-bottom:7px}
+.title strong{font-family:var(--serif);font-weight:300;font-size:1.6rem;letter-spacing:-.03em;
+  display:block;line-height:1.1}
+.title small{display:block;color:var(--fg-2);font-size:13px;margin-top:5px}
+.top-actions{display:flex;gap:9px;pointer-events:auto;flex-wrap:wrap;justify-content:flex-end}
+
+.statusbar{position:absolute;z-index:10;left:50%;bottom:18px;transform:translateX(-50%);
+  display:flex;gap:8px;align-items:center;border:1px solid var(--line);background:rgba(30,27,23,.85);
+  border-radius:999px;padding:7px 14px;color:var(--fg-3);font-family:var(--mono);font-size:10px;
+  letter-spacing:.1em;text-transform:uppercase;backdrop-filter:blur(12px)}
+.statusbar i{width:6px;height:6px;border-radius:50%;background:var(--green);font-style:normal}
+
+.label{position:absolute;z-index:11;transform:translate(-50%,-50%);border:1px solid var(--line-2);
+  background:rgba(30,27,23,.92);color:var(--fg);border-radius:7px;padding:9px 12px;cursor:pointer;
+  box-shadow:0 18px 44px -18px rgba(0,0,0,.9);backdrop-filter:blur(12px);
+  transition:transform .22s var(--ease),border-color .22s var(--ease)}
+.label:hover,.label.focused{transform:translate(-50%,-56%);border-color:var(--amber)}
+.label strong{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500}
+.label small{display:block;color:var(--fg-3);font-size:11px;margin-top:3px}
+.label .dot{width:5px;height:5px;border-radius:50%;background:var(--amber);flex:none}
+.label.timer strong{font-family:var(--mono);font-size:16px}
+.tooltip{position:absolute;z-index:14;display:none;pointer-events:none;max-width:230px;
+  background:rgba(30,27,23,.95);border:1px solid var(--line-2);border-radius:6px;padding:10px 12px;
+  color:var(--fg-2);font-size:12.5px;box-shadow:0 18px 44px -18px rgba(0,0,0,.9);backdrop-filter:blur(12px)}
+
+.drawer{position:absolute;z-index:30;right:18px;top:96px;bottom:18px;width:min(430px,calc(100% - 36px));
+  transform:translateX(calc(100% + 30px));transition:transform .42s var(--ease);
+  border:1px solid var(--line-2);border-radius:10px;background:var(--surface);
+  box-shadow:0 40px 100px -30px rgba(0,0,0,.95);display:flex;flex-direction:column}
+.drawer.open{transform:none}
+.drawer-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
+  padding:16px 18px;border-bottom:1px solid var(--line)}
+.drawer-head h2{margin:0;font-family:var(--serif);font-weight:400;font-size:1.15rem}
+.drawer-head p{margin:4px 0 0;color:var(--fg-3);font-size:12.5px}
+.iconbtn{border:1px solid var(--line-2);background:none;color:var(--fg-2);border-radius:5px;
+  padding:7px 11px;cursor:pointer;font:inherit;font-size:13px}
+.iconbtn:hover{border-color:var(--fg-3);color:var(--fg)}
+.drawer-body{padding:16px 18px 20px;overflow:auto}
+.list{display:grid;gap:9px}
+.item{border:1px solid var(--line);border-radius:7px;padding:12px 13px;background:var(--surface-2);
+  display:flex;justify-content:space-between;gap:12px;align-items:center}
+.item strong{display:block;font-size:14px;font-weight:500}
+.meta{color:var(--fg-3);font-size:12px;margin-top:3px}
+.pill{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+  border-radius:3px;padding:3px 8px;border:1px solid var(--line-2);color:var(--fg-3);white-space:nowrap}
+.course-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.course{border:1px solid var(--line);border-radius:8px;padding:13px;min-height:96px;color:var(--fg);
+  text-decoration:none;background:var(--surface-2);display:flex;flex-direction:column;gap:5px;
+  transition:border-color .22s var(--ease),transform .22s var(--ease)}
+.course:hover{border-color:var(--line-2);transform:translateY(-2px)}
+.course b{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--amber);font-weight:400}
+.course span{font-size:13.5px;line-height:1.35}
+
+.focus-card{text-align:center;padding:22px;border:1px solid var(--line);border-radius:9px;
+  background:var(--surface-2)}
+.focus-clock{font-family:var(--mono);font-size:54px;letter-spacing:-.04em;font-weight:500;margin:12px 0;
+  font-variant-numeric:tabular-nums}
+.focus-controls{display:flex;justify-content:center;gap:9px;flex-wrap:wrap}
+.scene-controls{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:14px}
+.scene-controls button{border:1px solid var(--line-2);background:var(--surface-2);color:var(--fg-2);
+  border-radius:5px;padding:9px 6px;cursor:pointer;font:inherit;font-size:12.5px}
+.scene-controls button:hover{color:var(--fg);border-color:var(--fg-3)}
+.scene-controls button.active{background:var(--amber);border-color:var(--amber);color:#140F09;font-weight:500}
+
+/* The notebook keeps a paper colour on purpose: it is the one object in the
+   room meant to read as a physical page rather than a panel. */
+.notebook{background:#EFE7D6;color:#2A2621;border-radius:8px;padding:18px;
+  box-shadow:inset 0 0 0 1px #C9BEA4}
+.notebook h3{font-family:var(--serif);font-weight:400;margin:0 0 6px;font-size:1.1rem}
+.check{display:flex;gap:10px;padding:9px 0;border-bottom:1px dashed #BFB49B;font-size:13.5px}
+.check:last-child{border-bottom:0}
+.check input{accent-color:#8A6A2F}
+.check small{color:#6B6255}
+
+.transition{position:fixed;z-index:100;inset:0;background:var(--bg);opacity:0;pointer-events:none}
+.transition.go{animation:portal 1.05s var(--ease) forwards}
+@keyframes portal{0%{opacity:0;clip-path:circle(0 at 58% 44%)}25%{opacity:1}
+  100%{opacity:1;clip-path:circle(150% at 58% 44%)}}
+.loading{position:absolute;z-index:50;inset:0;display:grid;place-items:center;background:var(--bg);
+  transition:opacity .5s}
+.loading.hide{opacity:0;pointer-events:none}
+.loader{width:34px;height:34px;border:2px solid var(--line-2);border-top-color:var(--amber);
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@media(max-width:900px){
+  .app{grid-template-columns:1fr}
+  .sidebar{display:none}
+  .topbar{left:12px;right:12px;top:12px}
+  .title small{display:none}
+  .drawer{right:10px;top:88px;bottom:10px}
+  .label{font-size:11px;padding:7px 9px}
+  .course-grid{grid-template-columns:1fr}
+}
   </style>
   <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"}}</script>
 </head>
 <body>
 <div class="app">
   <aside class="sidebar">
-    <a class="brand" href="/dashboard"><span class="gem"></span><span>NEXORA</span></a>
-    <nav class="nav">
-      <a href="/dashboard">⌂ Mission Control</a><a href="/calendar">▦ Calendar</a><a href="/dashboard#courses">▣ Courses</a><a href="/dashboard#tasks">☑ Tasks</a><a href="/connect-brightspace">↻ Nexora Sync</a><a class="active" href="/study-room">◈ Study Room</a><a href="/settings">🎓 Grading Scale</a><a href="/profile">⚙ Settings</a>
+    <a class="brand" href="{{ url_for('landing') }}"><i></i>Nexora</a>
+    <nav class="railnav">
+      <a href="{{ url_for('home') }}"><b></b>Dashboard</a>
+      <a href="{{ url_for('calendar_page') }}"><b></b>Calendar</a>
+      <a href="{{ url_for('grade_calculator') }}"><b></b>Grades</a>
+      <a class="on" href="{{ url_for('study_room') }}"><b></b>Study room</a>
+      <a href="{{ url_for('connect_brightspace') }}"><b></b>Brightspace</a>
+      <a href="{{ url_for('settings') }}"><b></b>Settings</a>
     </nav>
-    <div class="profile"><strong>{{ user.name }}</strong><small>Student Plan</small></div>
+    <div class="profile"><strong>{{ user.name }}</strong><small>Student</small></div>
   </aside>
   <main class="stage" id="stage">
     <canvas id="roomCanvas"></canvas>
     <div class="vignette"></div><div class="grain"></div>
-    <header class="topbar"><div class="title"><strong>Immersive Study Room</strong><span>Your live academic space · hover, click, and focus</span></div><div class="top-actions"><button class="btn" id="resetView">Reset view</button><a class="btn" href="/dashboard" style="text-decoration:none">Exit room</a></div></header>
+    <header class="topbar">
+      <div class="title">
+        <span class="k">Study room</span>
+        <strong>Your desk, with your real work on it.</strong>
+        <small>Hover an object to look closer. Click it to open what it holds.</small>
+      </div>
+      <div class="top-actions">
+        <button class="btn quiet sm" id="resetView" type="button">Reset view</button>
+        <a class="btn sm" href="{{ url_for('home') }}">Exit room</a>
+      </div>
+    </header>
     <div class="label" data-key="dashboard"><strong><span class="dot"></span>Dashboard</strong><small>Enter Mission Control</small></div>
     <div class="label" data-key="tasks"><strong><span class="dot"></span>Tasks</strong><small>{{ tasks|length }} to review</small></div>
     <div class="label" data-key="courses"><strong><span class="dot"></span>Courses</strong><small>{{ courses|length }} workspaces</small></div>
@@ -39,7 +166,7 @@
     <div class="label timer" data-key="timer"><strong><span class="dot"></span><span id="miniTimer">25:00</span></strong><small>Focus timer</small></div>
     <div class="label" data-key="settings"><strong><span class="dot"></span>Ambience</strong><small>Personalize your room</small></div>
     <div class="tooltip" id="tooltip"></div>
-    <div class="statusbar"><i></i><span>Room live · objects use your real Nexora data</span></div>
+    <div class="statusbar"><i></i><span>Room live &middot; every object is your own data</span></div>
     <section class="drawer" id="drawer"><div class="drawer-head"><div><h2 id="drawerTitle">Study Room</h2><p id="drawerSubtitle">Interactive workspace</p></div><button class="iconbtn" id="closeDrawer">Close ×</button></div><div class="drawer-body" id="drawerBody"></div></section>
     <div class="loading" id="loading"><div class="loader"></div></div>
   </main>
@@ -55,7 +182,7 @@ import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 const canvas=document.getElementById('roomCanvas'),stage=document.getElementById('stage');
 const ROOM_DATA=window.ROOM_DATA;const drawer=document.getElementById('drawer'),drawerTitle=document.getElementById('drawerTitle'),drawerSubtitle=document.getElementById('drawerSubtitle'),drawerBody=document.getElementById('drawerBody'),closeDrawer=document.getElementById('closeDrawer'),miniTimer=document.getElementById('miniTimer'),tooltip=document.getElementById('tooltip'),loading=document.getElementById('loading');
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:false,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
-const scene=new THREE.Scene();scene.background=new THREE.Color(0x050610);scene.fog=new THREE.FogExp2(0x050610,.035);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x0E0C0B);scene.fog=new THREE.FogExp2(0x0E0C0B,.035);
 const camera=new THREE.PerspectiveCamera(38,1,.1,100);camera.position.set(0,4.8,12.8);
 const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.enablePan=false;controls.minDistance=7.5;controls.maxDistance=17;controls.minPolarAngle=.72;controls.maxPolarAngle=1.47;controls.target.set(0,1.8,0);
 const root=new THREE.Group();scene.add(root);
@@ -65,31 +192,31 @@ function mat(color,rough=.65,metal=.08){return new THREE.MeshStandardMaterial({c
 function box(name,size,pos,color,rough=.7,metal=.05){const m=new THREE.Mesh(new THREE.BoxGeometry(...size),mat(color,rough,metal));m.name=name;m.position.set(...pos);m.castShadow=m.receiveShadow=true;root.add(m);return m}
 function roundRect(name,w,h,d,pos,color){const s=new THREE.Shape();const r=.14; s.moveTo(-w/2+r,-h/2);s.lineTo(w/2-r,-h/2);s.quadraticCurveTo(w/2,-h/2,w/2,-h/2+r);s.lineTo(w/2,h/2-r);s.quadraticCurveTo(w/2,h/2,w/2-r,h/2);s.lineTo(-w/2+r,h/2);s.quadraticCurveTo(-w/2,h/2,-w/2,h/2-r);s.lineTo(-w/2,-h/2+r);s.quadraticCurveTo(-w/2,-h/2,-w/2+r,-h/2);const g=new THREE.ExtrudeGeometry(s,{depth:d,bevelEnabled:true,bevelSize:.04,bevelThickness:.04,bevelSegments:3});g.center();const m=new THREE.Mesh(g,mat(color,.55,.12));m.name=name;m.position.set(...pos);m.castShadow=m.receiveShadow=true;root.add(m);return m}
 function canvasTexture(draw,w=1024,h=512){const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d');draw(x,w,h);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=renderer.capabilities.getMaxAnisotropy();return t}
-function addTextPlane(text,pos,size=[2,1],opts={}){const tex=canvasTexture((x,w,h)=>{x.fillStyle=opts.bg||'#080b18';x.fillRect(0,0,w,h);x.fillStyle=opts.accent||'#9f7aea';x.fillRect(0,0,12,h);x.fillStyle='#f4f6ff';x.font=`700 ${opts.fs||52}px Inter`;x.fillText(text,55,90);x.fillStyle='#9aa4c7';x.font='32px Inter';x.fillText(opts.sub||'',55,145);});const p=new THREE.Mesh(new THREE.PlaneGeometry(...size),new THREE.MeshBasicMaterial({map:tex}));p.position.set(...pos);root.add(p);return p}
+function addTextPlane(text,pos,size=[2,1],opts={}){const tex=canvasTexture((x,w,h)=>{x.fillStyle=opts.bg||'#171512';x.fillRect(0,0,w,h);x.fillStyle=opts.accent||'#E8A94A';x.fillRect(0,0,12,h);x.fillStyle='#F5F2ED';x.font=`600 ${opts.fs||52}px Archivo`;x.fillText(text,55,90);x.fillStyle='#A9A297';x.font='32px Archivo';x.fillText(opts.sub||'',55,145);});const p=new THREE.Mesh(new THREE.PlaneGeometry(...size),new THREE.MeshBasicMaterial({map:tex}));p.position.set(...pos);root.add(p);return p}
 // Room shell
-box('floor',[18,.32,12],[0,-.18,0],0x11101a,.92,0);box('backwall',[18,8,.25],[0,3.7,-5.8],0x0b0c16,.93,0);box('leftwall',[.25,8,12],[-8.85,3.7,0],0x090a13,.95,0);
+box('floor',[18,.32,12],[0,-.18,0],0x18140F,.92,0);box('backwall',[18,8,.25],[0,3.7,-5.8],0x120F0C,.93,0);box('leftwall',[.25,8,12],[-8.85,3.7,0],0x0E0C0B,.95,0);
 // Rug and desk
-box('rug',[11,.035,6],[.4,.015,1.45],0x17122b,.9,0);box('desk',[11,.5,4.2],[.5,2.05,-.25],0x3a2118,.62,0);box('deskfront',[10.6,1.7,.3],[.5,1.05,1.65],0x24150f,.75,0);
+box('rug',[11,.035,6],[.4,.015,1.45],0x241E17,.9,0);box('desk',[11,.5,4.2],[.5,2.05,-.25],0x4A2E1C,.62,0);box('deskfront',[10.6,1.7,.3],[.5,1.05,1.65],0x2E1C12,.75,0);
 // Laptop base and screen
-const laptopBase=box('laptopBase',[4.8,.18,2.9],[.5,2.42,-.15],0x292b32,.35,.62);laptopBase.rotation.x=-.06;
-const screenFrame=box('dashboard',[4.8,3,.18],[.5,3.95,-1.42],0x1e2028,.32,.7);screenFrame.rotation.x=-.12;interactive.push(screenFrame);anchors.dashboard=screenFrame;
-const screenTex=canvasTexture((x,w,h)=>{const g=x.createLinearGradient(0,0,w,h);g.addColorStop(0,'#080b18');g.addColorStop(1,'#17102c');x.fillStyle=g;x.fillRect(0,0,w,h);x.fillStyle='#a78bfa';x.font='700 34px Inter';x.fillText('NEXORA · MISSION CONTROL',52,64);x.fillStyle='#fff';x.font='700 56px Inter';x.fillText('Good morning, {{ user.name|e }}',52,145);x.fillStyle='#9aa4c7';x.font='30px Inter';x.fillText('Your semester is under control.',52,195);[['TODAY',ROOM_DATA.tasks.length],['DEADLINES',ROOM_DATA.deadlines.length],['COURSES',ROOM_DATA.courses.length]].forEach((v,i)=>{x.fillStyle='#11162a';x.fillRect(52+i*300,245,265,150);x.strokeStyle='#39305f';x.strokeRect(52+i*300,245,265,150);x.fillStyle='#a78bfa';x.font='700 24px Inter';x.fillText(v[0],75+i*300,285);x.fillStyle='#fff';x.font='800 58px Inter';x.fillText(String(v[1]),75+i*300,360)});});const display=new THREE.Mesh(new THREE.PlaneGeometry(4.42,2.54),new THREE.MeshBasicMaterial({map:screenTex}));display.position.set(.5,3.95,-1.31);display.rotation.x=-.12;root.add(display);
+const laptopBase=box('laptopBase',[4.8,.18,2.9],[.5,2.42,-.15],0x2A2620,.35,.62);laptopBase.rotation.x=-.06;
+const screenFrame=box('dashboard',[4.8,3,.18],[.5,3.95,-1.42],0x201C18,.32,.7);screenFrame.rotation.x=-.12;interactive.push(screenFrame);anchors.dashboard=screenFrame;
+const screenTex=canvasTexture((x,w,h)=>{const g=x.createLinearGradient(0,0,w,h);g.addColorStop(0,'#171512');g.addColorStop(1,'#241F19');x.fillStyle=g;x.fillRect(0,0,w,h);x.fillStyle='#E8A94A';x.font='500 34px JetBrains Mono';x.fillText('NEXORA · MISSION CONTROL',52,64);x.fillStyle='#F5F2ED';x.font='300 56px Fraunces';x.fillText('Good morning, {{ user.name|e }}',52,145);x.fillStyle='#A9A297';x.font='30px Archivo';x.fillText('Your semester is under control.',52,195);[['TODAY',ROOM_DATA.tasks.length],['DEADLINES',ROOM_DATA.deadlines.length],['COURSES',ROOM_DATA.courses.length]].forEach((v,i)=>{x.fillStyle='#1E1B17';x.fillRect(52+i*300,245,265,150);x.strokeStyle='#3A342D';x.strokeRect(52+i*300,245,265,150);x.fillStyle='#E8A94A';x.font='500 24px JetBrains Mono';x.fillText(v[0],75+i*300,285);x.fillStyle='#fff';x.font='800 58px Inter';x.fillText(String(v[1]),75+i*300,360)});});const display=new THREE.Mesh(new THREE.PlaneGeometry(4.42,2.54),new THREE.MeshBasicMaterial({map:screenTex}));display.position.set(.5,3.95,-1.31);display.rotation.x=-.12;root.add(display);
 // Notebook tasks
-const notebook=roundRect('tasks',3.15,2.2,.12,[.15,2.42,1.55],0xe8dfca);notebook.rotation.x=-Math.PI/2+.03;interactive.push(notebook);anchors.tasks=notebook;
-const noteTex=canvasTexture((x,w,h)=>{x.fillStyle='#f1ead9';x.fillRect(0,0,w,h);x.fillStyle='#2b2530';x.font='700 48px Georgia';x.fillText("Today's Plan",80,75);x.font='31px Georgia';ROOM_DATA.tasks.slice(0,5).forEach((t,i)=>x.fillText('□ '+(t.title||'Task').slice(0,30),80,145+i*62));});const notePage=new THREE.Mesh(new THREE.PlaneGeometry(2.9,1.9),new THREE.MeshBasicMaterial({map:noteTex}));notePage.position.set(.15,2.51,1.55);notePage.rotation.x=-Math.PI/2;root.add(notePage);
+const notebook=roundRect('tasks',3.15,2.2,.12,[.15,2.42,1.55],0xEFE7D6);notebook.rotation.x=-Math.PI/2+.03;interactive.push(notebook);anchors.tasks=notebook;
+const noteTex=canvasTexture((x,w,h)=>{x.fillStyle='#EFE7D6';x.fillRect(0,0,w,h);x.fillStyle='#2A2621';x.font='400 48px Fraunces';x.fillText("Today's Plan",80,75);x.font='31px Georgia';ROOM_DATA.tasks.slice(0,5).forEach((t,i)=>x.fillText('□ '+(t.title||'Task').slice(0,30),80,145+i*62));});const notePage=new THREE.Mesh(new THREE.PlaneGeometry(2.9,1.9),new THREE.MeshBasicMaterial({map:noteTex}));notePage.position.set(.15,2.51,1.55);notePage.rotation.x=-Math.PI/2;root.add(notePage);
 // Books / courses
-const bookColors=[0x152044,0x26183c,0x201d46,0x162c43];ROOM_DATA.courses.slice(0,4).forEach((c,i)=>{const b=box('courses',[3.4,.48,1.1],[-3.85,2.3+i*.48,.35],bookColors[i%bookColors.length],.72,.04);b.rotation.y=.05*(i%2?1:-1);b.userData.course=c;interactive.push(b);if(!anchors.courses)anchors.courses=b;const label=addTextPlane((c.course_code||c.code||'COURSE').slice(0,15),[-3.84,2.3+i*.48,.92],[2.6,.33],{bg:'#171426',fs:54});label.rotation.x=0;});
+const bookColors=[0x6B4A2A,0x3E4A3C,0x5A3E32,0x44403A];ROOM_DATA.courses.slice(0,4).forEach((c,i)=>{const b=box('courses',[3.4,.48,1.1],[-3.85,2.3+i*.48,.35],bookColors[i%bookColors.length],.72,.04);b.rotation.y=.05*(i%2?1:-1);b.userData.course=c;interactive.push(b);if(!anchors.courses)anchors.courses=b;const label=addTextPlane((c.course_code||c.code||'COURSE').slice(0,15),[-3.84,2.3+i*.48,.92],[2.6,.33],{bg:'#1E1B17',fs:54});label.rotation.x=0;});
 // Timer
-const timer=roundRect('timer',1.75,1.15,.55,[4.6,2.65,.6],0x171925);interactive.push(timer);anchors.timer=timer;const timerFace=addTextPlane('25:00',[4.6,2.72,.89],[1.45,.8],{bg:'#090b16',accent:'#7c3aed',fs:110});
+const timer=roundRect('timer',1.75,1.15,.55,[4.6,2.65,.6],0x1E1B17);interactive.push(timer);anchors.timer=timer;const timerFace=addTextPlane('25:00',[4.6,2.72,.89],[1.45,.8],{bg:'#171512',accent:'#E8A94A',fs:110});
 // Calendar / deadlines
-const calendar=roundRect('deadlines',2.2,2.05,.18,[-4.7,3.15,-1.2],0xf0e5d0);interactive.push(calendar);anchors.deadlines=calendar;const calTex=canvasTexture((x,w,h)=>{x.fillStyle='#f2eadc';x.fillRect(0,0,w,h);x.fillStyle='#241d28';x.font='700 48px Inter';x.fillText('DEADLINES',55,75);x.font='28px Inter';ROOM_DATA.deadlines.slice(0,4).forEach((d,i)=>x.fillText('• '+(d.title||'Deadline').slice(0,25),55,140+i*60));});const calFace=new THREE.Mesh(new THREE.PlaneGeometry(1.9,1.75),new THREE.MeshBasicMaterial({map:calTex}));calFace.position.set(-4.7,3.15,-1.09);root.add(calFace);
+const calendar=roundRect('deadlines',2.2,2.05,.18,[-4.7,3.15,-1.2],0xEFE7D6);interactive.push(calendar);anchors.deadlines=calendar;const calTex=canvasTexture((x,w,h)=>{x.fillStyle='#EFE7D6';x.fillRect(0,0,w,h);x.fillStyle='#2A2621';x.font='500 48px JetBrains Mono';x.fillText('DEADLINES',55,75);x.font='28px Inter';ROOM_DATA.deadlines.slice(0,4).forEach((d,i)=>x.fillText('• '+(d.title||'Deadline').slice(0,25),55,140+i*60));});const calFace=new THREE.Mesh(new THREE.PlaneGeometry(1.9,1.75),new THREE.MeshBasicMaterial({map:calTex}));calFace.position.set(-4.7,3.15,-1.09);root.add(calFace);
 // Mug/settings
-const mug=new THREE.Mesh(new THREE.CylinderGeometry(.65,.56,1.35,48),mat(0x0a0b12,.28,.55));mug.name='settings';mug.position.set(4.75,2.72,2.05);mug.castShadow=true;root.add(mug);interactive.push(mug);anchors.settings=mug;const handle=new THREE.Mesh(new THREE.TorusGeometry(.46,.11,18,48,Math.PI*1.45),mat(0x0a0b12,.28,.55));handle.position.set(5.3,2.82,2.05);handle.rotation.y=Math.PI/2;root.add(handle);
+const mug=new THREE.Mesh(new THREE.CylinderGeometry(.65,.56,1.35,48),mat(0x171512,.28,.55));mug.name='settings';mug.position.set(4.75,2.72,2.05);mug.castShadow=true;root.add(mug);interactive.push(mug);anchors.settings=mug;const handle=new THREE.Mesh(new THREE.TorusGeometry(.46,.11,18,48,Math.PI*1.45),mat(0x0a0b12,.28,.55));handle.position.set(5.3,2.82,2.05);handle.rotation.y=Math.PI/2;root.add(handle);
 // Lamp and plants
-box('lampBase',[1.2,.18,1.2],[5.7,2.38,-1.55],0x1a1b22,.35,.65);const pole=new THREE.Mesh(new THREE.CylinderGeometry(.08,.08,3,24),mat(0x1e2027,.3,.72));pole.position.set(5.7,3.9,-1.55);pole.castShadow=true;root.add(pole);const shade=new THREE.Mesh(new THREE.ConeGeometry(.8,.9,32,1,true),mat(0x171821,.32,.5));shade.position.set(5.7,5.45,-1.55);shade.rotation.z=.35;shade.castShadow=true;root.add(shade);
-for(const p of [[-6,2.6,-2.5],[6.5,2.5,-3.5]]){const pot=new THREE.Mesh(new THREE.CylinderGeometry(.55,.42,.8,32),mat(0x3a251b,.8,0));pot.position.set(...p);root.add(pot);for(let i=0;i<8;i++){const leaf=new THREE.Mesh(new THREE.SphereGeometry(.22,16,12),mat(0x183824,.75,0));leaf.scale.set(.7,2.2,.5);leaf.position.set(p[0]+(Math.random()-.5)*1.2,p[1]+.7+Math.random()*1.6,p[2]+(Math.random()-.5)*.5);leaf.rotation.z=(Math.random()-.5)*1.4;root.add(leaf)}}
+box('lampBase',[1.2,.18,1.2],[5.7,2.38,-1.55],0x201C18,.35,.65);const pole=new THREE.Mesh(new THREE.CylinderGeometry(.08,.08,3,24),mat(0x2A2620,.3,.72));pole.position.set(5.7,3.9,-1.55);pole.castShadow=true;root.add(pole);const shade=new THREE.Mesh(new THREE.ConeGeometry(.8,.9,32,1,true),mat(0x241F19,.32,.5));shade.position.set(5.7,5.45,-1.55);shade.rotation.z=.35;shade.castShadow=true;root.add(shade);
+for(const p of [[-6,2.6,-2.5],[6.5,2.5,-3.5]]){const pot=new THREE.Mesh(new THREE.CylinderGeometry(.55,.42,.8,32),mat(0x4A2E1C,.8,0));pot.position.set(...p);root.add(pot);for(let i=0;i<8;i++){const leaf=new THREE.Mesh(new THREE.SphereGeometry(.22,16,12),mat(0x3D5238,.75,0));leaf.scale.set(.7,2.2,.5);leaf.position.set(p[0]+(Math.random()-.5)*1.2,p[1]+.7+Math.random()*1.6,p[2]+(Math.random()-.5)*.5);leaf.rotation.z=(Math.random()-.5)*1.4;root.add(leaf)}}
 // Lights
-const hemi=new THREE.HemisphereLight(0x6f64a8,0x17111a,1.2);scene.add(hemi);const key=new THREE.SpotLight(0xffd6ad,55,18,.5,.45,1.3);key.position.set(5.6,6,-1.6);key.target.position.set(2,1,0);key.castShadow=true;key.shadow.mapSize.set(2048,2048);scene.add(key,key.target);const purple=new THREE.PointLight(0x7c3aed,35,12,2);purple.position.set(.5,4,-.5);scene.add(purple);const fill=new THREE.PointLight(0x3b82f6,12,10,2);fill.position.set(-5,4,2);scene.add(fill);
+const hemi=new THREE.HemisphereLight(0x8A7F6A,0x1A1512,1.2);scene.add(hemi);const key=new THREE.SpotLight(0xffd6ad,55,18,.5,.45,1.3);key.position.set(5.6,6,-1.6);key.target.position.set(2,1,0);key.castShadow=true;key.shadow.mapSize.set(2048,2048);scene.add(key,key.target);const purple=new THREE.PointLight(0xE8A94A,35,12,2);purple.position.set(.5,4,-.5);scene.add(purple);const fill=new THREE.PointLight(0x7892C8,12,10,2);fill.position.set(-5,4,2);scene.add(fill);
 
 function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()}addEventListener('resize',resize);resize();
 function worldToScreen(obj){const v=new THREE.Vector3();obj.getWorldPosition(v);v.project(camera);return {x:(v.x*.5+.5)*stage.clientWidth,y:(-.5*v.y+.5)*stage.clientHeight}}
@@ -101,8 +228,8 @@ function resetView(){flyTo(new THREE.Vector3(0,4.8,12.8),new THREE.Vector3(0,1.8
 function openDrawer(title,sub,html){drawerTitle.textContent=title;drawerSubtitle.textContent=sub;drawerBody.innerHTML=html;drawer.classList.add('open')}closeDrawer.onclick=()=>drawer.classList.remove('open');
 function esc(s){return String(s??'').replace(/[&<>'"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[m]))}
 let seconds=1500,timerRunning=false,timerHandle=null;function clock(){const m=Math.floor(seconds/60),s=seconds%60;return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}function syncClock(){miniTimer.textContent=clock();const big=document.getElementById('bigTimer');if(big)big.textContent=clock()}function toggleTimer(){timerRunning=!timerRunning;if(timerRunning){timerHandle=setInterval(()=>{seconds=Math.max(0,seconds-1);syncClock();if(!seconds){clearInterval(timerHandle);timerRunning=false}},1000)}else clearInterval(timerHandle)}
-function panel(key){focusObject(key);setTimeout(()=>{if(key==='dashboard'){const tr=document.getElementById('transition');tr.classList.add('go');setTimeout(()=>location.href='/dashboard',820);return}if(key==='tasks'){openDrawer('Today’s Plan','Live tasks from Mission Control',`<div class="notebook"><h3>Today’s Plan</h3>${ROOM_DATA.tasks.length?ROOM_DATA.tasks.slice(0,10).map(t=>`<label class="check"><input type="checkbox" aria-label="Mark task complete" ${t.completed?'checked':''}><span><b>${esc(t.title)}</b><br><small>${esc(t.course_full||'General')} ${esc(t.main_due_pretty||'')}</small></span></label>`).join(''):'<p>No tasks waiting. You are clear.</p>'}</div>`)}else if(key==='courses'){openDrawer('Course Shelf','Open any synced workspace',`<div class="course-grid">${ROOM_DATA.courses.map(c=>`<a class="course" href="/course/${encodeURIComponent(c.course_code||c.code||'OTHER')}"><b>${esc(c.course_code||c.code||'COURSE')}</b><div class="meta">${esc(c.course_name||c.name||'Course workspace')}</div></a>`).join('')}</div>`)}else if(key==='deadlines'){openDrawer('Upcoming Deadlines','What deserves attention next',`<div class="list">${ROOM_DATA.deadlines.length?ROOM_DATA.deadlines.map(d=>`<div class="item"><div><strong>${esc(d.title)}</strong><div class="meta">${esc(d.course_full||'')} · ${esc(d.main_due_pretty||d.due||'No date')}</div></div><span class="pill">${esc(d.status_label||'Upcoming')}</span></div>`).join(''):'<div class="item">No upcoming deadlines.</div>'}</div>`)}else if(key==='timer'){openDrawer('Focus Timer','A distraction-free study sprint',`<div class="focus-card"><div class="meta">CURRENT SESSION</div><div class="focus-clock" id="bigTimer">${clock()}</div><div class="focus-controls"><button class="btn primary" id="toggleFocus">Start / Pause</button><button class="btn" id="resetFocus">Reset</button></div></div>`);document.getElementById('toggleFocus').onclick=toggleTimer;document.getElementById('resetFocus').onclick=()=>{clearInterval(timerHandle);timerRunning=false;seconds=1500;syncClock()}}else if(key==='settings'){openDrawer('Room Ambience','Shape the room around the way you study',`<div class="focus-card"><h3>Ambience</h3><p class="meta">Lighting changes instantly and stays saved on this device.</p><div class="scene-controls"><button data-mode="purple" class="active">Purple</button><button data-mode="warm">Warm</button><button data-mode="focus">Focus</button><button data-mode="night">Night</button></div></div>`);document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>setMode(b.dataset.mode))}},500)}
-function setMode(mode){localStorage.setItem('nexora-room-mode',mode);document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));if(mode==='warm'){purple.color.set(0xff7a45);purple.intensity=22;key.intensity=70;renderer.toneMappingExposure=1.15}else if(mode==='focus'){purple.color.set(0x5b4ee8);purple.intensity=15;key.intensity=34;renderer.toneMappingExposure=.88}else if(mode==='night'){purple.color.set(0x4f46e5);purple.intensity=28;key.intensity=18;renderer.toneMappingExposure=.72}else{purple.color.set(0x7c3aed);purple.intensity=35;key.intensity=55;renderer.toneMappingExposure=1.05}}
+function panel(key){focusObject(key);setTimeout(()=>{if(key==='dashboard'){const tr=document.getElementById('transition');tr.classList.add('go');setTimeout(()=>location.href='/dashboard',820);return}if(key==='tasks'){openDrawer('Today’s Plan','Live tasks from Mission Control',`<div class="notebook"><h3>Today’s Plan</h3>${ROOM_DATA.tasks.length?ROOM_DATA.tasks.slice(0,10).map(t=>`<label class="check"><input type="checkbox" aria-label="Mark task complete" ${t.completed?'checked':''}><span><b>${esc(t.title)}</b><br><small>${esc(t.course||'General')} ${esc(t.due||'')}</small></span></label>`).join(''):'<p>No tasks waiting. You are clear.</p>'}</div>`)}else if(key==='courses'){openDrawer('Course Shelf','Open any synced workspace',`<div class="course-grid">${ROOM_DATA.courses.map(c=>`<a class="course" href="/course/${encodeURIComponent(c.course_code||c.code||'OTHER')}"><b>${esc(c.course_code||c.code||'COURSE')}</b><div class="meta">${esc(c.course_name||c.name||'Course workspace')}</div></a>`).join('')}</div>`)}else if(key==='deadlines'){openDrawer('Upcoming Deadlines','What deserves attention next',`<div class="list">${ROOM_DATA.deadlines.length?ROOM_DATA.deadlines.map(d=>`<div class="item"><div><strong>${esc(d.title)}</strong><div class="meta">${esc(d.course_full||'')} · ${esc(d.main_due_pretty||d.due||'No date')}</div></div><span class="pill">${esc(d.status_label||'Upcoming')}</span></div>`).join(''):'<div class="item">No upcoming deadlines.</div>'}</div>`)}else if(key==='timer'){openDrawer('Focus Timer','A distraction-free study sprint',`<div class="focus-card"><div class="meta">CURRENT SESSION</div><div class="focus-clock" id="bigTimer">${clock()}</div><div class="focus-controls"><button class="btn primary" id="toggleFocus">Start / Pause</button><button class="btn" id="resetFocus">Reset</button></div></div>`);document.getElementById('toggleFocus').onclick=toggleTimer;document.getElementById('resetFocus').onclick=()=>{clearInterval(timerHandle);timerRunning=false;seconds=1500;syncClock()}}else if(key==='settings'){openDrawer('Room Ambience','Shape the room around the way you study',`<div class="focus-card"><h3>Ambience</h3><p class="meta">Lighting changes instantly and stays saved on this device.</p><div class="scene-controls"><button data-mode="purple" class="active">Purple</button><button data-mode="warm">Warm</button><button data-mode="focus">Focus</button><button data-mode="night">Night</button></div></div>`);document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>setMode(b.dataset.mode))}},500)}
+function setMode(mode){localStorage.setItem('nexora-room-mode',mode);document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));if(mode==='warm'){purple.color.set(0xE2833C);purple.intensity=22;key.intensity=70;renderer.toneMappingExposure=1.15}else if(mode==='focus'){purple.color.set(0x7892C8);purple.intensity=15;key.intensity=34;renderer.toneMappingExposure=.88}else if(mode==='night'){purple.color.set(0x5D6E9E);purple.intensity=28;key.intensity=18;renderer.toneMappingExposure=.72}else{purple.color.set(0xE8A94A);purple.intensity=35;key.intensity=55;renderer.toneMappingExposure=1.05}}
 setMode(localStorage.getItem('nexora-room-mode')||'purple');document.querySelectorAll('.label').forEach(el=>{el.onclick=()=>panel(el.dataset.key);el.onmouseenter=()=>focusObject(el.dataset.key)});
 renderer.domElement.addEventListener('pointermove',e=>{const r=renderer.domElement.getBoundingClientRect();mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(mouse,camera);const hit=raycaster.intersectObjects(interactive,false)[0]?.object||null;if(hit!==hovered){if(hovered)hovered.scale.setScalar(1);hovered=hit;if(hovered)hovered.scale.setScalar(1.05);renderer.domElement.style.cursor=hovered?'pointer':'grab'}if(hit){tooltip.style.display='block';tooltip.style.left=(e.clientX-stage.getBoundingClientRect().left+14)+'px';tooltip.style.top=(e.clientY-stage.getBoundingClientRect().top+14)+'px';tooltip.textContent={dashboard:'Enter Mission Control',tasks:'Open today’s live task notebook',courses:'Browse your course workspaces',deadlines:'Preview upcoming deadlines',timer:'Start a 25-minute focus sprint',settings:'Change room ambience'}[hit.name]||hit.name}else tooltip.style.display='none'});renderer.domElement.addEventListener('click',()=>{if(hovered)panel(hovered.name)});
 let last=performance.now();function animate(now){requestAnimationFrame(animate);const dt=(now-last)/1000;last=now;controls.update();purple.position.x=.5+Math.sin(now*.0005)*.5;root.rotation.y+=(mouse.x*.008-root.rotation.y)*.035;positionLabels();renderer.render(scene,camera)}animate(performance.now());setTimeout(()=>loading.classList.add('hide'),850);
