@@ -15,9 +15,9 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   font-size:12.5px;cursor:pointer}
 .loading{opacity:.55;pointer-events:none}
 
-/* ---------- the result, stated once, at the top ---------- */
+/* ---------- the answer, stated once ---------- */
 .result{border:1px solid var(--line-2);border-radius:9px;background:var(--surface-2);
-  padding:20px;margin-bottom:20px;display:flex;gap:22px;align-items:center;flex-wrap:wrap}
+  padding:20px;margin-bottom:18px;display:flex;gap:22px;align-items:center;flex-wrap:wrap}
 .result .figure{display:flex;align-items:baseline;gap:12px}
 .result .pct{font-family:var(--serif);font-weight:300;font-size:3.1rem;line-height:1;
   letter-spacing:-.04em;font-variant-numeric:tabular-nums}
@@ -30,16 +30,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .result.pass .pct{color:var(--green)}
 .result.fail{border-color:rgba(201,112,92,.45)}
 .result.fail .pct{color:var(--red)}
-.result.empty .pct{color:var(--fg-3)}
-.result.empty .letter{color:var(--fg-3)}
-
-.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
-  background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:18px}
-.readout div{background:var(--surface-2);padding:14px 15px}
-.readout .k{margin-bottom:0}
-.readout strong{display:block;font-family:var(--mono);font-size:1.25rem;font-weight:500;margin-top:8px;
-  font-variant-numeric:tabular-nums}
-.readout small{display:block;color:var(--fg-3);font-size:11.5px;margin-top:4px}
+.result.empty .pct,.result.empty .letter{color:var(--fg-3)}
 
 /* ---------- one card per assessment ---------- */
 .comps{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:14px}
@@ -72,6 +63,10 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .marks-row{display:flex;align-items:center;gap:7px}
 .marks-row input{padding:8px 9px;font-size:14px;text-align:center;font-family:var(--mono);
   font-variant-numeric:tabular-nums;min-width:0}
+/* The denominator is a default, not a question: an outline gives a weight, never
+   a mark total, so it starts at 100 and only wants touching for a 12.5/30. */
+.marks-row .of{color:var(--fg-3);border-color:var(--line)}
+.marks-row .of:focus{color:var(--fg)}
 .marks-row span{color:var(--fg-3);font-family:var(--mono);font-size:14px;flex:none}
 .comp-foot{display:flex;justify-content:space-between;gap:10px;margin-top:12px;padding-top:11px;
   border-top:1px solid var(--line);font-family:var(--mono);font-size:10.5px;color:var(--fg-3)}
@@ -79,8 +74,21 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .wt{display:flex;align-items:center;gap:5px}
 .wt input{width:52px;padding:4px 6px;font-size:11px;text-align:right;font-family:var(--mono)}
 
-.pair{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px}
-@media (max-width:560px){.pair{grid-template-columns:1fr}}
+/* ---------- "what do I need", only when asked ---------- */
+.askrow{margin-top:20px}
+.need{margin-top:14px;border:1px solid var(--line-2);border-radius:9px;background:var(--surface-2);
+  padding:17px 18px}
+.need[hidden]{display:none}
+.need .targetrow{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.need .targetrow > div{width:150px}
+.need .targetrow label{margin-bottom:7px}
+.need .answer{margin:16px 0 0;font-size:15px;line-height:1.6;color:var(--fg-2)}
+.need .answer b{color:var(--fg);font-weight:500}
+.need .answer .big{font-family:var(--mono);font-size:1.5rem;font-weight:500;color:var(--amber);
+  font-variant-numeric:tabular-nums}
+.need .answer.good .big{color:var(--green)}
+.need .answer.bad .big{color:var(--red)}
+
 .alert{display:none;margin-top:16px}
 .alert.show{display:block}
 .meta{display:none;margin-top:16px}
@@ -94,8 +102,8 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     <p class="eyebrow">Course outline intelligence</p>
     <h1>Turn an outline into an <em>exact</em> grade plan.</h1>
     <p class="lede">
-      Upload or paste a syllabus. Nexora reads the official weighting, then works out
-      where you stand and what you still need.
+      Upload or paste a syllabus. Nexora reads the official weighting, then tells you
+      where you stand.
     </p>
   </div>
 </div>
@@ -141,38 +149,27 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       </div>
 
       <p class="hint" style="margin:0 0 14px">
-        Enter the mark you earned and what it was out of &mdash; <b>15 / 20</b> becomes 75%.
+        Type the mark you got. The <b>/ 100</b> beside it is only there for marks given
+        out of something else &mdash; change it to <b>30</b> for a midterm scored out of 30.
         Leave anything unfinished blank.
       </p>
 
       <div class="comps" id="components"></div>
 
-      <div class="pair">
-        <div>
-          <label for="targetGrade">Target final grade (%)</label>
-          <input type="number" id="targetGrade" value="85" min="0" max="100" aria-label="Target grade, percent">
-        </div>
-        <div>
-          <label for="totalWeight">Total detected weight</label>
-          <input id="totalWeight" value="0%" readonly aria-label="Total weight of all components">
-        </div>
-      </div>
+      <div class="askrow">
+        <button class="btn quiet" id="askBtn" type="button" aria-expanded="false" aria-controls="need">
+          What do I need on the rest?
+        </button>
 
-      <div class="readout">
-        <div>
-          <span class="k">Points earned</span>
-          <strong id="pointsEarned">0.00</strong>
-          <small>of 100 course points</small>
-        </div>
-        <div>
-          <span class="k">Graded so far</span>
-          <strong id="gradedWeight">0%</strong>
-          <small>of the course marked</small>
-        </div>
-        <div>
-          <span class="k">Needed on what's left</span>
-          <strong id="neededScore">—</strong>
-          <small>to reach your target</small>
+        <div class="need" id="need" hidden>
+          <div class="targetrow">
+            <div>
+              <label for="targetGrade">I want to finish at</label>
+              <input type="number" id="targetGrade" value="85" min="0" max="100"
+                     aria-label="Target final grade, percent">
+            </div>
+          </div>
+          <p class="answer" id="needAnswer"></p>
         </div>
       </div>
 
@@ -192,7 +189,11 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   const SCALE_NAME = {{ (grading_scale.university_name or '')|tojson }};
 
   // A component is {name, weight, earned, outOf}. Marks, not percentages: a
-  // single "score %" box is what let a mark of 10/10 be read as 10%.
+  // single "score %" box is what let a mark of 10/10 be read as 10%. outOf
+  // defaults to 100 because an outline states a weight and never a mark total,
+  // so there is nothing to extract -- but almost every mark is already a
+  // percentage, and making students retype 100 five times is its own bug.
+  const DEFAULT_OUT_OF = 100;
   let components = [];
   const $ = id => document.getElementById(id);
 
@@ -233,7 +234,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
         name: c.name ?? 'Assessment',
         weight: Number(c.weight) || 0,
         earned: '',
-        outOf: ''
+        outOf: DEFAULT_OUT_OF
       }));
       render();
 
@@ -275,8 +276,8 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   /* ---------------- one card per assessment ---------------- */
   const R = 32, C = 2 * Math.PI * R;
 
-  // Built once per card, then updated in place. Re-rendering the card on every
-  // keystroke would tear the focused input out from under the cursor.
+  // Built once per card, then updated in place. Re-rendering on every keystroke
+  // would tear the focused input out from under the cursor.
   function ring() {
     const wrap = document.createElement('div');
     wrap.className = 'ring none';
@@ -310,11 +311,12 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     return wrap;
   }
 
-  function markInput(value, aria, onInput) {
+  function markInput(value, aria, cls, onInput) {
     const input = document.createElement('input');
     input.type = 'number';
     input.min = '0';
     input.step = 'any';
+    if (cls) input.className = cls;
     input.value = value ?? '';
     input.setAttribute('aria-label', aria);
     input.oninput = e => { onInput(e.target.value); calculate(); };
@@ -346,15 +348,15 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     marks.className = 'marks';
     const marksLabel = document.createElement('span');
     marksLabel.className = 'k';
-    marksLabel.textContent = 'Your marks';
+    marksLabel.textContent = 'Your mark';
     const row = document.createElement('div');
     row.className = 'marks-row';
     const slash = document.createElement('span');
     slash.textContent = '/';
     row.append(
-      markInput(c.earned, 'Marks earned', v => { components[i].earned = v; }),
+      markInput(c.earned, 'Mark earned', '', v => { components[i].earned = v; }),
       slash,
-      markInput(c.outOf, 'Out of', v => { components[i].outOf = v; })
+      markInput(c.outOf, 'Out of', 'of', v => { components[i].outOf = v; })
     );
     marks.append(marksLabel, row);
     const dial = ring();
@@ -418,32 +420,28 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   }
 
   /* ---------------- the arithmetic ---------------- */
-  function calculate() {
-    document.querySelectorAll('#components .comp').forEach(el => el.refresh && el.refresh());
-
+  const totals = () => {
     let earnedPoints = 0, gradedWeight = 0, remainingWeight = 0, totalWeight = 0;
-
+    const outstanding = [];
     for (const c of components) {
       const w = Number(c.weight) || 0;
       totalWeight += w;
       const pct = pctOf(c);
-      if (pct == null) remainingWeight += w;
+      if (pct == null) { remainingWeight += w; if (w > 0) outstanding.push(c.name || 'that'); }
       else { gradedWeight += w; earnedPoints += pct / 100 * w; }
     }
+    return { earnedPoints, gradedWeight, remainingWeight, totalWeight, outstanding };
+  };
 
-    $('totalWeight').value = `${totalWeight.toFixed(2)}%`;
-    $('pointsEarned').textContent = earnedPoints.toFixed(2);
-    $('gradedWeight').textContent = `${gradedWeight.toFixed(0)}%`;
+  function calculate() {
+    document.querySelectorAll('#components .comp').forEach(el => el.refresh && el.refresh());
 
-    const target = Number($('targetGrade').value) || 0;
-    const needed = remainingWeight > 0 ? (target - earnedPoints) / remainingWeight * 100 : null;
-    $('neededScore').textContent = needed == null ? '—' : `${needed.toFixed(1)}%`;
+    const t = totals();
 
-    // Standing is the average across what has actually been marked. Points
-    // earned out of 100 is a different number and means nothing until the
-    // course is over -- showing only that was what made 5 solid marks read
-    // as 29.72%.
-    const standing = gradedWeight > 0 ? earnedPoints / gradedWeight * 100 : null;
+    // Standing is the average across what has actually been marked. Points out
+    // of 100 is a different number and means nothing until the course is over;
+    // showing only that was what made five solid marks read as 29.72%.
+    const standing = t.gradedWeight > 0 ? t.earnedPoints / t.gradedWeight * 100 : null;
     const result = $('result');
     const letter = standing == null ? '' : letterFor(standing);
 
@@ -457,35 +455,99 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
         ? 'Fill in the marks you have so far.'
         : 'Add an outline, then fill in the marks you have so far.';
     } else {
-      const passing = standing >= 50;
-      result.className = 'result ' + (passing ? 'pass' : 'fail');
-      $('resultLine').textContent = remainingWeight > 0
-        ? `Your average across the ${gradedWeight.toFixed(0)}% marked so far`
+      result.className = 'result ' + (standing >= 50 ? 'pass' : 'fail');
+      $('resultLine').textContent = t.remainingWeight > 0
+        ? `Your average across the ${t.gradedWeight.toFixed(0)}% marked so far`
         : 'Final standing — every assessment is marked';
       const scaleNote = SCALE_NAME ? ` on ${SCALE_NAME}'s scale` : '';
       $('resultSub').textContent = `${letter}${scaleNote}. ${
-        remainingWeight > 0
-          ? `${remainingWeight.toFixed(0)}% of the course is still to come.`
+        t.remainingWeight > 0
+          ? `${t.remainingWeight.toFixed(0)}% of the course is still to come.`
           : 'Nothing left outstanding.'}`;
     }
 
+    if (!$('need').hidden) answerNeed(t);
+
     clearAlert();
-    if (needed != null && needed > 100) {
-      showAlert(`Even 100% on everything left tops out at ${(earnedPoints + remainingWeight).toFixed(2)}%.`, 'bad');
-    } else if (needed != null && needed <= 0 && gradedWeight > 0) {
-      showAlert(`You have already secured your ${target}% target.`, 'good');
-    } else if (totalWeight && Math.abs(totalWeight - 100) > 0.5) {
-      showAlert(`Weights total ${totalWeight.toFixed(2)}%, not 100%. That is normal when the outline has a bonus; otherwise check the rows.`);
+    if (t.totalWeight && Math.abs(t.totalWeight - 100) > 0.5) {
+      showAlert(`Weights total ${t.totalWeight.toFixed(2)}%, not 100%. That is normal when the outline has a bonus; otherwise check the rows.`);
     }
   }
+
+  /* ---------------- "what do I need", only when asked ---------------- */
+  function answerNeed(t = totals()) {
+    const el = $('needAnswer');
+    const target = Number($('targetGrade').value) || 0;
+    el.className = 'answer';
+    el.replaceChildren();
+
+    const say = (...nodes) => el.append(...nodes);
+    const big = text => {
+      const b = document.createElement('span');
+      b.className = 'big';
+      b.textContent = text;
+      return b;
+    };
+    const bold = text => {
+      const b = document.createElement('b');
+      b.textContent = text;
+      return b;
+    };
+
+    if (!components.length) {
+      say('Add some assessments first.');
+      return;
+    }
+    if (t.remainingWeight <= 0) {
+      say('Everything is marked, so there is nothing left to need. You finished at ',
+          bold(`${(t.gradedWeight > 0 ? t.earnedPoints / t.gradedWeight * 100 : 0).toFixed(2)}%`), '.');
+      return;
+    }
+
+    const needed = (target - t.earnedPoints) / t.remainingWeight * 100;
+    // Naming the one thing left is the whole question most students are asking.
+    const what = t.outstanding.length === 1
+      ? t.outstanding[0]
+      : `the remaining ${t.remainingWeight.toFixed(0)}%`;
+
+    if (needed <= 0) {
+      el.className = 'answer good';
+      say('You have already secured ', bold(`${target}%`),
+          '. Anything at all on ', bold(what), ' keeps you there.');
+      return;
+    }
+    if (needed > 100) {
+      el.className = 'answer bad';
+      say(`${target}% is out of reach — even 100% on `, bold(what),
+          ' finishes at ', bold(`${(t.earnedPoints + t.remainingWeight).toFixed(2)}%`), '.');
+      return;
+    }
+
+    say('You need ', big(`${needed.toFixed(1)}%`), ' on ', bold(what),
+        ` to finish at ${target}%.`);
+    if (t.outstanding.length > 1) {
+      const list = document.createElement('span');
+      list.textContent = ` That is an average across ${t.outstanding.join(', ')}.`;
+      say(list);
+    }
+  }
+
+  $('askBtn').onclick = () => {
+    const panel = $('need');
+    const opening = panel.hidden;
+    panel.hidden = !opening;
+    $('askBtn').setAttribute('aria-expanded', String(opening));
+    $('askBtn').textContent = opening ? 'Hide' : 'What do I need on the rest?';
+    if (opening) { answerNeed(); $('targetGrade').focus(); }
+  };
+  $('targetGrade').oninput = () => answerNeed();
 
   $('uploadBtn').onclick = uploadSyllabus;
   $('parseBtn').onclick = parseText;
   $('addBtn').onclick = () => {
-    components.push({ name: 'New assessment', weight: 10, earned: '', outOf: '' });
+    components.push({ name: 'New assessment', weight: 10, earned: '', outOf: DEFAULT_OUT_OF });
     render();
   };
-  $('targetGrade').oninput = calculate;
 
   // The Chrome extension pushes an outline it scraped from Brightspace.
   addEventListener('message', e => {
