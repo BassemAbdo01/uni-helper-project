@@ -360,3 +360,38 @@ def test_reset_refuses_the_password_already_in_use(client, mailbox):
     assert client.post(f"/reset-password/{token}",
                        data={"password": "a-genuinely-new-one"}).status_code in (301, 302)
     assert client.get("/dashboard").status_code == 200
+
+
+# --------------------------------------------------------------------------
+# Landing page
+# --------------------------------------------------------------------------
+
+def test_landing_invites_a_signed_out_visitor_to_join(client):
+    body = client.get("/").get_data(as_text=True)
+    assert "/signup" in body and "/login" in body
+    assert "Start free" in body
+    assert "Open your dashboard" not in body
+
+
+def test_landing_sends_a_signed_in_student_to_their_dashboard(client):
+    signup(client)
+    body = client.get("/").get_data(as_text=True)
+    assert "Open your dashboard" in body
+    # Offering "Start free" to someone who already has an account is the tell
+    # that a link was added outside the authenticated branch.
+    assert "Start free" not in body
+
+
+def test_landing_has_no_dead_links(client):
+    """Every call to action has to go somewhere; the concept build shipped with
+    three href="#" placeholders."""
+    for _ in range(2):
+        assert 'href="#"' not in client.get("/").get_data(as_text=True)
+        signup(client)
+
+
+def test_landing_still_carries_the_scene_and_the_product_panels(client):
+    body = client.get("/").get_data(as_text=True)
+    assert "three@0.160.0" in body           # the scroll scene survived the port
+    assert body.count('class="panel') >= 3   # sync, grades, and the study cards
+    assert "Concept build" not in body       # placeholder footer is gone

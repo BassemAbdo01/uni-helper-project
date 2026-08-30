@@ -1,91 +1,739 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Your intelligent command centre for university life.">
-  <title>Nexora — Own your semester</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='landing-v6.css') }}">
+<meta charset="utf-8">
+<title>Nexora</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600&family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#0E0C0B;
+  --surface:#171512;
+  --surface-2:#1E1B17;
+  --line:#292521;
+  --line-2:#3A342D;
+  --fg:#F5F2ED;
+  --fg-2:#A9A297;
+  --fg-3:#6F6961;
+  --amber:#E8A94A;
+  --amber-soft:rgba(232,169,74,.13);
+  --green:#7FB08A;
+  --red:#C9705C;
+  --ease:cubic-bezier(.22,.61,.36,1);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--bg);color:var(--fg);overflow-x:hidden;
+  font-family:"Archivo",ui-sans-serif,system-ui,sans-serif;font-size:16.5px;line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+
+#wash{position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(64% 50% at 74% 18%, rgba(232,169,74,.10), transparent 64%),
+    radial-gradient(52% 44% at 14% 88%, rgba(120,146,200,.055), transparent 70%),
+    linear-gradient(180deg,#1A1613 0%,#0E0C0B 38%,#121010 100%)}
+#gl{position:fixed;inset:0;z-index:1;display:block;pointer-events:none}
+#glfallback{position:fixed;inset:0;z-index:1;display:none;
+  background:radial-gradient(46% 52% at 72% 40%,rgba(232,169,74,.13),transparent 70%)}
+#grain{position:fixed;inset:0;z-index:2;pointer-events:none;opacity:.04;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E")}
+.content{position:relative;z-index:3}
+.shell{width:100%;max-width:1280px;margin:0 auto;padding:0 clamp(22px,4.5vw,72px)}
+
+/* ---------- nav ---------- */
+nav{position:fixed;top:0;left:0;right:0;z-index:40;transition:background .4s var(--ease),border-color .4s var(--ease);
+  border-bottom:1px solid transparent}
+nav.stuck{background:rgba(14,12,11,.82);backdrop-filter:blur(16px);border-bottom-color:var(--line)}
+.nav-in{display:flex;align-items:center;justify-content:space-between;padding:20px 0}
+.brand{font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:19px;letter-spacing:-.02em;
+  display:flex;align-items:center;gap:10px}
+.brand i{width:6px;height:6px;border-radius:50%;background:var(--amber);font-style:normal}
+.nav-l{display:flex;gap:30px;font-size:14px;color:var(--fg-2)}
+.nav-l a{color:inherit;text-decoration:none;transition:color .3s var(--ease)}
+.nav-l a:hover{color:var(--fg)}
+.nav-auth{display:flex;align-items:center;gap:20px}
+.nav-auth > a:first-child{font-size:14px;color:var(--fg-2);text-decoration:none;
+  transition:color .3s var(--ease)}
+.nav-auth > a:first-child:hover{color:var(--fg)}
+
+.btn{--lift:0px;display:inline-flex;align-items:center;gap:10px;font-size:14.5px;font-weight:600;
+  padding:13px 24px;border-radius:3px;text-decoration:none;cursor:pointer;
+  background:var(--amber);color:#140F09;border:1px solid var(--amber);
+  transform:translateY(var(--lift)) scale(1);box-shadow:0 1px 2px rgba(0,0,0,.5);
+  transition:transform .4s var(--ease),box-shadow .4s var(--ease)}
+.btn:hover{--lift:-2px;transform:translateY(var(--lift)) scale(1.02);
+  box-shadow:0 20px 44px -18px rgba(232,169,74,.55),0 2px 6px rgba(0,0,0,.6)}
+.btn:active{transform:translateY(0) scale(.995);transition-duration:.09s}
+.btn.quiet{background:transparent;color:var(--fg);border-color:var(--line-2);font-weight:500}
+.btn.quiet:hover{border-color:var(--fg-3);background:rgba(245,242,237,.045);
+  box-shadow:0 18px 40px -22px rgba(0,0,0,.9)}
+a:focus-visible,button:focus-visible{outline:1px solid var(--amber);outline-offset:4px}
+
+.rv{opacity:0;filter:blur(11px);transform:translateY(14px);
+  transition:opacity .95s var(--ease),filter .95s var(--ease),transform .95s var(--ease)}
+.rv.in{opacity:1;filter:blur(0);transform:none}
+
+/* ---------- hero ---------- */
+.hero{min-height:100vh;display:flex;align-items:center;padding:132px 0 80px}
+.hero-copy{width:min(560px,47%)}
+@media (max-width:1040px){.hero-copy{width:100%}}
+.eyebrow{font-size:10.5px;letter-spacing:.32em;text-transform:uppercase;color:var(--fg-3);
+  margin:0 0 30px;display:flex;align-items:center;gap:14px;font-weight:600}
+.eyebrow::before{content:"";width:36px;height:1px;background:var(--amber);opacity:.85}
+h1{font-family:"Fraunces",Georgia,serif;font-weight:300;
+  font-size:clamp(2.7rem,4.7vw,4.3rem);line-height:1.03;letter-spacing:-.038em;
+  margin:0 0 26px;text-wrap:balance;font-variation-settings:"SOFT" 0,"WONK" 1}
+h1 em{font-style:italic;font-weight:400;color:var(--amber)}
+.lede{font-size:1.05rem;color:var(--fg-2);max-width:44ch;margin:0 0 34px}
+.acts{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.microcopy{font-size:12.5px;color:var(--fg-3);margin:16px 0 0}
+
+/* ---------- proof strip ---------- */
+.proof{border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  background:rgba(23,21,18,.55);backdrop-filter:blur(8px)}
+.proof-in{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:0}
+.stat{padding:26px 0;border-right:1px solid var(--line)}
+.stat:last-child{border-right:0}
+.stat b{display:block;font-family:"Fraunces",serif;font-size:2.1rem;font-weight:400;
+  line-height:1;letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:var(--fg)}
+.stat span{display:block;font-size:12.5px;color:var(--fg-3);margin-top:8px;letter-spacing:.02em}
+
+/* ---------- sections ---------- */
+section.band{padding:130px 0;position:relative}
+.sec-head{max-width:640px;margin:0 0 52px}
+.num{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.24em;
+  color:var(--amber);margin:0 0 18px;text-transform:uppercase}
+h2{font-family:"Fraunces",Georgia,serif;font-weight:300;font-size:clamp(1.9rem,3.2vw,2.9rem);
+  line-height:1.1;letter-spacing:-.03em;margin:0 0 16px;text-wrap:balance;max-width:20ch}
+h2 em{font-style:italic;color:var(--amber);font-weight:400}
+.sec-head p{color:var(--fg-2);font-size:1.02rem;max-width:52ch;margin:0}
+
+/* real product surfaces */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 1px 0 rgba(255,255,255,.02),0 40px 80px -50px rgba(0,0,0,.9)}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:14px 18px;border-bottom:1px solid var(--line);font-size:12px;color:var(--fg-3);
+  font-family:"JetBrains Mono",monospace;letter-spacing:.1em;text-transform:uppercase}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;margin-right:8px}
+
+/* 01 · sync — two panes, before and after */
+.syncgrid{display:grid;grid-template-columns:1fr auto 1fr;gap:0;align-items:stretch}
+@media (max-width:1040px){.syncgrid{grid-template-columns:1fr}}
+.tabs{display:flex;flex-direction:column;gap:9px;padding:20px 18px}
+.tab{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--line);
+  border-radius:6px;background:var(--surface-2);font-size:13.5px;color:var(--fg-2)}
+.tab i{width:14px;height:14px;border-radius:3px;background:var(--line-2);display:block;font-style:normal;flex:none}
+.tab small{margin-left:auto;font-size:11px;color:var(--fg-3)}
+.arrowcell{display:grid;place-items:center;padding:0 24px;color:var(--amber);font-size:20px}
+@media (max-width:1040px){.arrowcell{padding:18px 0;transform:rotate(90deg)}}
+.feed{padding:20px 18px;display:flex;flex-direction:column;gap:0}
+.feeditem{display:grid;grid-template-columns:52px 1fr auto;gap:14px;align-items:center;
+  padding:12px 0;border-bottom:1px solid var(--line)}
+.feeditem:last-child{border-bottom:0}
+.when{font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--fg-3);text-align:right}
+.what{font-size:14px}
+.what small{display:block;color:var(--fg-3);font-size:11.5px;margin-top:2px}
+.pill{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  padding:3px 8px;border-radius:3px;border:1px solid var(--line-2);color:var(--fg-3);white-space:nowrap}
+.pill.due{color:var(--red);border-color:rgba(201,112,92,.4);background:rgba(201,112,92,.1)}
+.pill.soon{color:var(--amber);border-color:rgba(232,169,74,.4);background:var(--amber-soft)}
+
+/* 02 · grades — the transformation, full width */
+.xform{display:grid;grid-template-columns:1fr 1fr;gap:0}
+@media (max-width:1040px){.xform{grid-template-columns:1fr}}
+.xform > div{padding:24px 26px}
+.xform > div + div{border-left:1px solid var(--line)}
+@media (max-width:1040px){.xform > div + div{border-left:0;border-top:1px solid var(--line)}}
+.src{font-family:"JetBrains Mono",monospace;font-size:12.4px;line-height:1.9;color:var(--fg-2);white-space:pre-wrap}
+.src mark{background:var(--amber-soft);color:var(--fg);box-shadow:0 1px 0 rgba(232,169,74,.5);padding:1px 3px}
+.wrow{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:9px 0}
+.wrow .k{font-size:14px}
+.wrow .k small{display:block;color:var(--fg-3);font-size:11.5px;font-family:"JetBrains Mono",monospace}
+.bar{grid-column:1/-1;height:8px;border-radius:2px;background:var(--surface-2);overflow:hidden;margin-top:2px}
+.bar i{display:block;height:100%;background:var(--amber);width:0;transition:width 1.1s var(--ease)}
+.bar.bonus i{background:var(--green)}
+.in .bar i{width:var(--w)}
+.wtotal{display:flex;align-items:baseline;justify-content:space-between;margin-top:14px;
+  padding-top:14px;border-top:1px solid var(--line)}
+.wtotal b{font-family:"Fraunces",serif;font-size:1.7rem;font-weight:400;font-variant-numeric:tabular-nums}
+.wtotal b em{font-style:normal;color:var(--green);font-size:.95rem;margin-left:7px}
+
+/* 03 · study — three artifacts, not twenty */
+.arts{display:grid;grid-template-columns:repeat(auto-fit,minmax(288px,1fr));gap:20px}
+.art{padding:22px 22px 24px;min-height:236px;display:flex;flex-direction:column}
+.art .kind{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--amber);margin-bottom:16px}
+.art h3{font-family:"Fraunces",serif;font-weight:400;font-size:1.24rem;line-height:1.25;margin:0 0 14px}
+.art p{color:var(--fg-2);font-size:13.8px;margin:0}
+.art .cite{margin-top:auto;padding-top:16px;font-family:"JetBrains Mono",monospace;
+  font-size:10.5px;color:var(--fg-3);letter-spacing:.06em}
+.opt{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);
+  border-radius:5px;font-size:13.4px;color:var(--fg-2);margin-bottom:7px}
+.opt.right{border-color:rgba(127,176,138,.45);background:rgba(127,176,138,.1);color:var(--fg)}
+.opt b{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--fg-3);width:14px;flex:none}
+
+/* close */
+.close{min-height:96vh;display:flex;align-items:center;padding:120px 0}
+.close h2{font-size:clamp(2.2rem,4.2vw,3.6rem);max-width:16ch;margin-bottom:22px}
+footer{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--fg-3);font-size:12.5px}
+.foot-in{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.foot-in a{color:var(--fg-2);text-decoration:none;transition:color .3s var(--ease)}
+.foot-in a:hover{color:var(--amber)}
+
+@media (max-width:1040px){.nav-l{display:none}}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}
+  .rv{opacity:1;filter:none;transform:none;transition:none}.btn{transition:none}
+  .bar i{transition:none}}
+</style>
 </head>
 <body>
-  <main class="nova-page">
-    <nav class="nova-nav">
-      <a class="nova-logo" href="/" aria-label="Nexora home">
-        <span class="nova-logo-orbit"><i></i></span><b>NEXORA</b>
-      </a>
-      <div class="nova-links">
-        <a href="#product">Product</a><a href="#features">Use cases</a><a href="#features">Resources</a><a href="#features">Pricing</a><a href="#features">About</a>
-      </div>
-      <div class="nova-actions"><a class="nova-login" href="/login">Log in</a><a class="nova-cta small" href="/signup">Start for free</a></div>
-    </nav>
 
-    <section class="nova-hero" id="product">
-      <div class="nova-space" aria-hidden="true"><span></span><span></span><span></span></div>
-      <div class="nova-copy">
-        <p class="nova-kicker"><i></i> THE INTELLIGENT STUDENT OS</p>
-        <h1>Own your<br><em>semester.</em></h1>
-        <p class="nova-lead">One intelligent command centre<br>for everything university.</p>
-        <div class="nova-buttons"><a class="nova-cta" href="/signup">Start for free <span>→</span></a><a class="nova-outline" href="#features">Explore the system</a></div>
-        <div class="nova-benefits">
-          <div><i>✦</i><p><b>AI Copilot</b><span>Plan, write, and solve smarter.</span></p></div>
-          <div><i>□</i><p><b>All-in-one</b><span>Timetable, assignments, courses.</span></p></div>
-          <div><i>↗</i><p><b>Stay on track</b><span>Progress and smart nudges.</span></p></div>
+<div id="wash" aria-hidden="true"></div>
+<canvas id="gl" aria-hidden="true"></canvas>
+<div id="glfallback" aria-hidden="true"></div>
+<div id="grain" aria-hidden="true"></div>
+
+<div class="content">
+  <nav id="nav"><div class="shell nav-in">
+    <div class="brand"><i></i>Nexora</div>
+    <div class="nav-l"><a href="#sync">Sync</a><a href="#grades">Grades</a><a href="#study">Study</a></div>
+    {% if current_user.is_authenticated %}
+      <a class="btn quiet" href="{{ url_for('home') }}">Open Nexora</a>
+    {% else %}
+      <div class="nav-auth">
+        <a href="{{ url_for('login') }}">Log in</a>
+        <a class="btn quiet" href="{{ url_for('signup') }}">Start free</a>
+      </div>
+    {% endif %}
+  </div></nav>
+
+  <section class="hero"><div class="shell"><div class="hero-copy">
+    <p class="eyebrow rv">The intelligent student OS</p>
+    <h1 class="rv">Your semester, <em>solved</em> before it starts.</h1>
+    <p class="lede rv">Six tabs, a syllabus nobody reads twice, deadlines you are already behind on. Nexora pulls the whole mess out of Brightspace, reads the rules that decide your grade, and turns your lectures into something you can study.</p>
+    <div class="acts rv">
+      {% if current_user.is_authenticated %}
+        <a class="btn" href="{{ url_for('home') }}">Open your dashboard</a>
+      {% else %}
+        <a class="btn" href="{{ url_for('signup') }}">Start free</a>
+      {% endif %}
+      <a class="btn quiet" href="#grades">See it read an outline</a>
+    </div>
+    <p class="microcopy rv">Free while you study. No card.</p>
+  </div></div></section>
+
+  <div class="proof"><div class="shell proof-in">
+    <div class="stat rv"><b>6</b><span>course pages, one workspace</span></div>
+    <div class="stat rv"><b>4</b><span>AI passes per outline</span></div>
+    <div class="stat rv"><b>12/12</b><span>grading patterns handled</span></div>
+    <div class="stat rv"><b>&lt;60s</b><span>from upload to your real grade</span></div>
+  </div></div>
+
+  <section class="band" id="sync"><div class="shell">
+    <div class="sec-head">
+      <p class="num rv">01 — Sync</p>
+      <h2 class="rv">Six tabs become <em>one</em> timeline.</h2>
+      <p class="rv">The extension reads every course you are enrolled in, then keeps deadlines, announcements and lecture files current without you opening Brightspace again.</p>
+    </div>
+    <div class="panel rv">
+      <div class="panel-head"><span><span class="dot"></span>Auto-sync · 8 minutes ago</span><span>4 courses</span></div>
+      <div class="syncgrid">
+        <div class="tabs">
+          <div class="tab"><i></i>SYSC 1006 — Foundations<small>Brightspace</small></div>
+          <div class="tab"><i></i>MATH 1104 — Linear Algebra<small>Brightspace</small></div>
+          <div class="tab"><i></i>ECOR 1042 — Design<small>Brightspace</small></div>
+          <div class="tab"><i></i>PSYC 1001 — Intro Psych<small>Brightspace</small></div>
+        </div>
+        <div class="arrowcell" aria-hidden="true">&rarr;</div>
+        <div class="feed">
+          <div class="feeditem"><span class="when">Today</span>
+            <span class="what">Lab 7 report<small>SYSC 1006</small></span><span class="pill due">Due 6pm</span></div>
+          <div class="feeditem"><span class="when">Thu</span>
+            <span class="what">Quiz 4 — Matrices<small>MATH 1104</small></span><span class="pill soon">3 days</span></div>
+          <div class="feeditem"><span class="when">Oct 18</span>
+            <span class="what">Midterm<small>SYSC 1006</small></span><span class="pill">2 weeks</span></div>
+          <div class="feeditem"><span class="when">Oct 21</span>
+            <span class="what">Design brief<small>ECOR 1042</small></span><span class="pill">3 weeks</span></div>
         </div>
       </div>
+    </div>
+  </div></section>
 
-      <div class="nova-world" id="novaWorld" aria-label="Animated semester command centre preview">
-        <div class="nova-portal" aria-hidden="true">
-          <i></i><i></i><i></i>
-          <span class="portal-depth"></span><span class="portal-ribbon ribbon-a"></span><span class="portal-ribbon ribbon-b"></span><span class="portal-ribbon ribbon-c"></span>
-          <span class="portal-filaments"></span><span class="portal-sparks"></span><span class="portal-comet comet-a"></span><span class="portal-comet comet-b"></span>
+  <section class="band" id="grades"><div class="shell">
+    <div class="sec-head">
+      <p class="num rv">02 — Grades</p>
+      <h2 class="rv">It reads the paragraph that <em>decides</em> your grade.</h2>
+      <p class="rv">Best ten of twelve labs. A final you must reach 50% on whatever your total says. A second scheme that only opens above C-. Every calculator ignores these. Nexora extracts them and does the arithmetic properly.</p>
+    </div>
+    <div class="panel rv">
+      <div class="panel-head"><span>SYSC 1006 · outline.pdf</span><span>Confidence 100%</span></div>
+      <div class="xform">
+        <div>
+          <div class="src">To pass the course, students must pass the final examination (<mark>at least 50%</mark>), and achieve <mark>at least 4/10 on the lab component</mark>.
+
+If the letter grade under Scheme 1 is <mark>C- or higher</mark>, a second mark is calculated. <mark>The final grade is the higher of the two.</mark>
+
+Assignments (<mark>best 2 of 3</mark>) · Labs (<mark>best 10 of 12</mark>) · Bonus: Participation <mark>4%</mark></div>
         </div>
-        <img class="nova-cap nova-float" src="{{ url_for('static', filename='images/hero-cap-layer-v3.png') }}" alt="" aria-hidden="true">
-        <img class="nova-books nova-float" src="{{ url_for('static', filename='images/hero-books-layer-v3.png') }}" alt="" aria-hidden="true">
-        <div class="nova-orbit orbit-one" aria-hidden="true"><span>CS</span></div>
-        <div class="nova-orbit orbit-two" aria-hidden="true"><span>∑</span></div>
-        <div class="nova-orbit orbit-three" aria-hidden="true"><span>DNA</span></div>
-        <div class="nova-float-card nova-deadline" aria-hidden="true"><i></i><p><small>NEXT DEADLINE</small><b>Data Structures</b><span>Binary Trees · Tomorrow</span></p><em>82%</em></div>
-        <div class="nova-float-card nova-focus" aria-hidden="true"><span>✦</span><p><small>AI FOCUS</small><b>Study plan ready</b></p></div>
-        <div class="nova-dashboard">
-          <aside><div class="mini-logo">◒</div><button class="on">⌂</button><button>□</button><button>▦</button><button>✦</button><button>⚙</button></aside>
-          <section class="dash-content">
-            <header><div><h2>Welcome back, Alex <span>👋</span></h2><p>Here’s what’s happening this week.</p></div><label>⌕&nbsp; Search anything...</label><i></i></header>
-            <div class="dash-stats"><article><b>2</b><span>Classes today</span><i>□</i></article><article><b>3</b><span>Assignments due</span><i>▦</i></article><article class="progress"><b>82%</b><span>Course progress</span><svg viewBox="0 0 100 34"><path d="M2 29 C18 27 19 18 34 20 S53 12 62 16 S79 2 98 4"/></svg></article></div>
-            <div class="dash-grid">
-              <article class="schedule"><h3>Timetable <small>Today⌄</small></h3><p><time>09:00</time><span><b>Data Structures</b><small>CS101 Lecture</small></span><em>Join</em></p><p><time>11:00</time><span><b>Design Thinking</b><small>IN204 Tutorial</small></span><em>Join</em></p><p><time>14:00</time><span><b>Linear Algebra</b><small>MA203 Lecture</small></span><em>Join</em></p></article>
-              <article class="core">
-                <div class="core-orb" aria-hidden="true">
-                  <span class="neural-web"></span><span class="neural-ring ring-a"></span><span class="neural-ring ring-b"></span>
-                  <i class="node n1"></i><i class="node n2"></i><i class="node n3"></i><i class="node n4"></i><i class="node n5"></i><i class="node n6"></i><i class="node n7"></i><i class="node n8"></i><strong>✦</strong>
-                </div>
-                <b>AI Copilot</b><span>Ask anything. Get clarity.</span><button>Open Copilot</button>
-              </article>
-              <article class="assign"><h3>Assignments <small>View all</small></h3><p><i class="red"></i><span><b>Data Structures</b><small>Binary Trees</small></span><em>1 day</em></p><p><i class="orange"></i><span><b>Design Thinking</b><small>Empathy Report</small></span><em>3 days</em></p><p><i></i><span><b>Linear Algebra</b><small>Problem Set 4</small></span><em>5 days</em></p></article>
-            </div>
-            <div class="course-row"><h3>Courses</h3><div><b>Data Structures</b><span><i style="--w:75%"></i></span><small>75%</small></div><div><b>Design Thinking</b><span><i style="--w:60%"></i></span><small>60%</small></div><div><b>Linear Algebra</b><span><i style="--w:85%"></i></span><small>85%</small></div></div>
-          </section>
+        <div>
+          <div class="wrow"><span class="k">Assignments<small>best 2 of 3 · min 4/10</small></span><span class="mono">10%</span>
+            <span class="bar" style="--w:10%"><i></i></span></div>
+          <div class="wrow"><span class="k">Labs<small>best 10 of 12 · min 4/10</small></span><span class="mono">10%</span>
+            <span class="bar" style="--w:10%"><i></i></span></div>
+          <div class="wrow"><span class="k">Midterm</span><span class="mono">20%</span>
+            <span class="bar" style="--w:20%"><i></i></span></div>
+          <div class="wrow"><span class="k">Final exam<small>must reach 50%</small></span><span class="mono">60%</span>
+            <span class="bar" style="--w:60%"><i></i></span></div>
+          <div class="wrow"><span class="k">Participation<small>bonus, added on top</small></span><span class="mono">+4%</span>
+            <span class="bar bonus" style="--w:4%"><i></i></span></div>
+          <div class="wtotal"><span class="num" style="margin:0">Base weight</span>
+            <b>100<em>+4 achievable</em></b></div>
         </div>
-        <div class="nova-platform" aria-hidden="true"></div>
-        <div class="nova-platform nova-platform-two" aria-hidden="true"></div>
       </div>
-    </section>
+    </div>
+  </div></section>
 
-    <section class="nova-feature-strip" id="features">
-      <div><h2>Everything you need.<br><em>Powered by AI.</em></h2></div>
-      <article><i>✦</i><p><b>AI Copilot</b><span>Your 24/7 academic partner.</span></p></article>
-      <article><i>□</i><p><b>Smart Planner</b><span>Optimize your time automatically.</span></p></article>
-      <article><i>▦</i><p><b>Resources</b><span>Notes, readings, videos—organized.</span></p></article>
-      <article><i>↗</i><p><b>Analytics</b><span>Insight that drives results.</span></p></article>
-    </section>
-  </main>
-  <script>
-    (() => {
-      const world = document.getElementById('novaWorld');
-      if (!world || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-      let tx=0,ty=0,x=0,y=0;
-      addEventListener('pointermove',e=>{tx=(e.clientX/innerWidth-.5)*2;ty=(e.clientY/innerHeight-.5)*2},{passive:true});
-      const tick=()=>{x+=(tx-x)*.045;y+=(ty-y)*.045;world.style.setProperty('--mx',`${x*13}px`);world.style.setProperty('--my',`${y*9}px`);requestAnimationFrame(tick)};tick();
-    })();
-  </script>
+  <section class="band" id="study"><div class="shell">
+    <div class="sec-head">
+      <p class="num rv">03 — Study</p>
+      <h2 class="rv">Your lectures, turned into <em>practice</em>.</h2>
+      <p class="rv">Point at any deck you have synced. Everything below was written from it, and every card carries the slide it came from, so you can check it rather than trust it.</p>
+    </div>
+    <div class="arts">
+      <div class="panel art rv">
+        <div class="kind">Flashcard</div>
+        <h3>What is a binary search tree?</h3>
+        <p>An ordered tree where every left child is smaller than its parent and every right child is larger.</p>
+        <div class="cite">SYSC 1006 · Lecture 07 · Slide 14</div>
+      </div>
+      <div class="panel art rv">
+        <div class="kind">Quiz</div>
+        <h3>Which traversal visits the left subtree first?</h3>
+        <div class="opt"><b>A</b>Pre-order</div>
+        <div class="opt right"><b>B</b>In-order</div>
+        <div class="opt"><b>C</b>Post-order</div>
+        <div class="cite">Answer explained · Slide 22</div>
+      </div>
+      <div class="panel art rv">
+        <div class="kind">Summary</div>
+        <h3>Tree traversals</h3>
+        <p>Three depth-first orders differ only in when the node is visited relative to its children. Level-order is breadth-first and needs a queue.</p>
+        <div class="cite">4 key concepts · Slides 11–24</div>
+      </div>
+    </div>
+  </div></section>
+
+  <section class="close"><div class="shell"><div class="hero-copy">
+    <p class="num rv">04 — In order</p>
+    <h2 class="rv">Every course <em>in order</em>, in week one.</h2>
+    <p class="lede rv">The mess you started with, stacked and sorted — so you know where you stand now, not in April when the arithmetic finally catches up with you.</p>
+    <div class="acts rv">
+      {% if current_user.is_authenticated %}
+        <a class="btn" href="{{ url_for('home') }}">Open your dashboard</a>
+      {% else %}
+        <a class="btn" href="{{ url_for('signup') }}">Start free</a>
+        <a class="btn quiet" href="{{ url_for('login') }}">Log in</a>
+      {% endif %}
+    </div>
+  </div></div></section>
+
+  <footer><div class="shell foot-in">
+    <span>Nexora — the intelligent student OS</span>
+    <span>
+      {%- if current_user.is_authenticated -%}
+        <a href="{{ url_for('home') }}">Dashboard</a> · <a href="{{ url_for('logout') }}">Log out</a>
+      {%- else -%}
+        <a href="{{ url_for('login') }}">Log in</a> · <a href="{{ url_for('signup') }}">Start free</a>
+      {%- endif -%}
+    </span>
+  </div></footer>
+</div>
+
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const io = new IntersectionObserver((es) => {
+  es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+}, { threshold: .14, rootMargin: '0px 0px -6% 0px' });
+document.querySelectorAll('.rv').forEach((el, i) => {
+  el.style.transitionDelay = Math.min(i % 6, 5) * 70 + 'ms';
+  io.observe(el);
+});
+
+const nav = document.getElementById('nav');
+addEventListener('scroll', () => nav.classList.toggle('stuck', scrollY > 40), { passive: true });
+
+const canvas = document.getElementById('gl');
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+let renderer = null;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
+} catch (err) {
+  console.warn('WebGL unavailable:', err);
+  canvas.style.display = 'none';
+  document.getElementById('glfallback').style.display = 'block';
+}
+
+if (renderer) {
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.24;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(42, 1, .1, 100);
+  camera.position.set(0, 0, 7.4);
+  scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), .04).texture;
+
+  const mkCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+  const toTex = c => { const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; };
+
+  /* ---------------- hero: loose course material ---------------- */
+  const TW = 420, TH = 556;
+  function sheet(draw) {
+    const c = mkCanvas(TW, TH), g = c.getContext('2d');
+    g.fillStyle = '#F7F3EA'; g.fillRect(0, 0, TW, TH); g.textBaseline = 'top';
+    draw(g);
+    return toTex(c);
+  }
+  const head = (g, s) => { g.fillStyle = '#7E7565'; g.font = '600 19px Archivo, sans-serif';
+    g.fillText(s, 34, 28); g.fillStyle = '#C6BEAB'; g.fillRect(34, 60, TW - 68, 3); };
+  const lines = (g, top, n, gap, col) => { g.fillStyle = col || '#BCB4A4';
+    for (let i = 0; i < n; i++) g.fillRect(34, top + i * gap, 200 + ((i * 61) % 150), 8); };
+
+  const SHEETS = [
+    sheet(g => { head(g, 'SYSC 1006 - OUTLINE');
+      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif'; g.fillText('Evaluation', 34, 80);
+      lines(g, 132, 3, 26);
+      g.fillStyle = '#EFC169'; g.fillRect(30, 218, 350, 34);
+      g.fillStyle = '#241F1A'; g.font = '600 17px Archivo, sans-serif'; g.fillText('final exam - minimum 50%', 40, 225);
+      [['Assignments','10'],['Labs','10'],['Midterm','20'],['Final exam','60']].forEach((r,i)=>{
+        const y = 300 + i * 38;
+        g.fillStyle = '#2E2922'; g.font = '600 17px Archivo, sans-serif'; g.fillText(r[0], 36, y);
+        g.fillStyle = '#6E6656'; g.fillText(r[1] + '%', 316, y);
+        g.fillStyle = '#DCD4C1'; g.fillRect(34, y + 27, TW - 68, 2); }); }),
+    sheet(g => { head(g, 'GRADING SCHEME');
+      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif'; g.fillText('Scheme 2', 34, 80);
+      [['Assignments',.10],['Labs',.10],['Midterm',.20],['Final exam',.60],['Participation',.04]].forEach((r,i)=>{
+        const y = 142 + i * 72;
+        g.fillStyle = '#2E2922'; g.font = '600 17px Archivo, sans-serif'; g.fillText(r[0], 34, y);
+        g.fillStyle = '#E2DAC7'; g.fillRect(34, y + 28, 342, 16);
+        g.fillStyle = i === 4 ? '#6E9B6D' : '#D9A441'; g.fillRect(34, y + 28, 342 * r[1], 16); }); }),
+    sheet(g => { head(g, 'FLASHCARD - LEC 07');
+      g.fillStyle = '#241F1A'; g.font = '600 34px Fraunces, Georgia, serif';
+      g.fillText('What is a', 34, 112); g.fillText('binary search', 34, 154); g.fillText('tree?', 34, 196);
+      g.fillStyle = '#C6BEAB'; g.fillRect(34, 264, TW - 68, 3);
+      lines(g, 296, 3, 30, '#B0A897'); }),
+    sheet(g => { head(g, 'TERM CALENDAR');
+      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif'; g.fillText('October', 34, 80);
+      for (let i = 0; i < 35; i++) {
+        const cx = 34 + (i % 7) * 50, cy = 136 + Math.floor(i / 7) * 50;
+        g.fillStyle = '#E6DFCE'; g.fillRect(cx, cy, 44, 44);
+        if (i === 9 || i === 26) { g.fillStyle = '#C4794E'; g.fillRect(cx, cy, 44, 44); }
+        if (i === 17) { g.fillStyle = '#D9A441'; g.fillRect(cx, cy, 44, 44); } } }),
+    sheet(g => { head(g, 'LECTURE NOTES');
+      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif'; g.fillText('Binary trees', 34, 80);
+      for (let i = 0; i < 11; i++) { g.fillStyle = '#E4DCCA'; g.fillRect(34, 148 + i * 34, TW - 68, 2); }
+      lines(g, 134, 11, 34, '#B0A897'); }),
+    sheet(g => { head(g, 'QUIZ - GENERATED');
+      g.fillStyle = '#241F1A'; g.font = '600 24px Fraunces, Georgia, serif';
+      g.fillText('Which traversal', 34, 84); g.fillText('visits left first?', 34, 116);
+      ['Pre-order','In-order','Post-order','Level-order'].forEach((o,i)=>{
+        const y = 190 + i * 68;
+        g.fillStyle = i === 1 ? '#D9A441' : '#E6DFCE'; g.fillRect(34, y, TW - 68, 54);
+        g.fillStyle = i === 1 ? '#241F1A' : '#5E5749';
+        g.font = '600 18px Archivo, sans-serif'; g.fillText(o, 52, y + 17); }); }),
+  ];
+
+  const paper = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#F0EBDE'), metalness: 0, roughness: .58,
+    clearcoat: .26, clearcoatRoughness: .42, envMapIntensity: .95, transparent: true });
+  const paperEdge = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#D6CEBB'), metalness: 0, roughness: .8,
+    envMapIntensity: .6, transparent: true });
+
+  const sheetMats = [paperEdge];
+  const cardFaces = tex => { const p = paper.clone(); p.map = tex; sheetMats.push(p);
+    return [paperEdge, paperEdge, paperEdge, paperEdge, p, p]; };
+
+  const CARDS = 20;
+  const cardGeo = new THREE.BoxGeometry(.94, 1.24, .05);
+  const cards = new THREE.Group();
+  scene.add(cards);
+
+  let seed = 20260830;
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+  const rr = (a, b) => a + (b - a) * rnd();
+
+  /* Sheets used to tumble on all three axes, and a sheet rotated most of a
+     radian passes straight through its neighbour -- which is what made the
+     hero look broken rather than busy. Paper does not do that.
+
+     Two rules fix it. They stay roughly square to the camera and only spin in
+     their own plane, the way a page dropped on a desk does, so no two are ever
+     edge-on to each other. And they are placed on separated depth layers with
+     a rejection test, so no two centres land closer than a card is wide. They
+     still overlap on screen; they just never occupy the same space. */
+  const MIN_GAP = .92, LAYERS = 5;
+  const placed = [];
+  function findSpot(layer) {
+    const z = .75 - layer * .78;
+    for (let tries = 0; tries < 90; tries++) {
+      const x = rr(-1.85, 1.85), y = rr(-1.55, 1.55);
+      let ok = true;
+      for (let i = 0; i < placed.length; i++) {
+        const p = placed[i];
+        if (Math.abs(p.z - z) > .5) continue;          // different layer, cannot touch
+        if (Math.hypot(p.x - x, p.y - y) < MIN_GAP) { ok = false; break; }
+      }
+      if (ok) { placed.push({ x, y, z }); return { x, y, z }; }
+    }
+    const x = rr(-1.85, 1.85), y = rr(-1.55, 1.55);
+    placed.push({ x, y, z });
+    return { x, y, z };
+  }
+
+  const loose = [];
+  for (let i = 0; i < CARDS; i++) {
+    const m = new THREE.Mesh(cardGeo, cardFaces(SHEETS[i % SHEETS.length]));
+    const s = findSpot(i % LAYERS);
+    m.position.set(s.x, s.y, s.z);
+    // Small tilts only; the spin lives in rz, in the plane of the page itself.
+    m.rotation.set(rr(-.20, .20), rr(-.22, .22), rr(-Math.PI, Math.PI));
+    m.scale.setScalar(rr(.95, 1.06));
+    cards.add(m);
+    loose.push({ m, spin: rr(-.11, .11), drift: rr(0, 6.28) });
+  }
+
+  /* ---------------- close: a stack of books ----------------
+     Spines carry the title, because a spine with nothing on it is just a
+     coloured bar. Each book is a slightly different size, and the stack is
+     nudged rather than perfectly squared -- a real pile on a real desk is
+     never flush, and the small misalignment is what makes it read as objects
+     instead of geometry. */
+  // 12.8:1, matching the 1.78 x 0.14 spine face, so the lettering is not stretched.
+  const SPINE_W = 1024, SPINE_H = 80;
+  function spine(bg, ink, title, sub) {
+    const c = mkCanvas(SPINE_W, SPINE_H), g = c.getContext('2d');
+    g.fillStyle = bg; g.fillRect(0, 0, SPINE_W, SPINE_H);
+    g.textBaseline = 'middle';
+    g.fillStyle = ink; g.font = '600 32px Archivo, sans-serif';
+    g.fillText(title, 40, SPINE_H / 2 + 1);
+    const tw = g.measureText(title).width;
+    g.globalAlpha = .58; g.font = '500 25px Archivo, sans-serif';
+    g.fillText(sub, 40 + tw + 22, SPINE_H / 2 + 1);
+    g.globalAlpha = 1;
+    // The one piece of amber on the whole stack -- the same role it plays in the
+    // hero, where it is a mark on the paper rather than the colour of it.
+    g.fillStyle = '#E8A94A';
+    g.fillRect(SPINE_W - 78, SPINE_H / 2 - 10, 20, 20);
+    return toTex(c);
+  }
+
+  /* Two corrections, both about matching the hero rather than looking good on
+     their own.
+
+     Colour: an entirely amber book and an entirely near-black one were the only
+     strongly coloured objects on the site. In the hero, amber never covers a
+     surface -- it appears as small marks on cream paper. So every book is now a
+     shade of that same paper, and amber survives only as the little imprint
+     square on each spine, which is exactly the role it plays in the hero.
+
+     Size: a hero sheet is 0.94 wide and these were 2.72, roughly three times
+     the size, so they read as a different object rather than the same material
+     stacked. They are now 1.62 to 1.82, close enough to a page that the eye
+     accepts them as the same world. */
+  const BOOKS = [
+    { bg: '#E9E2D3', ink: '#2A2723', title: 'THE COURSE OUTLINE', sub: 'SYSC 1006',    w: 1.78, t: .140, d: 1.16 },
+    { bg: '#DED5C1', ink: '#2E2922', title: 'EVERY DEADLINE',     sub: 'One timeline', w: 1.66, t: .126, d: 1.10 },
+    { bg: '#F3EEE2', ink: '#33302A', title: 'GRADING SCHEME',     sub: 'Scheme 1 & 2', w: 1.82, t: .152, d: 1.20 },
+    { bg: '#E4DCCA', ink: '#33302A', title: 'LECTURE NOTES',      sub: 'Binary Trees', w: 1.70, t: .132, d: 1.12 },
+    { bg: '#EFE9DB', ink: '#2E2922', title: 'TERM CALENDAR',      sub: 'Fall',         w: 1.74, t: .146, d: 1.15 },
+    { bg: '#D8CFBB', ink: '#33302A', title: 'LINEAR ALGEBRA',     sub: 'MATH 1104',    w: 1.62, t: .122, d: 1.08 },
+  ];
+
+  const pages = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#EFE7D6'), metalness: 0, roughness: .84,
+    envMapIntensity: .5, transparent: true });
+
+  const books = new THREE.Group();
+  scene.add(books);
+  const bookMats = [pages];
+  const shelf = [];
+  let stackY = -.92;
+
+  BOOKS.forEach((b, i) => {
+    const cover = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(b.bg), metalness: 0, roughness: .46,
+      clearcoat: .55, clearcoatRoughness: .3, envMapIntensity: .9, transparent: true });
+    const spineMat = cover.clone();
+    spineMat.map = spine(b.bg, b.ink, b.title, b.sub);
+    bookMats.push(cover, spineMat);
+
+    // +X -X +Y -Y +Z -Z : ends are pages, top and bottom are covers, front is
+    // the printed spine, back is the fore-edge.
+    const geo = new THREE.BoxGeometry(b.w, b.t, b.d);
+    const mesh = new THREE.Mesh(geo, [pages, pages, cover, cover, spineMat, pages]);
+
+    stackY += b.t / 2;
+    const rest = {
+      x: rr(-.06, .06), y: stackY, z: rr(-.05, .05),
+      ry: rr(-.035, .035), rz: rr(-.012, .012),
+    };
+    stackY += b.t / 2 + .012;                    // a hair of air between books
+
+    mesh.position.set(rest.x, rest.y, rest.z);
+    mesh.rotation.set(0, rest.ry, rest.rz);
+    books.add(mesh);
+    // Where each book comes in from as the close arrives: out to the side and
+    // above, so they land one after another rather than appearing at once.
+    shelf.push({ mesh, rest, from: { x: rr(1.4, 2.6), y: rest.y + rr(1.4, 2.6), z: rr(-.6, .5),
+                                     ry: rr(-.5, .5), rz: rr(-.35, .35) }, delay: i * .085 });
+  });
+  /* The stack builds upward from -0.92 and is about 1.35 tall, so its centre
+     sits near -0.25 in its own space. Lifting the group puts that centre level
+     with the copy instead of hanging below it. */
+  books.position.y = .34;
+
+  const key = new THREE.DirectionalLight('#FFF6E8', 2.9);
+  key.position.set(-4.6, 5.4, 5.0); scene.add(key);
+  const rim = new THREE.PointLight('#E8A94A', 32, 28, 2);
+  rim.position.set(5.2, -1.6, -1.8); scene.add(rim);
+  const fill = new THREE.DirectionalLight('#A8BBDC', .9);
+  fill.position.set(2.6, -3.4, 4.2); scene.add(fill);
+  scene.add(new THREE.AmbientLight('#7A8090', .72));
+
+  /* Formation 0 is the hero, formation 4 is the close, and the three sections
+     between them show nothing at all -- the product panels carry those, and
+     anything floating beside them read as debris however it was arranged. */
+  let marks = [];
+  function computeMarks() {
+    const els = [document.querySelector('.hero'), document.getElementById('sync'),
+                 document.getElementById('grades'), document.getElementById('study'),
+                 document.querySelector('.close')];
+    marks = els.map(el => { const r = el.getBoundingClientRect();
+      return r.top + scrollY + r.height / 2 - innerHeight / 2; });
+  }
+  function formationAt(y) {
+    if (!marks.length) return 0;
+    if (y <= marks[0]) return 0;
+    for (let i = 0; i < marks.length - 1; i++)
+      if (y < marks[i + 1]) return i + (y - marks[i]) / ((marks[i + 1] - marks[i]) || 1);
+    return marks.length - 1;
+  }
+
+  function layout() {
+    const w = innerWidth, h = innerHeight;
+    if (w < 2 || h < 2) return;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    const narrow = w < 1040;
+    camera.position.z = narrow ? 10.4 : 7.4;
+    camera.setViewOffset(w, h, narrow ? 0 : -w * .23, narrow ? h * .06 : 0, w, h);
+    camera.updateProjectionMatrix();
+    computeMarks();
+  }
+  layout();
+  addEventListener('resize', layout);
+
+  let fT = 0, fC = 0;
+  const readScroll = () => { fT = formationAt(scrollY); };
+  addEventListener('scroll', readScroll, { passive: true });
+  readScroll(); fC = fT;
+
+  const ptr = { x: 0, y: 0 }, ptrC = { x: 0, y: 0 };
+  addEventListener('pointermove', ev => {
+    ptr.x = (ev.clientX / innerWidth - .5) * 2;
+    ptr.y = (ev.clientY / innerHeight - .5) * 2; }, { passive: true });
+
+  let awake = !document.hidden;
+  document.addEventListener('visibilitychange', () => { awake = !document.hidden; });
+
+  const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+  const smooth = t => t * t * (3 - 2 * t);
+  const clock = new THREE.Clock();
+  let lastCardA = -1, lastBookA = -1;
+
+  // The hero holds the cards through the first half-formation, then they are
+  // gone until the close brings the books in over the last half-formation.
+  const CARDS_GONE_BY = .55;
+  const BOOKS_IN_FROM = 3.35;
+
+  function frame() {
+    requestAnimationFrame(frame);
+    if (!awake) { clock.getDelta(); return; }
+    const dt = Math.min(clock.getDelta(), .05);
+    const t = clock.elapsedTime;
+
+    fC += (fT - fC) * (1 - Math.pow(.0025, dt));
+    ptrC.x += (ptr.x - ptrC.x) * (1 - Math.pow(.0022, dt));
+    ptrC.y += (ptr.y - ptrC.y) * (1 - Math.pow(.0022, dt));
+    const at = Math.max(0, Math.min(fC, 4));
+
+    /* ---- hero cards ---- */
+    const cardA = at <= CARDS_GONE_BY ? smooth(1 - at / CARDS_GONE_BY) : 0;
+    if (cardA !== lastCardA) {
+      for (let i = 0; i < sheetMats.length; i++) sheetMats[i].opacity = cardA;
+      lastCardA = cardA;
+    }
+    cards.visible = cardA > .02;
+    if (cards.visible) {
+      for (let i = 0; i < loose.length; i++) {
+        const c = loose[i];
+        c.m.position.y += Math.sin(t * .3 + c.drift) * .00035;
+        if (!reduced) c.m.rotation.y += c.spin * dt * .35;
+      }
+      cards.rotation.y = ptrC.x * .13;
+      cards.rotation.x = ptrC.y * .09;
+      cards.position.y = -at * .55;
+    }
+
+    /* ---- closing stack ---- */
+    const bookT = clamp01((at - BOOKS_IN_FROM) / (4 - BOOKS_IN_FROM));
+    const bookA = smooth(bookT);
+    if (bookA !== lastBookA) {
+      for (let i = 0; i < bookMats.length; i++) bookMats[i].opacity = bookA;
+      lastBookA = bookA;
+    }
+    books.visible = bookA > .02;
+    if (books.visible) {
+      for (let i = 0; i < shelf.length; i++) {
+        const b = shelf[i];
+        // Each book lands a little after the one below it.
+        const k = smooth(clamp01((bookT - b.delay) / (1 - .5)));
+        b.mesh.position.set(
+          b.from.x + (b.rest.x - b.from.x) * k,
+          b.from.y + (b.rest.y - b.from.y) * k,
+          b.from.z + (b.rest.z - b.from.z) * k);
+        b.mesh.rotation.set(
+          0,
+          b.from.ry + (b.rest.ry - b.from.ry) * k,
+          b.from.rz + (b.rest.rz - b.from.rz) * k);
+      }
+      books.rotation.y = -.34 + ptrC.x * .11;   // three-quarter view of the spines
+      books.rotation.x = .10 + ptrC.y * .06;    // looking very slightly down on it
+    }
+
+    if (!cards.visible && !books.visible) { renderer.clear(); return; }
+    renderer.render(scene, camera);
+  }
+  frame();
+  document.documentElement.dataset.gl = 'ready';
+}
+</script>
 </body>
 </html>
