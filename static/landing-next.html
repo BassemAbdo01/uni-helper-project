@@ -450,14 +450,44 @@ if (renderer) {
   const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
   const rr = (a, b) => a + (b - a) * rnd();
 
+  /* Sheets used to tumble on all three axes, and a sheet rotated most of a
+     radian passes straight through its neighbour -- which is what made the
+     hero look broken rather than busy. Paper does not do that.
+
+     Two rules fix it. They stay roughly square to the camera and only spin in
+     their own plane, the way a page dropped on a desk does, so no two are ever
+     edge-on to each other. And they are placed on separated depth layers with
+     a rejection test, so no two centres land closer than a card is wide. They
+     still overlap on screen; they just never occupy the same space. */
+  const MIN_GAP = .92, LAYERS = 5;
+  const placed = [];
+  function findSpot(layer) {
+    const z = .75 - layer * .78;
+    for (let tries = 0; tries < 90; tries++) {
+      const x = rr(-1.85, 1.85), y = rr(-1.55, 1.55);
+      let ok = true;
+      for (let i = 0; i < placed.length; i++) {
+        const p = placed[i];
+        if (Math.abs(p.z - z) > .5) continue;          // different layer, cannot touch
+        if (Math.hypot(p.x - x, p.y - y) < MIN_GAP) { ok = false; break; }
+      }
+      if (ok) { placed.push({ x, y, z }); return { x, y, z }; }
+    }
+    const x = rr(-1.85, 1.85), y = rr(-1.55, 1.55);
+    placed.push({ x, y, z });
+    return { x, y, z };
+  }
+
   const loose = [];
   for (let i = 0; i < CARDS; i++) {
     const m = new THREE.Mesh(cardGeo, cardFaces(SHEETS[i % SHEETS.length]));
-    m.position.set(rr(-1.75, 1.75), rr(-1.5, 1.5), rr(-2.0, .8));
-    m.rotation.set(rr(-.6, .6), rr(-.8, .8), rr(-Math.PI, Math.PI));
-    m.scale.setScalar(rr(.94, 1.08));
+    const s = findSpot(i % LAYERS);
+    m.position.set(s.x, s.y, s.z);
+    // Small tilts only; the spin lives in rz, in the plane of the page itself.
+    m.rotation.set(rr(-.20, .20), rr(-.22, .22), rr(-Math.PI, Math.PI));
+    m.scale.setScalar(rr(.95, 1.06));
     cards.add(m);
-    loose.push({ m, spin: rr(-.15, .15), drift: rr(0, 6.28) });
+    loose.push({ m, spin: rr(-.11, .11), drift: rr(0, 6.28) });
   }
 
   /* ---------------- close: a stack of books ----------------
@@ -466,39 +496,45 @@ if (renderer) {
      nudged rather than perfectly squared -- a real pile on a real desk is
      never flush, and the small misalignment is what makes it read as objects
      instead of geometry. */
-  const SPINE_W = 1024, SPINE_H = 104;
+  // 12.8:1, matching the 1.78 x 0.14 spine face, so the lettering is not stretched.
+  const SPINE_W = 1024, SPINE_H = 80;
   function spine(bg, ink, title, sub) {
     const c = mkCanvas(SPINE_W, SPINE_H), g = c.getContext('2d');
     g.fillStyle = bg; g.fillRect(0, 0, SPINE_W, SPINE_H);
-    // a darker foot, the way a printed spine usually carries the imprint
-    g.fillStyle = 'rgba(0,0,0,.13)'; g.fillRect(SPINE_W - 132, 0, 132, SPINE_H);
     g.textBaseline = 'middle';
-    g.fillStyle = ink; g.font = '600 40px Archivo, sans-serif';
-    g.fillText(title, 46, SPINE_H / 2 + 1);
+    g.fillStyle = ink; g.font = '600 32px Archivo, sans-serif';
+    g.fillText(title, 40, SPINE_H / 2 + 1);
     const tw = g.measureText(title).width;
-    g.globalAlpha = .62; g.font = '500 30px Archivo, sans-serif';
-    g.fillText(sub, 46 + tw + 26, SPINE_H / 2 + 1);
+    g.globalAlpha = .58; g.font = '500 25px Archivo, sans-serif';
+    g.fillText(sub, 40 + tw + 22, SPINE_H / 2 + 1);
     g.globalAlpha = 1;
-    g.fillStyle = ink; g.globalAlpha = .5;
-    g.fillRect(SPINE_W - 96, SPINE_H / 2 - 13, 26, 26);
-    g.globalAlpha = 1;
+    // The one piece of amber on the whole stack -- the same role it plays in the
+    // hero, where it is a mark on the paper rather than the colour of it.
+    g.fillStyle = '#E8A94A';
+    g.fillRect(SPINE_W - 78, SPINE_H / 2 - 10, 20, 20);
     return toTex(c);
   }
 
-  /* The first version reached for teal and terracotta, which appear nowhere
-     else on this page -- the whole site is near-black, cream and one amber, so
-     the stack looked borrowed from somewhere else. These are the page's own
-     colours: five shades of the same paper the hero is made of, one amber for
-     the book the product is actually about, and one near-black so the stack has
-     a floor. Sizes are close together and slimmer too, because the hero is slim
-     portrait sheets and the close was chunky landscape slabs. */
+  /* Two corrections, both about matching the hero rather than looking good on
+     their own.
+
+     Colour: an entirely amber book and an entirely near-black one were the only
+     strongly coloured objects on the site. In the hero, amber never covers a
+     surface -- it appears as small marks on cream paper. So every book is now a
+     shade of that same paper, and amber survives only as the little imprint
+     square on each spine, which is exactly the role it plays in the hero.
+
+     Size: a hero sheet is 0.94 wide and these were 2.72, roughly three times
+     the size, so they read as a different object rather than the same material
+     stacked. They are now 1.62 to 1.82, close enough to a page that the eye
+     accepts them as the same world. */
   const BOOKS = [
-    { bg: '#E7E0D0', ink: '#2A2723', title: 'THE COURSE OUTLINE', sub: 'SYSC 1006',    w: 2.72, t: .215, d: 1.74 },
-    { bg: '#2A2723', ink: '#EFE9DC', title: 'EVERY DEADLINE',     sub: 'One timeline', w: 2.60, t: .195, d: 1.68 },
-    { bg: '#E8A94A', ink: '#241F1A', title: 'GRADING SCHEME',     sub: 'Scheme 1 & 2', w: 2.84, t: .245, d: 1.82 },
-    { bg: '#F2EDE1', ink: '#33302A', title: 'LECTURE NOTES',      sub: 'Binary Trees', w: 2.64, t: .200, d: 1.70 },
-    { bg: '#D6CDB9', ink: '#2E2922', title: 'TERM CALENDAR',      sub: 'Fall',         w: 2.78, t: .230, d: 1.78 },
-    { bg: '#EDE7DA', ink: '#33302A', title: 'LINEAR ALGEBRA',     sub: 'MATH 1104',    w: 2.56, t: .190, d: 1.66 },
+    { bg: '#E9E2D3', ink: '#2A2723', title: 'THE COURSE OUTLINE', sub: 'SYSC 1006',    w: 1.78, t: .140, d: 1.16 },
+    { bg: '#DED5C1', ink: '#2E2922', title: 'EVERY DEADLINE',     sub: 'One timeline', w: 1.66, t: .126, d: 1.10 },
+    { bg: '#F3EEE2', ink: '#33302A', title: 'GRADING SCHEME',     sub: 'Scheme 1 & 2', w: 1.82, t: .152, d: 1.20 },
+    { bg: '#E4DCCA', ink: '#33302A', title: 'LECTURE NOTES',      sub: 'Binary Trees', w: 1.70, t: .132, d: 1.12 },
+    { bg: '#EFE9DB', ink: '#2E2922', title: 'TERM CALENDAR',      sub: 'Fall',         w: 1.74, t: .146, d: 1.15 },
+    { bg: '#D8CFBB', ink: '#33302A', title: 'LINEAR ALGEBRA',     sub: 'MATH 1104',    w: 1.62, t: .122, d: 1.08 },
   ];
 
   const pages = new THREE.MeshPhysicalMaterial({
