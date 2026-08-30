@@ -2968,8 +2968,11 @@ def home():
         group["courses"].append(card)
     course_groups=sorted(grouped_courses.values(),key=lambda g:(g["year"],term_rank.get(g["season"].lower(),4)),reverse=True)
 
+    # ?v=next renders the redesigned dashboard against exactly the same data.
+    # Keeping both behind one route means the preview cannot drift from the
+    # live page's variables the way a separate copy would.
     return render_template(
-        "index.html",
+        "index_next.html" if request.args.get("v") == "next" else "index.html",
         groups=groups,
         view=view,
         summary=summary,
