@@ -370,34 +370,32 @@ if (renderer) {
   camera.position.set(0, 0, 7.4);
   scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), .04).texture;
 
-  /* Printed at runtime on a 2D canvas. A card lands about 150px wide on screen,
-     so nothing here is meant to be read -- only recognised. Type runs large,
-     rules are thick, accents are solid. */
+  const mkCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+  const toTex = c => { const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; };
+
+  /* ---------------- hero: loose course material ---------------- */
   const TW = 420, TH = 556;
   function sheet(draw) {
-    const c = document.createElement('canvas'); c.width = TW; c.height = TH;
-    const g = c.getContext('2d');
+    const c = mkCanvas(TW, TH), g = c.getContext('2d');
     g.fillStyle = '#F7F3EA'; g.fillRect(0, 0, TW, TH); g.textBaseline = 'top';
     draw(g);
-    const t = new THREE.CanvasTexture(c);
-    t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
-    return t;
+    return toTex(c);
   }
   const head = (g, s) => { g.fillStyle = '#7E7565'; g.font = '600 19px Archivo, sans-serif';
     g.fillText(s, 34, 28); g.fillStyle = '#C6BEAB'; g.fillRect(34, 60, TW - 68, 3); };
   const lines = (g, top, n, gap, col) => { g.fillStyle = col || '#BCB4A4';
     for (let i = 0; i < n; i++) g.fillRect(34, top + i * gap, 200 + ((i * 61) % 150), 8); };
 
-  const TEXTURES = [
-    sheet(g => { head(g, 'SYSC 1006 — OUTLINE');
+  const SHEETS = [
+    sheet(g => { head(g, 'SYSC 1006 - OUTLINE');
       g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif'; g.fillText('Evaluation', 34, 80);
       lines(g, 132, 3, 26);
       g.fillStyle = '#EFC169'; g.fillRect(30, 218, 350, 34);
-      g.fillStyle = '#241F1A'; g.font = '600 17px Archivo, sans-serif'; g.fillText('final exam — minimum 50%', 40, 225);
-      [['Assignments','10'],['Labs','10'],['Midterm','20'],['Final exam','60']].forEach(([k,v],i)=>{
+      g.fillStyle = '#241F1A'; g.font = '600 17px Archivo, sans-serif'; g.fillText('final exam - minimum 50%', 40, 225);
+      [['Assignments','10'],['Labs','10'],['Midterm','20'],['Final exam','60']].forEach((r,i)=>{
         const y = 300 + i * 38;
-        g.fillStyle = '#2E2922'; g.font = '600 17px Archivo, sans-serif'; g.fillText(k, 36, y);
-        g.fillStyle = '#6E6656'; g.fillText(v + '%', 316, y);
+        g.fillStyle = '#2E2922'; g.font = '600 17px Archivo, sans-serif'; g.fillText(r[0], 36, y);
+        g.fillStyle = '#6E6656'; g.fillText(r[1] + '%', 316, y);
         g.fillStyle = '#DCD4C1'; g.fillRect(34, y + 27, TW - 68, 2); }); }),
     sheet(g => { head(g, 'GRADING SCHEME');
       g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif'; g.fillText('Scheme 2', 34, 80);
@@ -406,7 +404,7 @@ if (renderer) {
         g.fillStyle = '#2E2922'; g.font = '600 17px Archivo, sans-serif'; g.fillText(r[0], 34, y);
         g.fillStyle = '#E2DAC7'; g.fillRect(34, y + 28, 342, 16);
         g.fillStyle = i === 4 ? '#6E9B6D' : '#D9A441'; g.fillRect(34, y + 28, 342 * r[1], 16); }); }),
-    sheet(g => { head(g, 'FLASHCARD — LEC 07');
+    sheet(g => { head(g, 'FLASHCARD - LEC 07');
       g.fillStyle = '#241F1A'; g.font = '600 34px Fraunces, Georgia, serif';
       g.fillText('What is a', 34, 112); g.fillText('binary search', 34, 154); g.fillText('tree?', 34, 196);
       g.fillStyle = '#C6BEAB'; g.fillRect(34, 264, TW - 68, 3);
@@ -417,13 +415,12 @@ if (renderer) {
         const cx = 34 + (i % 7) * 50, cy = 136 + Math.floor(i / 7) * 50;
         g.fillStyle = '#E6DFCE'; g.fillRect(cx, cy, 44, 44);
         if (i === 9 || i === 26) { g.fillStyle = '#C4794E'; g.fillRect(cx, cy, 44, 44); }
-        if (i === 17) { g.fillStyle = '#D9A441'; g.fillRect(cx, cy, 44, 44); } }
-      g.fillStyle = '#7E7565'; g.font = '600 16px Archivo, sans-serif'; g.fillText('Midterm · Oct 18', 34, 408); }),
+        if (i === 17) { g.fillStyle = '#D9A441'; g.fillRect(cx, cy, 44, 44); } } }),
     sheet(g => { head(g, 'LECTURE NOTES');
       g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif'; g.fillText('Binary trees', 34, 80);
       for (let i = 0; i < 11; i++) { g.fillStyle = '#E4DCCA'; g.fillRect(34, 148 + i * 34, TW - 68, 2); }
       lines(g, 134, 11, 34, '#B0A897'); }),
-    sheet(g => { head(g, 'QUIZ — GENERATED');
+    sheet(g => { head(g, 'QUIZ - GENERATED');
       g.fillStyle = '#241F1A'; g.font = '600 24px Fraunces, Georgia, serif';
       g.fillText('Which traversal', 34, 84); g.fillText('visits left first?', 34, 116);
       ['Pre-order','In-order','Post-order','Level-order'].forEach((o,i)=>{
@@ -435,128 +432,108 @@ if (renderer) {
 
   const paper = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color('#F0EBDE'), metalness: 0, roughness: .58,
-    clearcoat: .26, clearcoatRoughness: .42, envMapIntensity: .95 });
-  const edge = new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color('#D6CEBB'), metalness: 0, roughness: .8, envMapIntensity: .6 });
-  // Opaque on purpose. These were transparent while the scene faded out through
-  // the middle sections; with twenty cards overlapping in a stack, transparent
-  // sorting shows through itself at the edges, and nothing fades any more.
-  const faces = tex => {
-    const p = paper.clone(); p.map = tex;
-    return [edge, edge, edge, edge, p, p];
-  };
+    clearcoat: .26, clearcoatRoughness: .42, envMapIntensity: .95, transparent: true });
+  const paperEdge = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#D6CEBB'), metalness: 0, roughness: .8,
+    envMapIntensity: .6, transparent: true });
 
-  const N = 20;
+  const sheetMats = [paperEdge];
+  const cardFaces = tex => { const p = paper.clone(); p.map = tex; sheetMats.push(p);
+    return [paperEdge, paperEdge, paperEdge, paperEdge, p, p]; };
+
+  const CARDS = 20;
   const cardGeo = new THREE.BoxGeometry(.94, 1.24, .05);
-  const group = new THREE.Group();
-  scene.add(group);
+  const cards = new THREE.Group();
+  scene.add(cards);
 
   let seed = 20260830;
   const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
   const rr = (a, b) => a + (b - a) * rnd();
-  const pose = (x, y, z, rx, ry, rz, s) => ({
-    p: new THREE.Vector3(x, y, z),
-    q: new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),
-    s: s === undefined ? 1 : s });
 
-  const items = [];
-  for (let i = 0; i < N; i++) {
-    const mesh = new THREE.Mesh(cardGeo, faces(TEXTURES[i % TEXTURES.length]));
-    group.add(mesh);
-    items.push({ mesh, stagger: rnd() * .28, spin: rr(-.15, .15), forms: [] });
+  const loose = [];
+  for (let i = 0; i < CARDS; i++) {
+    const m = new THREE.Mesh(cardGeo, cardFaces(SHEETS[i % SHEETS.length]));
+    m.position.set(rr(-1.75, 1.75), rr(-1.5, 1.5), rr(-2.0, .8));
+    m.rotation.set(rr(-.6, .6), rr(-.8, .8), rr(-Math.PI, Math.PI));
+    m.scale.setScalar(rr(.94, 1.08));
+    cards.add(m);
+    loose.push({ m, spin: rr(-.15, .15), drift: rr(0, 6.28) });
   }
 
-  /* Formation 0 owns the hero. In the three middle sections the scene steps
-     back so the real product panels carry the page -- one animated object
-     cannot hold four screens on its own, and trying made every section below
-     the fold look like an empty room. Formation 4 brings it forward again for
-     the close. */
-  items.forEach(it => it.forms[0] = pose(
-    rr(-1.75, 1.75), rr(-1.5, 1.5), rr(-2.0, .8),
-    rr(-.6, .6), rr(-.8, .8), rr(-Math.PI, Math.PI), rr(.94, 1.08)));
-
-  /* 01 · gathering. Still loose, but every card now leans the same way instead
-     of tumbling freely -- the first sign of a hand tidying a pile. */
-  {
-    const cols = 5;
-    items.forEach((it, i) => {
-      const c = i % cols, r = Math.floor(i / cols);
-      it.forms[1] = pose(
-        (c - 2) * .78 + rr(-.16, .16),
-        (1.5 - r) * .92 - .35 + rr(-.14, .14),
-        rr(-.35, .1),
-        rr(-.16, .16), rr(-.20, .20), rr(-.22, .22), .62);
-    });
+  /* ---------------- close: a stack of books ----------------
+     Spines carry the title, because a spine with nothing on it is just a
+     coloured bar. Each book is a slightly different size, and the stack is
+     nudged rather than perfectly squared -- a real pile on a real desk is
+     never flush, and the small misalignment is what makes it read as objects
+     instead of geometry. */
+  const SPINE_W = 1024, SPINE_H = 104;
+  function spine(bg, ink, title, sub) {
+    const c = mkCanvas(SPINE_W, SPINE_H), g = c.getContext('2d');
+    g.fillStyle = bg; g.fillRect(0, 0, SPINE_W, SPINE_H);
+    // a darker foot, the way a printed spine usually carries the imprint
+    g.fillStyle = 'rgba(0,0,0,.13)'; g.fillRect(SPINE_W - 132, 0, 132, SPINE_H);
+    g.textBaseline = 'middle';
+    g.fillStyle = ink; g.font = '600 40px Archivo, sans-serif';
+    g.fillText(title, 46, SPINE_H / 2 + 1);
+    const tw = g.measureText(title).width;
+    g.globalAlpha = .62; g.font = '500 30px Archivo, sans-serif';
+    g.fillText(sub, 46 + tw + 26, SPINE_H / 2 + 1);
+    g.globalAlpha = 1;
+    g.fillStyle = ink; g.globalAlpha = .5;
+    g.fillRect(SPINE_W - 96, SPINE_H / 2 - 13, 26, 26);
+    g.globalAlpha = 1;
+    return toTex(c);
   }
 
-  /* 02 · sorted into groups. Four clusters, sized 2 / 2 / 4 / 12 -- the same
-     10 / 10 / 20 / 60 the section is about. Order you can count. */
-  {
-    const bands = [2, 2, 4, 12];
-    const originX = [-1.55, -.52, .52, 1.62];
-    let ci = 0;
-    bands.forEach((count, b) => {
-      for (let k = 0; k < count; k++) {
-        items[ci++].forms[2] = pose(
-          originX[b] + rr(-.02, .02),
-          -.95 + k * .085,
-          rr(-.02, .02),
-          -1.02, rr(-.03, .03), rr(-.02, .02), .60);
-      }
-    });
-  }
-
-  /* 03 · a true grid. Even gaps, square to the camera, no rotation left in it.
-     This is the frame where the eye should read "organised" without being told,
-     which a fan or a leaning pile never does -- right angles do. */
-  {
-    const cols = 5, gx = .76, gy = 1.0;
-    items.forEach((it, i) => {
-      const c = i % cols, r = Math.floor(i / cols);
-      it.forms[3] = pose((c - 2) * gx, (1.5 - r) * gy - .35, 0, 0, 0, 0, .60);
-    });
-  }
-
-  /* 04 · filed. A stack seen almost edge-on showed nothing but twenty edges, and
-     a fan reads as casual -- a hand of cards, not a filed record. What the eye
-     actually reads as organised is a shared axis and a right angle, so this is
-     one squared stack turned three-quarters: the top card's printed face is
-     fully visible, and every card beneath it lines up exactly under it. Nothing
-     out of place, and you can still see what the papers are. */
-  {
-    const TILT = -.62;        // enough to show the top face, not so much it lies flat
-    const TURN = .34;         // three-quarter view reads more solid than dead-on
-    let y = -.62, z = 0;
-    items.forEach((it) => {
-      it.forms[4] = pose(0, y, z, TILT, TURN, 0, 1.02);
-      y += .062;              // rises
-      z -= .036;              // and steps back, so the stack has depth
-    });
-  }
-
-  /* The product panels are full width, so there is no empty column left for the
-     scene to live in through the middle of the page. Shrinking it and sliding
-     it aside only jammed it against the panel edges, where it read as debris
-     rather than design. It now belongs to the hero and the close, and fades out
-     in between -- the panels carry those sections alone.
-
-     Fading them out was the wrong fix. They looked wrong in the middle
-     sections because they were half-scale and jammed against the panel edges,
-     not because they were visible -- and hiding them threw away the one thing
-     the scroll is for, which is watching the papers get organised.
-
-     Each section leaves the right half above its panel empty, beside the
-     heading. That is where the scene goes, at full opacity, so the progression
-     from loose to grouped to gridded to filed is actually legible.
-
-     Scale now lives in the poses themselves, so this only has to place them. */
-  const OFFSET = [
-    [0, 0, 0],                    // hero: centre stage
-    [1.15, 1.34, -.55],           // 01: up and right, clear of heading and panel
-    [1.15, 1.34, -.55],           // 02
-    [1.15, 1.34, -.55],           // 03
-    [0, 0, 0],                    // close: centre stage again
+  // Warm and cool alternate so the stack has rhythm rather than a gradient.
+  const BOOKS = [
+    { bg: '#EDE7DA', ink: '#241F1A', title: 'THE COURSE OUTLINE', sub: 'SYSC 1006', w: 3.05, t: .30, d: 1.95 },
+    { bg: '#3F6F68', ink: '#F2EFE8', title: 'LINEAR ALGEBRA', sub: 'MATH 1104', w: 2.88, t: .26, d: 1.86 },
+    { bg: '#E8A94A', ink: '#241F1A', title: 'GRADING SCHEME', sub: 'Scheme 1 & 2', w: 3.14, t: .34, d: 2.02 },
+    { bg: '#F4F0E6', ink: '#2A2723', title: 'LECTURE NOTES', sub: 'Binary Trees', w: 2.80, t: .24, d: 1.80 },
+    { bg: '#C4794E', ink: '#FBF7EF', title: 'TERM CALENDAR', sub: 'Fall', w: 3.20, t: .32, d: 2.08 },
+    { bg: '#2A2723', ink: '#EFE9DC', title: 'EVERY DEADLINE', sub: 'One timeline', w: 2.96, t: .28, d: 1.92 },
   ];
+
+  const pages = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#EFE7D6'), metalness: 0, roughness: .84,
+    envMapIntensity: .5, transparent: true });
+
+  const books = new THREE.Group();
+  scene.add(books);
+  const bookMats = [pages];
+  const shelf = [];
+  let stackY = -.92;
+
+  BOOKS.forEach((b, i) => {
+    const cover = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(b.bg), metalness: 0, roughness: .46,
+      clearcoat: .55, clearcoatRoughness: .3, envMapIntensity: .9, transparent: true });
+    const spineMat = cover.clone();
+    spineMat.map = spine(b.bg, b.ink, b.title, b.sub);
+    bookMats.push(cover, spineMat);
+
+    // +X -X +Y -Y +Z -Z : ends are pages, top and bottom are covers, front is
+    // the printed spine, back is the fore-edge.
+    const geo = new THREE.BoxGeometry(b.w, b.t, b.d);
+    const mesh = new THREE.Mesh(geo, [pages, pages, cover, cover, spineMat, pages]);
+
+    stackY += b.t / 2;
+    const rest = {
+      x: rr(-.06, .06), y: stackY, z: rr(-.05, .05),
+      ry: rr(-.035, .035), rz: rr(-.012, .012),
+    };
+    stackY += b.t / 2 + .012;                    // a hair of air between books
+
+    mesh.position.set(rest.x, rest.y, rest.z);
+    mesh.rotation.set(0, rest.ry, rest.rz);
+    books.add(mesh);
+    // Where each book comes in from as the close arrives: out to the side and
+    // above, so they land one after another rather than appearing at once.
+    shelf.push({ mesh, rest, from: { x: rr(1.4, 2.6), y: rest.y + rr(1.4, 2.6), z: rr(-.6, .5),
+                                     ry: rr(-.5, .5), rz: rr(-.35, .35) }, delay: i * .085 });
+  });
+  books.position.y = -.15;
 
   const key = new THREE.DirectionalLight('#FFF6E8', 2.9);
   key.position.set(-4.6, 5.4, 5.0); scene.add(key);
@@ -566,6 +543,9 @@ if (renderer) {
   fill.position.set(2.6, -3.4, 4.2); scene.add(fill);
   scene.add(new THREE.AmbientLight('#7A8090', .72));
 
+  /* Formation 0 is the hero, formation 4 is the close, and the three sections
+     between them show nothing at all -- the product panels carry those, and
+     anything floating beside them read as debris however it was arranged. */
   let marks = [];
   function computeMarks() {
     const els = [document.querySelector('.hero'), document.getElementById('sync'),
@@ -588,7 +568,7 @@ if (renderer) {
     renderer.setSize(w, h);
     camera.aspect = w / h;
     const narrow = w < 1040;
-    camera.position.z = narrow ? 10 : 7.4;
+    camera.position.z = narrow ? 10.4 : 7.4;
     camera.setViewOffset(w, h, narrow ? 0 : -w * .23, narrow ? h * .06 : 0, w, h);
     camera.updateProjectionMatrix();
     computeMarks();
@@ -609,10 +589,15 @@ if (renderer) {
   let awake = !document.hidden;
   document.addEventListener('visibilitychange', () => { awake = !document.hidden; });
 
-  const easeInOut = t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
-  const tmpP = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
+  const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+  const smooth = t => t * t * (3 - 2 * t);
   const clock = new THREE.Clock();
-  const LAST = 4;
+  let lastCardA = -1, lastBookA = -1;
+
+  // The hero holds the cards through the first half-formation, then they are
+  // gone until the close brings the books in over the last half-formation.
+  const CARDS_GONE_BY = .55;
+  const BOOKS_IN_FROM = 3.35;
 
   function frame() {
     requestAnimationFrame(frame);
@@ -623,34 +608,53 @@ if (renderer) {
     fC += (fT - fC) * (1 - Math.pow(.0025, dt));
     ptrC.x += (ptr.x - ptrC.x) * (1 - Math.pow(.0022, dt));
     ptrC.y += (ptr.y - ptrC.y) * (1 - Math.pow(.0022, dt));
+    const at = Math.max(0, Math.min(fC, 4));
 
-    const at = Math.max(0, Math.min(fC, LAST - .0001));
-    const i0 = Math.floor(at), i1 = Math.min(i0 + 1, LAST), local = at - i0;
-
-    for (let i = 0; i < N; i++) {
-      const it = items[i];
-      const k = easeInOut(Math.min(Math.max((local - it.stagger) / (1 - .28), 0), 1));
-      const A = it.forms[i0], B = it.forms[i1];
-      tmpP.copy(A.p).lerp(B.p, k);
-      tmpQ.copy(A.q).slerp(B.q, k);
-      const loose = (1 - k) * (i0 === 0 ? 1 : 0);
-      it.mesh.position.set(
-        tmpP.x + Math.sin(t * .28 + i) * .05 * loose,
-        tmpP.y + Math.cos(t * .23 + i * 1.7) * .05 * loose,
-        tmpP.z);
-      it.mesh.quaternion.copy(tmpQ);
-      if (loose > .001 && !reduced) it.mesh.rotateY(t * it.spin * loose);
-      it.mesh.scale.setScalar(A.s + (B.s - A.s) * k);
+    /* ---- hero cards ---- */
+    const cardA = at <= CARDS_GONE_BY ? smooth(1 - at / CARDS_GONE_BY) : 0;
+    if (cardA !== lastCardA) {
+      for (let i = 0; i < sheetMats.length; i++) sheetMats[i].opacity = cardA;
+      lastCardA = cardA;
+    }
+    cards.visible = cardA > .02;
+    if (cards.visible) {
+      for (let i = 0; i < loose.length; i++) {
+        const c = loose[i];
+        c.m.position.y += Math.sin(t * .3 + c.drift) * .00035;
+        if (!reduced) c.m.rotation.y += c.spin * dt * .35;
+      }
+      cards.rotation.y = ptrC.x * .13;
+      cards.rotation.x = ptrC.y * .09;
+      cards.position.y = -at * .55;
     }
 
-    const A0 = OFFSET[i0], A1 = OFFSET[i1];
-    group.position.set(
-      A0[0] + (A1[0] - A0[0]) * local,
-      A0[1] + (A1[1] - A0[1]) * local,
-      A0[2] + (A1[2] - A0[2]) * local);
-    group.rotation.y = ptrC.x * .13;
-    group.rotation.x = ptrC.y * .09;
+    /* ---- closing stack ---- */
+    const bookT = clamp01((at - BOOKS_IN_FROM) / (4 - BOOKS_IN_FROM));
+    const bookA = smooth(bookT);
+    if (bookA !== lastBookA) {
+      for (let i = 0; i < bookMats.length; i++) bookMats[i].opacity = bookA;
+      lastBookA = bookA;
+    }
+    books.visible = bookA > .02;
+    if (books.visible) {
+      for (let i = 0; i < shelf.length; i++) {
+        const b = shelf[i];
+        // Each book lands a little after the one below it.
+        const k = smooth(clamp01((bookT - b.delay) / (1 - .5)));
+        b.mesh.position.set(
+          b.from.x + (b.rest.x - b.from.x) * k,
+          b.from.y + (b.rest.y - b.from.y) * k,
+          b.from.z + (b.rest.z - b.from.z) * k);
+        b.mesh.rotation.set(
+          0,
+          b.from.ry + (b.rest.ry - b.from.ry) * k,
+          b.from.rz + (b.rest.rz - b.from.rz) * k);
+      }
+      books.rotation.y = -.34 + ptrC.x * .11;   // three-quarter view of the spines
+      books.rotation.x = .10 + ptrC.y * .06;    // looking very slightly down on it
+    }
 
+    if (!cards.visible && !books.visible) { renderer.clear(); return; }
     renderer.render(scene, camera);
   }
   frame();
