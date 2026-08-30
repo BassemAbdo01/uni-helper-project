@@ -1,54 +1,34 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Sign up - Uni Helper</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
+{% extends "auth_base.html" %}
+{% block title %}Create your account — Nexora{% endblock %}
 
-<body>
-  <main class="auth-page">
-    <section class="auth-card">
-      <a class="auth-back" href="/">← Back to home</a>
+{% block body %}
+  <p class="eyebrow">Free while you study</p>
+  <h1>Start your <em>semester</em> in order.</h1>
+  <p class="sub">Sync Brightspace, read your outline, know your real grade. No card.</p>
 
-      <div class="landing-badge">Start free</div>
+  {% if error %}<div class="note bad">{{ error }}</div>{% endif %}
 
-      <h1>Create your Uni Helper account</h1>
+  <form method="POST">
+    <div class="field">
+      <label for="name">Your name</label>
+      <input id="name" name="name" type="text" autocomplete="name"
+             placeholder="Alex" required autofocus>
+    </div>
+    <div class="field">
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email" autocomplete="email"
+             placeholder="you@university.ca" required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="new-password"
+             minlength="8" placeholder="At least 8 characters" required>
+    </div>
+    <p class="hint">Eight characters or more. Length is what keeps it safe.</p>
+    <button type="submit">Create account</button>
+  </form>
 
-      <p class="auth-sub">
-        Sync Brightspace, organize deadlines, and keep school in one private dashboard.
-      </p>
-
-      {% if error %}
-        <div class="auth-error">{{ error }}</div>
-      {% endif %}
-
-      <form method="POST" class="formstack auth-form">
-        <input type="text" name="name" placeholder="Your name" required aria-label="Your name">
-        <input type="email" name="email" placeholder="Email address" required aria-label="Email address">
-        <input type="password" name="password" placeholder="Password" required aria-label="Password">
-        <button class="btn" type="submit">Create account</button>
-      </form>
-
-      <div class="auth-switch">
-        Already have an account?
-        <a href="/login">Log in</a>
-      </div>
-    </section>
-
-    <section class="auth-preview">
-      <div class="auth-preview-card">
-        <div class="auth-preview-label">Built for students</div>
-        <div class="auth-preview-title">Stop checking Brightspace 20 times a day.</div>
-
-        <div class="auth-mini-list">
-          <div><span>📌</span> Track upcoming work</div>
-          <div><span>🎯</span> Add midterms and finals</div>
-          <div><span>🔒</span> Private account and dashboard</div>
-        </div>
-      </div>
-    </section>
-  </main>
-</body>
-</html>
+  <div class="foot">
+    <span>Already have an account? <a href="{{ url_for('login') }}">Log in</a></span>
+  </div>
+{% endblock %}

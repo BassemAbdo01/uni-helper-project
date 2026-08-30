@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}Nexora{% endblock %}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600&family=Archivo:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* One shell for log in, sign up, forgot and reset. They used to be four
+   separate files that had already drifted apart, which is the same failure
+   that gave this repo two different outline prompts. */
+:root{
+  --bg:#0E0C0B; --surface:#171512; --surface-2:#1E1B17;
+  --line:#292521; --line-2:#3A342D;
+  --fg:#F5F2ED; --fg-2:#A9A297; --fg-3:#6F6961;
+  --amber:#E8A94A; --amber-soft:rgba(232,169,74,.13);
+  --red:#C9705C; --green:#7FB08A;
+  --ease:cubic-bezier(.22,.61,.36,1);
+}
+*{box-sizing:border-box}
+body{
+  margin:0;min-height:100vh;background:var(--bg);color:var(--fg);
+  font-family:"Archivo",ui-sans-serif,system-ui,sans-serif;font-size:16px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;
+}
+/* Same ground as the landing page, so arriving here is a continuation. */
+#wash{position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(58% 46% at 78% 14%, rgba(232,169,74,.085), transparent 66%),
+    radial-gradient(50% 42% at 12% 92%, rgba(120,146,200,.05), transparent 70%),
+    linear-gradient(180deg,#1A1613 0%,#0E0C0B 44%,#121010 100%)}
+#grain{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.04;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E")}
+
+.top{position:relative;z-index:3;padding:26px clamp(20px,5vw,44px)}
+.brand{display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--fg);
+  font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:18px;letter-spacing:-.02em}
+.brand i{width:6px;height:6px;border-radius:50%;background:var(--amber);font-style:normal}
+
+main{position:relative;z-index:3;flex:1;display:flex;align-items:center;justify-content:center;
+  padding:12px clamp(20px,5vw,44px) 64px}
+.pane{width:100%;max-width:392px}
+
+.eyebrow{font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.24em;
+  text-transform:uppercase;color:var(--amber);margin:0 0 18px}
+h1{font-family:"Fraunces",Georgia,serif;font-weight:300;
+  font-size:clamp(2rem,4vw,2.6rem);line-height:1.08;letter-spacing:-.032em;
+  margin:0 0 12px;text-wrap:balance}
+h1 em{font-style:italic;font-weight:400;color:var(--amber)}
+.sub{color:var(--fg-2);font-size:15px;margin:0 0 32px}
+
+form{display:flex;flex-direction:column;gap:16px;margin:0}
+.field{display:flex;flex-direction:column;gap:7px}
+.field label{font-size:12.5px;color:var(--fg-2);letter-spacing:.01em}
+.field input{
+  width:100%;padding:13px 15px;border-radius:5px;
+  background:var(--surface);border:1px solid var(--line);color:var(--fg);
+  font-family:inherit;font-size:15px;
+  transition:border-color .25s var(--ease), background .25s var(--ease), box-shadow .25s var(--ease);
+}
+.field input::placeholder{color:var(--fg-3)}
+.field input:hover{border-color:var(--line-2)}
+.field input:focus{outline:none;border-color:var(--amber);background:var(--surface-2);
+  box-shadow:0 0 0 3px var(--amber-soft)}
+
+button[type=submit],.btn{
+  --lift:0px;display:inline-flex;align-items:center;justify-content:center;gap:10px;
+  width:100%;padding:14px 22px;margin-top:4px;border-radius:5px;cursor:pointer;
+  background:var(--amber);color:#140F09;border:1px solid var(--amber);
+  font-family:inherit;font-size:15px;font-weight:600;text-decoration:none;
+  transform:translateY(var(--lift)) scale(1);box-shadow:0 1px 2px rgba(0,0,0,.5);
+  transition:transform .4s var(--ease),box-shadow .4s var(--ease)}
+button[type=submit]:hover,.btn:hover{--lift:-2px;transform:translateY(var(--lift)) scale(1.012);
+  box-shadow:0 18px 40px -18px rgba(232,169,74,.55),0 2px 6px rgba(0,0,0,.6)}
+button[type=submit]:active,.btn:active{transform:translateY(0) scale(.996);transition-duration:.09s}
+.btn.quiet{background:transparent;color:var(--fg);border-color:var(--line-2);font-weight:500}
+.btn.quiet:hover{border-color:var(--fg-3);background:rgba(245,242,237,.045);box-shadow:none}
+a:focus-visible,button:focus-visible,input:focus-visible{outline:1px solid var(--amber);outline-offset:3px}
+
+.note{display:flex;gap:11px;align-items:flex-start;padding:12px 14px;border-radius:5px;
+  font-size:13.5px;line-height:1.5;margin:0 0 22px}
+.note::before{content:"";flex:none;width:3px;align-self:stretch;border-radius:2px}
+.note.bad{background:rgba(201,112,92,.09);color:var(--fg)}
+.note.bad::before{background:var(--red)}
+.note.good{background:rgba(127,176,138,.09);color:var(--fg)}
+.note.good::before{background:var(--green)}
+.note.flat{background:var(--surface);color:var(--fg-2)}
+.note.flat::before{background:var(--line-2)}
+
+.foot{margin-top:26px;padding-top:20px;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;gap:9px;font-size:13.5px;color:var(--fg-3)}
+.foot a{color:var(--fg-2);text-decoration:none;transition:color .25s var(--ease)}
+.foot a:hover{color:var(--amber)}
+.hint{font-size:12.5px;color:var(--fg-3);margin:-6px 0 0}
+
+/* The portal: the landing page and these pages both opt in, so the browser
+   morphs between them instead of cutting. Chrome and Edge honour it; every
+   other browser simply navigates, which is the correct fallback. */
+@view-transition{navigation:auto}
+::view-transition-old(root){animation:portal-out .26s var(--ease) both}
+::view-transition-new(root){animation:portal-in .46s var(--ease) both}
+@keyframes portal-out{to{opacity:0;transform:scale(.985);filter:blur(6px)}}
+@keyframes portal-in{from{opacity:0;transform:scale(1.035);filter:blur(12px)}}
+
+/* Arrival, for browsers without view transitions and for the content itself. */
+.pane > *{animation:rise .7s var(--ease) both}
+.pane > :nth-child(2){animation-delay:.05s}
+.pane > :nth-child(3){animation-delay:.10s}
+.pane > :nth-child(4){animation-delay:.15s}
+.pane > :nth-child(5){animation-delay:.20s}
+@keyframes rise{from{opacity:0;transform:translateY(10px);filter:blur(8px)}}
+
+@media (prefers-reduced-motion:reduce){
+  .pane > *{animation:none}
+  ::view-transition-old(root),::view-transition-new(root){animation:none}
+  button[type=submit],.btn,.field input{transition:none}
+}
+</style>
+</head>
+<body>
+<div id="wash" aria-hidden="true"></div>
+<div id="grain" aria-hidden="true"></div>
+
+<div class="top"><a class="brand" href="{{ url_for('landing') }}"><i></i>Nexora</a></div>
+
+<main>
+  <div class="pane">
+    {% block body %}{% endblock %}
+  </div>
+</main>
+</body>
+</html>

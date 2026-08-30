@@ -1,57 +1,29 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Login - Uni Helper</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
+{% extends "auth_base.html" %}
+{% block title %}Log in — Nexora{% endblock %}
 
-<body>
-  <main class="auth-page">
-    <section class="auth-card">
-      <a class="auth-back" href="/">← Back to home</a>
+{% block body %}
+  <p class="eyebrow">Welcome back</p>
+  <h1>Log in to <em>Nexora</em>.</h1>
+  <p class="sub">Your term is where you left it.</p>
 
-      <div class="landing-badge">Welcome back</div>
+  {% if error %}<div class="note bad">{{ error }}</div>{% endif %}
 
-      <h1>Log in to Uni Helper</h1>
+  <form method="POST">
+    <div class="field">
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email" autocomplete="email"
+             placeholder="you@university.ca" required autofocus>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password"
+             placeholder="Your password" required>
+    </div>
+    <button type="submit">Log in</button>
+  </form>
 
-      <p class="auth-sub">
-        Check your deadlines, sync Brightspace, and get back to focusing.
-      </p>
-
-      {% if error %}
-        <div class="auth-error">{{ error }}</div>
-      {% endif %}
-
-      <form method="POST" class="formstack auth-form">
-        <input type="email" name="email" placeholder="Email address" required aria-label="Email address">
-        <input type="password" name="password" placeholder="Password" required aria-label="Password">
-        <button class="btn" type="submit">Log in</button>
-      </form>
-
-      <div class="auth-switch">
-        <a href="{{ url_for('forgot_password') }}">Forgot your password?</a>
-      </div>
-
-      <div class="auth-switch">
-        New to Uni Helper?
-        <a href="/signup">Create an account</a>
-      </div>
-    </section>
-
-    <section class="auth-preview">
-      <div class="auth-preview-card">
-        <div class="auth-preview-label">Your school command center</div>
-        <div class="auth-preview-title">One dashboard for every deadline.</div>
-
-        <div class="auth-mini-list">
-          <div><span>🔄</span> Brightspace auto-sync</div>
-          <div><span>🗓️</span> Labs, quizzes, assignments, exams</div>
-          <div><span>⏱️</span> Built-in focus timer</div>
-        </div>
-      </div>
-    </section>
-  </main>
-</body>
-</html>
+  <div class="foot">
+    <span><a href="{{ url_for('forgot_password') }}">Forgot your password?</a></span>
+    <span>New to Nexora? <a href="{{ url_for('signup') }}">Create an account</a></span>
+  </div>
+{% endblock %}

@@ -186,7 +186,16 @@ footer{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--fg-3);fo
 .foot-in a:hover{color:var(--amber)}
 
 @media (max-width:1040px){.nav-l{display:none}}
+/* The other half of the portal: both this page and the auth pages opt in, so
+   the browser morphs between them instead of cutting to white. */
+@view-transition{navigation:auto}
+::view-transition-old(root){animation:portal-out .26s var(--ease) both}
+::view-transition-new(root){animation:portal-in .46s var(--ease) both}
+@keyframes portal-out{to{opacity:0;transform:scale(.985);filter:blur(6px)}}
+@keyframes portal-in{from{opacity:0;transform:scale(1.035);filter:blur(12px)}}
+
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}
+  ::view-transition-old(root),::view-transition-new(root){animation:none}
   .rv{opacity:1;filter:none;transform:none;transition:none}.btn{transition:none}
   .bar i{transition:none}}
 </style>
