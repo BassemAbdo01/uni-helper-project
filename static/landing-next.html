@@ -435,15 +435,14 @@ if (renderer) {
 
   const paper = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color('#F0EBDE'), metalness: 0, roughness: .58,
-    clearcoat: .26, clearcoatRoughness: .42, envMapIntensity: .95,
-    transparent: true, depthWrite: true });
+    clearcoat: .26, clearcoatRoughness: .42, envMapIntensity: .95 });
   const edge = new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color('#D6CEBB'), metalness: 0, roughness: .8, envMapIntensity: .6,
-    transparent: true, depthWrite: true });
-  // Every material the scene uses, so one opacity value can dim the whole thing.
-  const allMats = [edge];
+    color: new THREE.Color('#D6CEBB'), metalness: 0, roughness: .8, envMapIntensity: .6 });
+  // Opaque on purpose. These were transparent while the scene faded out through
+  // the middle sections; with twenty cards overlapping in a stack, transparent
+  // sorting shows through itself at the edges, and nothing fades any more.
   const faces = tex => {
-    const p = paper.clone(); p.map = tex; allMats.push(p);
+    const p = paper.clone(); p.map = tex;
     return [edge, edge, edge, edge, p, p];
   };
 
@@ -476,39 +475,62 @@ if (renderer) {
     rr(-1.75, 1.75), rr(-1.5, 1.5), rr(-2.0, .8),
     rr(-.6, .6), rr(-.8, .8), rr(-Math.PI, Math.PI), rr(.94, 1.08)));
 
-  { let y = -.86;                                   // 01 · a tidy stack, held back
-    items.forEach(it => { it.forms[1] = pose(rr(-.04,.04), y, rr(-.04,.04),
-      -1.06 + rr(-.02,.02), rr(-.06,.06), rr(-.03,.03), .95); y += .086; }); }
-
-  { const bands = [2,2,4,12]; let y = -1.2, ci = 0;  // 02 · weighted, 10/10/20/60
-    bands.forEach(c => { for (let k = 0; k < c; k++) {
-        items[ci++].forms[2] = pose(rr(-.02,.02), y, rr(-.02,.02), -1.16, rr(-.03,.03), 0, 1.05);
-        y += .066; } y += .22; }); }
-
-  { const cols = 4, gx = .62, gy = .8;               // 03 · a small, tidy fan
-    items.forEach((it, i) => { const c = i % cols, r = Math.floor(i / cols);
-      it.forms[3] = pose(.3 + (c - 1.5) * gx, (2 - r) * gy - .8, 0,
-        0, rr(-.03,.03), rr(-.02,.02), .48); }); }
-
-  /* 04 · laid out in a fan. The closing formation used to be a tight stack seen
-     from the side, which showed nothing but twenty edges -- a striped block
-     that read as a ream of paper. Every card is printed with real course
-     material, so the last thing on the page should show those faces, not hide
-     them. Spread along a shallow arc, splayed like a hand laid down: still
-     unmistakably ordered, but legible. */
+  /* 01 · gathering. Still loose, but every card now leans the same way instead
+     of tumbling freely -- the first sign of a hand tidying a pile. */
   {
-    const SPREAD = 1.30, RADIUS = 3.05, LIFT = 1.62;
+    const cols = 5;
     items.forEach((it, i) => {
-      const t = i / (N - 1) - .5;          // -0.5 .. 0.5
-      const a = t * SPREAD;                // angle along the arc
-      it.forms[4] = pose(
-        Math.sin(a) * RADIUS,
-        Math.cos(a) * LIFT - 1.78,         // centre sits highest
-        -Math.abs(t) * 1.05,               // the ends fall away from the viewer
-        -.10,                              // barely tipped back, so faces read
-        a * .40,                           // each turns a little toward centre
-        -a * 1.05,                         // and rolls with the arc
-        .70);
+      const c = i % cols, r = Math.floor(i / cols);
+      it.forms[1] = pose(
+        (c - 2) * .78 + rr(-.16, .16),
+        (1.5 - r) * .92 - .35 + rr(-.14, .14),
+        rr(-.35, .1),
+        rr(-.16, .16), rr(-.20, .20), rr(-.22, .22), .62);
+    });
+  }
+
+  /* 02 · sorted into groups. Four clusters, sized 2 / 2 / 4 / 12 -- the same
+     10 / 10 / 20 / 60 the section is about. Order you can count. */
+  {
+    const bands = [2, 2, 4, 12];
+    const originX = [-1.55, -.52, .52, 1.62];
+    let ci = 0;
+    bands.forEach((count, b) => {
+      for (let k = 0; k < count; k++) {
+        items[ci++].forms[2] = pose(
+          originX[b] + rr(-.02, .02),
+          -.95 + k * .085,
+          rr(-.02, .02),
+          -1.02, rr(-.03, .03), rr(-.02, .02), .60);
+      }
+    });
+  }
+
+  /* 03 · a true grid. Even gaps, square to the camera, no rotation left in it.
+     This is the frame where the eye should read "organised" without being told,
+     which a fan or a leaning pile never does -- right angles do. */
+  {
+    const cols = 5, gx = .76, gy = 1.0;
+    items.forEach((it, i) => {
+      const c = i % cols, r = Math.floor(i / cols);
+      it.forms[3] = pose((c - 2) * gx, (1.5 - r) * gy - .35, 0, 0, 0, 0, .60);
+    });
+  }
+
+  /* 04 · filed. A stack seen almost edge-on showed nothing but twenty edges, and
+     a fan reads as casual -- a hand of cards, not a filed record. What the eye
+     actually reads as organised is a shared axis and a right angle, so this is
+     one squared stack turned three-quarters: the top card's printed face is
+     fully visible, and every card beneath it lines up exactly under it. Nothing
+     out of place, and you can still see what the papers are. */
+  {
+    const TILT = -.62;        // enough to show the top face, not so much it lies flat
+    const TURN = .34;         // three-quarter view reads more solid than dead-on
+    let y = -.62, z = 0;
+    items.forEach((it) => {
+      it.forms[4] = pose(0, y, z, TILT, TURN, 0, 1.02);
+      y += .062;              // rises
+      z -= .036;              // and steps back, so the stack has depth
     });
   }
 
@@ -518,20 +540,23 @@ if (renderer) {
      rather than design. It now belongs to the hero and the close, and fades out
      in between -- the panels carry those sections alone.
 
-     PRESENCE is scale. Opacity is a separate, much steeper curve: interpolating
-     it formation-to-formation left it at 0.16 by section 01 and still ramping
-     down through the top of section 02, so faint cards lingered over both. It
-     now reaches zero barely past the hero and stays there until the close is
-     approaching. */
-  const PRESENCE = [1, .62, .55, .55, 1];
-  const FADE_OUT_BY = .55;        // formations after the hero
-  const FADE_IN_FROM = 3.45;      // formations before the close
-  const smooth = t => t * t * (3 - 2 * t);
-  function sceneAlpha(at) {
-    if (at <= FADE_OUT_BY) return smooth(1 - at / FADE_OUT_BY);
-    if (at >= FADE_IN_FROM) return smooth((at - FADE_IN_FROM) / (4 - FADE_IN_FROM));
-    return 0;
-  }
+     Fading them out was the wrong fix. They looked wrong in the middle
+     sections because they were half-scale and jammed against the panel edges,
+     not because they were visible -- and hiding them threw away the one thing
+     the scroll is for, which is watching the papers get organised.
+
+     Each section leaves the right half above its panel empty, beside the
+     heading. That is where the scene goes, at full opacity, so the progression
+     from loose to grouped to gridded to filed is actually legible.
+
+     Scale now lives in the poses themselves, so this only has to place them. */
+  const OFFSET = [
+    [0, 0, 0],                    // hero: centre stage
+    [1.15, 1.34, -.55],           // 01: up and right, clear of heading and panel
+    [1.15, 1.34, -.55],           // 02
+    [1.15, 1.34, -.55],           // 03
+    [0, 0, 0],                    // close: centre stage again
+  ];
 
   const key = new THREE.DirectionalLight('#FFF6E8', 2.9);
   key.position.set(-4.6, 5.4, 5.0); scene.add(key);
@@ -588,7 +613,6 @@ if (renderer) {
   const tmpP = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
   const clock = new THREE.Clock();
   const LAST = 4;
-  let lastAlpha = -1;
 
   function frame() {
     requestAnimationFrame(frame);
@@ -619,24 +643,13 @@ if (renderer) {
       it.mesh.scale.setScalar(A.s + (B.s - A.s) * k);
     }
 
-    const presence = PRESENCE[i0] + (PRESENCE[i1] - PRESENCE[i0]) * local;
-    const alpha = sceneAlpha(at);
-
-    group.scale.setScalar(presence);
-    group.position.x = (1 - presence) * 1.2;
-    group.position.z = -(1 - presence) * 2.4;       // and further away, not just smaller
+    const A0 = OFFSET[i0], A1 = OFFSET[i1];
+    group.position.set(
+      A0[0] + (A1[0] - A0[0]) * local,
+      A0[1] + (A1[1] - A0[1]) * local,
+      A0[2] + (A1[2] - A0[2]) * local);
     group.rotation.y = ptrC.x * .13;
     group.rotation.x = ptrC.y * .09;
-
-    if (alpha !== lastAlpha) {
-      for (let i = 0; i < allMats.length; i++) allMats[i].opacity = alpha;
-      lastAlpha = alpha;
-    }
-    // Faded: skip the draw entirely rather than composite 20 near-invisible
-    // meshes. The threshold is generous because anything under a few percent is
-    // still perceptible as a smudge on a dark ground.
-    if (alpha < .025) { group.visible = false; renderer.clear(); return; }
-    group.visible = true;
 
     renderer.render(scene, camera);
   }
