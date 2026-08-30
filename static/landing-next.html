@@ -485,14 +485,20 @@ if (renderer) {
     return toTex(c);
   }
 
-  // Warm and cool alternate so the stack has rhythm rather than a gradient.
+  /* The first version reached for teal and terracotta, which appear nowhere
+     else on this page -- the whole site is near-black, cream and one amber, so
+     the stack looked borrowed from somewhere else. These are the page's own
+     colours: five shades of the same paper the hero is made of, one amber for
+     the book the product is actually about, and one near-black so the stack has
+     a floor. Sizes are close together and slimmer too, because the hero is slim
+     portrait sheets and the close was chunky landscape slabs. */
   const BOOKS = [
-    { bg: '#EDE7DA', ink: '#241F1A', title: 'THE COURSE OUTLINE', sub: 'SYSC 1006', w: 3.05, t: .30, d: 1.95 },
-    { bg: '#3F6F68', ink: '#F2EFE8', title: 'LINEAR ALGEBRA', sub: 'MATH 1104', w: 2.88, t: .26, d: 1.86 },
-    { bg: '#E8A94A', ink: '#241F1A', title: 'GRADING SCHEME', sub: 'Scheme 1 & 2', w: 3.14, t: .34, d: 2.02 },
-    { bg: '#F4F0E6', ink: '#2A2723', title: 'LECTURE NOTES', sub: 'Binary Trees', w: 2.80, t: .24, d: 1.80 },
-    { bg: '#C4794E', ink: '#FBF7EF', title: 'TERM CALENDAR', sub: 'Fall', w: 3.20, t: .32, d: 2.08 },
-    { bg: '#2A2723', ink: '#EFE9DC', title: 'EVERY DEADLINE', sub: 'One timeline', w: 2.96, t: .28, d: 1.92 },
+    { bg: '#E7E0D0', ink: '#2A2723', title: 'THE COURSE OUTLINE', sub: 'SYSC 1006',    w: 2.72, t: .215, d: 1.74 },
+    { bg: '#2A2723', ink: '#EFE9DC', title: 'EVERY DEADLINE',     sub: 'One timeline', w: 2.60, t: .195, d: 1.68 },
+    { bg: '#E8A94A', ink: '#241F1A', title: 'GRADING SCHEME',     sub: 'Scheme 1 & 2', w: 2.84, t: .245, d: 1.82 },
+    { bg: '#F2EDE1', ink: '#33302A', title: 'LECTURE NOTES',      sub: 'Binary Trees', w: 2.64, t: .200, d: 1.70 },
+    { bg: '#D6CDB9', ink: '#2E2922', title: 'TERM CALENDAR',      sub: 'Fall',         w: 2.78, t: .230, d: 1.78 },
+    { bg: '#EDE7DA', ink: '#33302A', title: 'LINEAR ALGEBRA',     sub: 'MATH 1104',    w: 2.56, t: .190, d: 1.66 },
   ];
 
   const pages = new THREE.MeshPhysicalMaterial({
