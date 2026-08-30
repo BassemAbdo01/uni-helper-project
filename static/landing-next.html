@@ -490,8 +490,27 @@ if (renderer) {
       it.forms[3] = pose(.3 + (c - 1.5) * gx, (2 - r) * gy - .8, 0,
         0, rr(-.03,.03), rr(-.02,.02), .48); }); }
 
-  { let y = -.5;                                     // 04 · one resolved block
-    items.forEach(it => { it.forms[4] = pose(0, y, 0, -1.2, .3, 0, 1.34); y += .05; }); }
+  /* 04 · laid out in a fan. The closing formation used to be a tight stack seen
+     from the side, which showed nothing but twenty edges -- a striped block
+     that read as a ream of paper. Every card is printed with real course
+     material, so the last thing on the page should show those faces, not hide
+     them. Spread along a shallow arc, splayed like a hand laid down: still
+     unmistakably ordered, but legible. */
+  {
+    const SPREAD = 1.30, RADIUS = 3.05, LIFT = 1.62;
+    items.forEach((it, i) => {
+      const t = i / (N - 1) - .5;          // -0.5 .. 0.5
+      const a = t * SPREAD;                // angle along the arc
+      it.forms[4] = pose(
+        Math.sin(a) * RADIUS,
+        Math.cos(a) * LIFT - 1.78,         // centre sits highest
+        -Math.abs(t) * 1.05,               // the ends fall away from the viewer
+        -.10,                              // barely tipped back, so faces read
+        a * .40,                           // each turns a little toward centre
+        -a * 1.05,                         // and rolls with the arc
+        .70);
+    });
+  }
 
   /* The product panels are full width, so there is no empty column left for the
      scene to live in through the middle of the page. Shrinking it and sliding
