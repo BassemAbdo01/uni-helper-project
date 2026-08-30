@@ -4,10 +4,15 @@
 
 {% block head %}
 <style>
-.split{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:22px;align-items:start}
-@media (max-width:1180px){.split{grid-template-columns:1fr}}
-
-.divider{height:1px;background:var(--line);margin:20px 0}
+/* The assessment cards need the whole page width. Sitting in a half-width
+   column, only two fit per row, which is what turned five of them into a
+   column you had to scroll past. Step one is short, so it goes on top with
+   its two ways in side by side. */
+.intake{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:22px;align-items:start}
+@media (max-width:860px){.intake{grid-template-columns:1fr}}
+.intake .or{display:flex;align-items:center;gap:12px;font-family:var(--mono);font-size:9.5px;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--fg-3);margin:0 0 7px}
+.intake .or:after{content:"";flex:1;height:1px;background:var(--line)}
 input[type=file]{width:100%;padding:11px 13px;border-radius:5px;border:1px dashed var(--line-2);
   background:var(--surface-2);color:var(--fg-2);font-family:inherit;font-size:13.5px}
 input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border-radius:4px;
@@ -33,7 +38,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .result.empty .pct,.result.empty .letter{color:var(--fg-3)}
 
 /* ---------- one card per assessment ---------- */
-.comps{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:14px}
+.comps{display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:14px}
 .comp{border:1px solid var(--line);border-radius:9px;background:var(--surface-2);padding:15px}
 .comp.done{border-color:var(--line-2)}
 .comp-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:13px}
@@ -108,30 +113,33 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   </div>
 </div>
 
-<div class="split">
-  <section class="card" id="inputPanel">
-    <header><div><span class="k">Step one</span><h2>Add the course outline</h2></div></header>
-    <div class="body pad">
-      <div class="field">
-        <label for="syllabusFile">Upload PDF, DOCX, PPTX, screenshot or text</label>
-        <input type="file" id="syllabusFile" aria-label="Course outline file to analyze"
-               accept=".pdf,.docx,.pptx,.png,.jpg,.jpeg,.webp,.txt,.md,.csv,.html,image/png,image/jpeg,image/webp" multiple>
+<section class="card" id="inputPanel">
+  <header><div><span class="k">Step one</span><h2>Add the course outline</h2></div></header>
+  <div class="body pad">
+    <div class="intake">
+      <div>
+        <p class="or">Upload it</p>
+        <div class="field">
+          <label for="syllabusFile">PDF, DOCX, PPTX, screenshot or text</label>
+          <input type="file" id="syllabusFile" aria-label="Course outline file to analyze"
+                 accept=".pdf,.docx,.pptx,.png,.jpg,.jpeg,.webp,.txt,.md,.csv,.html,image/png,image/jpeg,image/webp" multiple>
+        </div>
+        <button class="btn" id="uploadBtn" type="button">Extract grading breakdown</button>
       </div>
-      <button class="btn" id="uploadBtn" type="button">Extract grading breakdown</button>
-
-      <div class="divider"></div>
-
-      <div class="field">
-        <label for="rawText">Or paste the outline text</label>
-        <textarea id="rawText" placeholder="Paste the grading scheme, or the whole course outline…"></textarea>
+      <div>
+        <p class="or">Or paste it</p>
+        <div class="field">
+          <label for="rawText">The grading scheme, or the whole outline</label>
+          <textarea id="rawText" placeholder="Paste the grading scheme, or the whole course outline…"></textarea>
+        </div>
+        <button class="btn quiet" id="parseBtn" type="button">Analyze pasted text</button>
       </div>
-      <button class="btn quiet" id="parseBtn" type="button">Analyze pasted text</button>
-
-      <div class="note meta" id="analysisMeta"></div>
     </div>
-  </section>
+    <div class="note meta" id="analysisMeta"></div>
+  </div>
+</section>
 
-  <section class="card">
+<section class="card">
     <header>
       <div><span class="k">Step two</span><h2>Enter your actual results</h2></div>
       <button class="btn quiet sm" id="addBtn" type="button">+ Add item</button>
@@ -175,8 +183,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 
       <div class="note alert" id="statusAlert" role="status"></div>
     </div>
-  </section>
-</div>
+</section>
 {% endblock %}
 
 {% block scripts %}
