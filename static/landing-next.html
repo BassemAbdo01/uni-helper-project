@@ -9,8 +9,12 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600&family=Archivo:wght@400;500;600&display=swap">
 <style>
 :root{
-  --bg:#0A0A0A; --fg:#F0F0F0; --fg-2:#96928D; --fg-3:#5A5651;
-  --rule:#1B1A18; --rule-2:#2A2825; --accent:#E0A340;
+  --bg:#0C0B0A;            /* warm near-black, not neutral */
+  --fg:#F2EFEA;
+  --fg-2:#A49E95;
+  --fg-3:#6B655C;
+  --rule:#22201D; --rule-2:#332F2A;
+  --accent:#E0A340;
   --ease:cubic-bezier(.22,.61,.36,1);
 }
 *{box-sizing:border-box}
@@ -20,16 +24,22 @@ body{
   font-family:"Archivo",ui-sans-serif,system-ui,sans-serif;font-size:17px;line-height:1.65;
   -webkit-font-smoothing:antialiased;
 }
-#gl{position:fixed;inset:0;z-index:0;display:block;pointer-events:none}
-#glfallback{position:fixed;inset:0;z-index:0;display:none;
+/* A very slow warm wash stops the lower half going dead flat once the scene
+   settles into its quieter formations. */
+#wash{position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(58% 46% at 78% 30%, rgba(224,163,64,.055), transparent 68%),
+    radial-gradient(50% 40% at 22% 82%, rgba(120,140,190,.035), transparent 70%)}
+#gl{position:fixed;inset:0;z-index:1;display:block;pointer-events:none}
+#glfallback{position:fixed;inset:0;z-index:1;display:none;
   background:radial-gradient(46% 52% at 74% 46%, rgba(224,163,64,.10), transparent 70%)}
-#grain{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.05;
+#grain{position:fixed;inset:0;z-index:2;pointer-events:none;opacity:.045;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E")}
-.content{position:relative;z-index:2}
-.shell{max-width:1280px;margin:0 auto;padding:0 clamp(24px,5vw,76px)}
+.content{position:relative;z-index:3}
+.shell{max-width:1320px;margin:0 auto;padding:0 clamp(24px,5vw,80px)}
 
 nav{position:absolute;top:0;left:0;right:0;z-index:20}
-.nav-in{display:flex;align-items:center;justify-content:space-between;padding:32px 0}
+.nav-in{display:flex;align-items:center;justify-content:space-between;padding:30px 0}
 .brand{font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:19px;letter-spacing:-.02em;
   display:flex;align-items:center;gap:11px}
 .brand i{width:6px;height:6px;border-radius:50%;background:var(--accent);font-style:normal}
@@ -39,14 +49,14 @@ nav{position:absolute;top:0;left:0;right:0;z-index:20}
 
 .btn{--lift:0px;display:inline-flex;align-items:center;gap:11px;font-size:14.5px;font-weight:500;
   padding:14px 26px;border-radius:2px;text-decoration:none;cursor:pointer;
-  background:var(--accent);color:#0A0A0A;border:1px solid var(--accent);
+  background:var(--accent);color:#0C0B0A;border:1px solid var(--accent);
   transform:translateY(var(--lift)) scale(1);box-shadow:0 1px 2px rgba(0,0,0,.5);
   transition:transform .42s var(--ease),box-shadow .42s var(--ease),background .42s var(--ease)}
 .btn:hover{--lift:-2px;transform:translateY(var(--lift)) scale(1.018);
   box-shadow:0 18px 42px -18px rgba(224,163,64,.5),0 2px 6px rgba(0,0,0,.6)}
 .btn:active{transform:translateY(0) scale(.995);transition-duration:.09s}
 .btn.quiet{background:transparent;color:var(--fg);border-color:var(--rule-2)}
-.btn.quiet:hover{border-color:var(--fg-3);background:rgba(240,240,240,.03);
+.btn.quiet:hover{border-color:var(--fg-3);background:rgba(242,239,234,.04);
   box-shadow:0 18px 40px -22px rgba(0,0,0,.9)}
 a:focus-visible{outline:1px solid var(--accent);outline-offset:4px}
 
@@ -54,47 +64,47 @@ a:focus-visible{outline:1px solid var(--accent);outline-offset:4px}
   transition:opacity 1s var(--ease),filter 1s var(--ease),transform 1s var(--ease)}
 .rv.in{opacity:1;filter:blur(0);transform:none}
 
-.hero{min-height:100vh;display:flex;align-items:center;padding:150px 0 96px}
-.hero-copy{max-width:min(580px,50%)}
-@media (max-width:900px){.hero-copy{max-width:100%}}
-.eyebrow{font-size:11px;letter-spacing:.34em;text-transform:uppercase;color:var(--fg-3);
-  margin:0 0 38px;display:flex;align-items:center;gap:15px;font-weight:500}
-.eyebrow::before{content:"";width:42px;height:1px;background:var(--accent);opacity:.75}
+/* Copy holds a comfortable measure; the scene owns the right. */
+.hero{min-height:100vh;display:flex;align-items:center;padding:140px 0 96px}
+.copy{width:min(620px,50%)}
+@media (max-width:960px){.copy{width:100%}}
+.eyebrow{font-size:11px;letter-spacing:.32em;text-transform:uppercase;color:var(--fg-3);
+  margin:0 0 34px;display:flex;align-items:center;gap:15px;font-weight:500}
+.eyebrow::before{content:"";width:40px;height:1px;background:var(--accent);opacity:.8}
 h1{font-family:"Fraunces",Georgia,serif;font-weight:300;
-  font-size:clamp(3rem,6.2vw,5.6rem);line-height:.96;letter-spacing:-.043em;
-  margin:0 0 34px;text-wrap:balance;font-variation-settings:"SOFT" 0,"WONK" 1}
+  font-size:clamp(2.9rem,5.4vw,4.9rem);line-height:1.0;letter-spacing:-.04em;
+  margin:0 0 30px;text-wrap:balance;font-variation-settings:"SOFT" 0,"WONK" 1}
 h1 em{font-style:italic;font-weight:400;color:var(--accent)}
-.lede{font-size:1.08rem;color:var(--fg-2);max-width:40ch;margin:0 0 42px;line-height:1.72}
+.lede{font-size:1.06rem;color:var(--fg-2);max-width:42ch;margin:0 0 38px;line-height:1.72}
 .acts{display:flex;gap:13px;flex-wrap:wrap}
-.scrollcue{position:absolute;bottom:42px;left:clamp(24px,5vw,76px);font-size:10.5px;
+.scrollcue{position:absolute;bottom:40px;left:clamp(24px,5vw,80px);font-size:10.5px;
   letter-spacing:.28em;text-transform:uppercase;color:var(--fg-3);display:flex;align-items:center;gap:13px}
-.scrollcue span{width:1px;height:32px;background:linear-gradient(var(--accent),transparent)}
+.scrollcue span{width:1px;height:30px;background:linear-gradient(var(--accent),transparent)}
 
-.chapter{min-height:96vh;display:flex;align-items:center;padding:110px 0}
-.chapter-in{max-width:min(540px,50%)}
-@media (max-width:900px){.chapter-in{max-width:100%}}
-.num{font-family:"Fraunces",serif;font-size:12px;letter-spacing:.3em;color:var(--accent);margin:0 0 26px}
-h2{font-family:"Fraunces",Georgia,serif;font-weight:300;font-size:clamp(2.1rem,4.2vw,3.2rem);
-  line-height:1.05;letter-spacing:-.034em;margin:0 0 22px;text-wrap:balance}
+.chapter{min-height:100vh;display:flex;align-items:center;padding:110px 0}
+.num{font-family:"Fraunces",serif;font-size:12px;letter-spacing:.28em;color:var(--accent);margin:0 0 22px}
+h2{font-family:"Fraunces",Georgia,serif;font-weight:300;font-size:clamp(2rem,3.6vw,3.1rem);
+  line-height:1.08;letter-spacing:-.032em;margin:0 0 20px;text-wrap:balance;max-width:15ch}
 h2 em{font-style:italic;color:var(--accent);font-weight:400}
-.chapter p{color:var(--fg-2);font-size:1.03rem;max-width:41ch;margin:0 0 28px}
+.chapter p{color:var(--fg-2);font-size:1.02rem;max-width:44ch;margin:0 0 30px}
 .detail{list-style:none;padding:0;margin:0;border-top:1px solid var(--rule)}
-.detail li{display:grid;grid-template-columns:auto 1fr;gap:20px;align-items:baseline;
-  padding:14px 0;border-bottom:1px solid var(--rule);font-size:14.4px;color:var(--fg-2)}
-.detail b{color:var(--fg);font-weight:500;white-space:nowrap}
+.detail li{display:grid;grid-template-columns:132px 1fr;gap:18px;align-items:baseline;
+  padding:13px 0;border-bottom:1px solid var(--rule);font-size:14.3px;color:var(--fg-2)}
+.detail b{color:var(--fg);font-weight:500}
 
-.close{min-height:88vh;display:flex;align-items:center;padding:110px 0 120px}
-.close h2{font-size:clamp(2.4rem,5.2vw,4.2rem);max-width:14ch;margin-bottom:32px}
-footer{border-top:1px solid var(--rule);padding:28px 0 42px;color:var(--fg-3);font-size:12.5px}
+.close{min-height:100vh;display:flex;align-items:center;padding:110px 0}
+.close h2{font-size:clamp(2.3rem,4.6vw,3.9rem);max-width:15ch;margin-bottom:28px}
+footer{border-top:1px solid var(--rule);padding:26px 0 40px;color:var(--fg-3);font-size:12.5px}
 .foot-in{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
 
-@media (max-width:900px){.nav-l{display:none}}
+@media (max-width:960px){.nav-l{display:none}.detail li{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}
   .rv{opacity:1;filter:none;transform:none;transition:none}.btn{transition:none}}
 </style>
 </head>
 <body>
 
+<div id="wash" aria-hidden="true"></div>
 <canvas id="gl" aria-hidden="true"></canvas>
 <div id="glfallback" aria-hidden="true"></div>
 <div id="grain" aria-hidden="true"></div>
@@ -106,22 +116,18 @@ footer{border-top:1px solid var(--rule);padding:28px 0 42px;color:var(--fg-3);fo
     <a class="btn quiet" href="#">Start free</a>
   </div></nav>
 
-  <section class="hero">
-    <div class="shell">
-      <div class="hero-copy">
-        <p class="eyebrow rv">The intelligent student OS</p>
-        <h1 class="rv">Your semester, <em>solved</em> before it starts.</h1>
-        <p class="lede rv">Nexora pulls your whole term out of Brightspace, understands the rules that decide your grade, and turns your lectures into something you can actually study.</p>
-        <div class="acts rv">
-          <a class="btn" href="#">Start free</a>
-          <a class="btn quiet" href="#sync">See how it works</a>
-        </div>
-      </div>
+  <section class="hero"><div class="shell"><div class="copy">
+    <p class="eyebrow rv">The intelligent student OS</p>
+    <h1 class="rv">Your semester, <em>solved</em> before it starts.</h1>
+    <p class="lede rv">Nexora pulls your whole term out of Brightspace, understands the rules that decide your grade, and turns your lectures into something you can actually study.</p>
+    <div class="acts rv">
+      <a class="btn" href="#">Start free</a>
+      <a class="btn quiet" href="#sync">See how it works</a>
     </div>
-    <div class="scrollcue"><span></span>Scroll</div>
-  </section>
+  </div></div>
+  <div class="scrollcue"><span></span>Scroll</div></section>
 
-  <section class="chapter" id="sync"><div class="shell"><div class="chapter-in">
+  <section class="chapter" id="sync"><div class="shell"><div class="copy">
     <p class="num rv">01 — Sync</p>
     <h2 class="rv">Six course pages, <em>one</em> place.</h2>
     <p class="rv">The extension reads your courses, deadlines, announcements and lecture files, and keeps them current. You stop checking six tabs to find out what is due.</p>
@@ -133,19 +139,19 @@ footer{border-top:1px solid var(--rule);padding:28px 0 42px;color:var(--fg-3);fo
     </ul>
   </div></div></section>
 
-  <section class="chapter" id="grades"><div class="shell"><div class="chapter-in">
+  <section class="chapter" id="grades"><div class="shell"><div class="copy">
     <p class="num rv">02 — Grades</p>
     <h2 class="rv">It reads the paragraph that <em>decides</em> your grade.</h2>
     <p class="rv">Best ten of twelve labs. A final you must reach 50% on regardless of your total. A second scheme that only opens if the first reaches C-. Nexora extracts all of it, then tells you what you need.</p>
     <ul class="detail rv">
       <li><b>Dropped marks</b><span>Best-n-of-m applied for you</span></li>
       <li><b>Hurdles</b><span>Minimums that override the total</span></li>
-      <li><b>Alternate schemes</b><span>Every eligible one computed, the best applied</span></li>
+      <li><b>Alt schemes</b><span>Every eligible one computed, the best applied</span></li>
       <li><b>Bonuses</b><span>Added on top, so 104% shows as 104%</span></li>
     </ul>
   </div></div></section>
 
-  <section class="chapter" id="study"><div class="shell"><div class="chapter-in">
+  <section class="chapter" id="study"><div class="shell"><div class="copy">
     <p class="num rv">03 — Study</p>
     <h2 class="rv">Your lectures, turned into <em>practice</em>.</h2>
     <p class="rv">Point at any slide deck you have synced. Nexora writes flashcards, quizzes, summaries and study guides from it, each cited back to the slide it came from, so you can check it rather than trust it.</p>
@@ -157,15 +163,16 @@ footer{border-top:1px solid var(--rule);padding:28px 0 42px;color:var(--fg-3);fo
     </ul>
   </div></div></section>
 
-  <section class="close"><div class="shell">
-    <h2 class="rv">Know where you stand in week one.</h2>
+  <section class="close"><div class="shell"><div class="copy">
+    <p class="num rv">04 — Ready</p>
+    <h2 class="rv">Know where you stand in <em>week one</em>.</h2>
     <p class="lede rv">Not in April, when the arithmetic finally catches up with you.</p>
     <div class="acts rv"><a class="btn" href="#">Start free</a></div>
-  </div></section>
+  </div></div></section>
 
   <footer><div class="shell foot-in">
     <span>Nexora — concept build</span>
-    <span>Scattered pages resolving into order</span>
+    <span>Scattered material resolving into order</span>
   </div></footer>
 </div>
 
@@ -180,10 +187,9 @@ footer{border-top:1px solid var(--rule);padding:28px 0 42px;color:var(--fg-3);fo
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-/* ---- blur-to-focus reveals, independent of WebGL ---- */
 const io = new IntersectionObserver((es) => {
   es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
-}, { threshold: .18, rootMargin: '0px 0px -8% 0px' });
+}, { threshold: .16, rootMargin: '0px 0px -6% 0px' });
 document.querySelectorAll('.rv').forEach((el, i) => {
   el.style.transitionDelay = Math.min(i, 6) * 70 + 'ms';
   io.observe(el);
@@ -204,143 +210,182 @@ try {
 if (renderer) {
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.12;
+  renderer.toneMappingExposure = 1.30;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(40, 1, .1, 100);
-  camera.position.set(0, 0, 7.2);
+  const camera = new THREE.PerspectiveCamera(42, 1, .1, 100);
+  camera.position.set(0, 0, 7.6);
+  scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), .04).texture;
 
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), .04).texture;
-
-  /* A page is a very thin box, not a plane: the edge is what catches the key
-     light and tells you the thing has thickness. */
-  const N = 32;
-  const geo = new THREE.BoxGeometry(.62, .86, .014);
-  const mat = new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color('#8E877C'),
-    metalness: 1, roughness: .19,
-    clearcoat: 1, clearcoatRoughness: .14,
-    envMapIntensity: 1.3,
+  /* Cards are coated stock, not dark chrome. A metal surface on a near-black
+     page has almost nothing to reflect, which is why the last pass vanished the
+     moment the hero's key light fell away. Pale, mostly diffuse stock holds its
+     value in every section. */
+  const cardMat = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#DCD5C8'), metalness: .10, roughness: .44,
+    clearcoat: .5, clearcoatRoughness: .28, envMapIntensity: 1.1,
   });
+  const cardWarm = cardMat.clone(); cardWarm.color = new THREE.Color('#E7C58A');
+  /* Pens are the only metal in the scene, so they carry the sharp speculars and
+     give the eye something crisp among the matte rectangles. */
+  const penMat = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#4A443C'), metalness: 1, roughness: .18,
+    clearcoat: 1, clearcoatRoughness: .1, envMapIntensity: 1.5,
+  });
+  const penAccent = penMat.clone(); penAccent.color = new THREE.Color('#8A6520');
+
+  const CARDS = 24, PENS = 6, N = CARDS + PENS;
+  const cardGeo = new THREE.BoxGeometry(.86, 1.14, .052);
+  const penGeo  = new THREE.CylinderGeometry(.028, .022, 1.32, 14);
+  const capGeo  = new THREE.CylinderGeometry(.031, .031, .17, 14);
 
   const group = new THREE.Group();
   scene.add(group);
 
-  /* Deterministic pseudo-random, so the "chaos" is the same every load and can
-     be tuned rather than re-rolled on every refresh. */
   let seed = 20260830;
   const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
-  const between = (a, b) => a + (b - a) * rnd();
+  const rr = (a, b) => a + (b - a) * rnd();
+  const pose = (x, y, z, rx, ry, rz, s) => ({
+    p: new THREE.Vector3(x, y, z),
+    q: new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),
+    s: s === undefined ? 1 : s,
+  });
 
-  const q = new THREE.Quaternion();
-  const e = new THREE.Euler();
-  function pose(x, y, z, rx, ry, rz, s) {
-    e.set(rx, ry, rz);
-    return { p: new THREE.Vector3(x, y, z), q: new THREE.Quaternion().setFromEuler(e), s: s };
-  }
-
-  /* --- formation 0: scattered. six tabs, an unread outline, deadlines you are
-         already behind on. loose, tumbled, no two alike. --- */
-  const CHAOS = [];
+  const items = [];
   for (let i = 0; i < N; i++) {
-    CHAOS.push(pose(
-      between(-2.6, 2.6), between(-2.4, 2.4), between(-3.4, 1.2),
-      between(-Math.PI, Math.PI), between(-Math.PI, Math.PI), between(-Math.PI, Math.PI),
-      between(.85, 1.15)
-    ));
+    const isPen = i >= CARDS;
+    let mesh;
+    if (isPen) {
+      mesh = new THREE.Group();
+      const body = new THREE.Mesh(penGeo, i % 3 === 0 ? penAccent : penMat);
+      const cap = new THREE.Mesh(capGeo, penAccent);
+      cap.position.y = .68;
+      mesh.add(body, cap);
+    } else {
+      mesh = new THREE.Mesh(cardGeo, i % 7 === 0 ? cardWarm : cardMat);
+    }
+    group.add(mesh);
+    items.push({ mesh, isPen, stagger: rnd() * .30, spin: rr(-.24, .24), forms: [] });
   }
+  const cardsOnly = items.filter(o => !o.isPen);
+  const pensOnly  = items.filter(o => o.isPen);
 
-  /* --- formation 1: one tidy stack. everything in one place. --- */
-  const STACK = [];
-  for (let i = 0; i < N; i++) {
-    STACK.push(pose(
-      between(-.035, .035), -1.15 + i * .072, between(-.035, .035),
-      -Math.PI / 2 + between(-.012, .012), between(-.05, .05), between(-.03, .03),
-      1
-    ));
-  }
+  /* 0 · scattered — loose and tumbled, kept inside the frame this time. */
+  items.forEach(it => it.forms[0] = pose(
+    rr(-2.0, 2.0), rr(-1.7, 1.7), rr(-2.4, .9),
+    rr(-Math.PI, Math.PI), rr(-Math.PI, Math.PI), rr(-Math.PI, Math.PI),
+    it.isPen ? 1 : rr(.9, 1.1)));
 
-  /* --- formation 2: a weighted column. the four graded components, each band
-         as tall as its share of the grade: 10 / 10 / 20 / 60. --- */
-  const COLUMN = [];
+  /* 1 · one stack — tilted well off edge-on so the faces catch light. Seen
+     exactly side-on it collapsed into a sliver of hairlines, which is why
+     section 01 looked like nothing was happening. */
   {
-    const bands = [3, 3, 6, 20];           // 32 pages, split by weight
-    let y = -1.55;
-    bands.forEach((count) => {
-      for (let k = 0; k < count; k++) {
-        COLUMN.push(pose(
-          between(-.02, .02), y, between(-.02, .02),
-          -Math.PI / 2, between(-.02, .02), 0,
-          1.32
-        ));
-        y += .062;
-      }
-      y += .20;                            // a clear gap between components
+    let y = -1.05;
+    cardsOnly.forEach(it => {
+      it.forms[1] = pose(rr(-.05, .05), y, rr(-.05, .05),
+                         -1.16 + rr(-.02, .02), rr(-.07, .07), rr(-.03, .03), 1.05);
+      y += .085;
+    });
+    pensOnly.forEach((it, i) => {
+      it.forms[1] = pose(rr(.95, 1.4), -1.1 + i * .13, rr(-.2, .35),
+                         Math.PI / 2, rr(-.3, .3), rr(-.14, .14));
     });
   }
 
-  /* --- formation 3: a card grid. lectures turned into practice. --- */
-  const GRID = [];
+  /* 2 · weighted column — four bands sized by real weights, 10 / 10 / 20 / 60,
+     with a pen laid in each gap so the bands read as separate components. */
   {
-    const cols = 8, rows = 4, gx = .78, gy = 1.02;
-    for (let i = 0; i < N; i++) {
+    const bands = [2, 2, 5, 15];
+    let y = -1.5, ci = 0, pi = 0;
+    bands.forEach(count => {
+      for (let k = 0; k < count; k++) {
+        cardsOnly[ci++].forms[2] = pose(rr(-.02, .02), y, rr(-.02, .02), -1.24, rr(-.03, .03), 0, 1.32);
+        y += .075;
+      }
+      if (pi < pensOnly.length) pensOnly[pi++].forms[2] = pose(1.2, y + .04, .12, Math.PI / 2, .16, 0);
+      y += .26;
+    });
+    while (pi < pensOnly.length) pensOnly[pi++].forms[2] = pose(-1.3, rr(-1.2, 1.2), -.5, Math.PI / 2, -.2, 0);
+  }
+
+  /* 3 · card grid — facing the camera, because this section is about material
+     you actually read. Pens sit outside as rules. */
+  {
+    const cols = 6, gx = 1.02, gy = 1.30;
+    cardsOnly.forEach((it, i) => {
       const c = i % cols, r = Math.floor(i / cols);
-      GRID.push(pose(
-        (c - (cols - 1) / 2) * gx,
-        ((rows - 1) / 2 - r) * gy,
-        0,
-        0, between(-.05, .05), 0,
-        1
-      ));
+      it.forms[3] = pose((c - (cols - 1) / 2) * gx, (1.5 - r) * gy - .45, 0,
+                         0, rr(-.04, .04), rr(-.02, .02), .92);
+    });
+    pensOnly.forEach((it, i) => {
+      const side = i % 2 ? 1 : -1;
+      it.forms[3] = pose(side * 3.3, 1.4 - Math.floor(i / 2) * 1.3, -.3, 0, 0, .04 * side);
+    });
+  }
+
+  /* 4 · resolved — one tight aligned block, angled to catch the key light. The
+     page ends on order, which is the entire argument. */
+  {
+    let y = -.62;
+    cardsOnly.forEach(it => { it.forms[4] = pose(0, y, 0, -1.30, .30, 0, 1.5); y += .052; });
+    pensOnly.forEach((it, i) => { it.forms[4] = pose(-.1 + i * .075, y + .16, .04, Math.PI / 2, .30, 0); });
+  }
+
+  /* Brighter than the last pass, which read as a black page with a few glints.
+     Key upper-left, warm rim opposite, and a cool fill from below-front so the
+     underside of every card stays legible. */
+  const key = new THREE.DirectionalLight('#FFF4E4', 3.6);
+  key.position.set(-5, 5.5, 4.5); scene.add(key);
+  const rim = new THREE.PointLight('#E0A340', 46, 30, 2);
+  rim.position.set(5.4, -1.8, -2.4); scene.add(rim);
+  const fill = new THREE.DirectionalLight('#9FB4D8', .85);
+  fill.position.set(2.5, -3.5, 4); scene.add(fill);
+  scene.add(new THREE.AmbientLight('#6E7484', .55));
+
+  /* Formations are pinned to the sections themselves. Mapping them to a flat
+     fraction of page height drifted out of step: the study section was still
+     showing the grades column by the time you reached it. */
+  let marks = [];
+  function computeMarks() {
+    const els = [document.querySelector('.hero'), document.getElementById('sync'),
+                 document.getElementById('grades'), document.getElementById('study'),
+                 document.querySelector('.close')];
+    marks = els.map(el => {
+      const r = el.getBoundingClientRect();
+      return r.top + scrollY + r.height / 2 - innerHeight / 2;
+    });
+  }
+  function formationAt(y) {
+    if (!marks.length) return 0;
+    if (y <= marks[0]) return 0;
+    for (let i = 0; i < marks.length - 1; i++) {
+      if (y < marks[i + 1]) return i + (y - marks[i]) / ((marks[i + 1] - marks[i]) || 1);
     }
+    return marks.length - 1;
   }
 
-  const FORMATIONS = [CHAOS, STACK, COLUMN, GRID];
-
-  const cards = [];
-  for (let i = 0; i < N; i++) {
-    const m = new THREE.Mesh(geo, mat);
-    group.add(m);
-    cards.push({ m, stagger: rnd() * .34, spin: between(-.22, .22) });
-  }
-
-  /* Lighting: a warm key upper-left for the specular that runs along the edges,
-     a dim amber rim opposite so the silhouette separates from a near-black
-     page, and low ambient so the shadow side is dark but not dead. */
-  const key = new THREE.DirectionalLight('#FFF3E0', 3.4);
-  key.position.set(-4.6, 5.2, 3.8);
-  scene.add(key);
-  const rim = new THREE.PointLight('#E0A340', 34, 26, 2);
-  rim.position.set(5.2, -2.6, -3.6);
-  scene.add(rim);
-  scene.add(new THREE.AmbientLight('#5E6472', .34));
-
-  /* The formation owns the right-hand space; the copy keeps the left. */
   function layout() {
     const w = innerWidth, h = innerHeight;
+    if (w < 2 || h < 2) return;
     renderer.setSize(w, h);
     camera.aspect = w / h;
-    const narrow = w < 900;
-    camera.position.z = narrow ? 9.2 : 7.2;
-    camera.setViewOffset(w, h, narrow ? 0 : -w * .20, narrow ? h * .08 : 0, w, h);
+    const narrow = w < 960;
+    camera.position.z = narrow ? 10.2 : 7.6;
+    camera.setViewOffset(w, h, narrow ? 0 : -w * .21, narrow ? h * .07 : 0, w, h);
     camera.updateProjectionMatrix();
+    computeMarks();
   }
   layout();
   addEventListener('resize', layout);
 
-  let scrollT = 0, scrollC = 0;
-  function readScroll() {
-    const max = document.documentElement.scrollHeight - innerHeight;
-    scrollT = max > 0 ? scrollY / max : 0;
-  }
+  let fT = 0, fC = 0;
+  const readScroll = () => { fT = formationAt(scrollY); };
   addEventListener('scroll', readScroll, { passive: true });
-  readScroll();
-  scrollC = scrollT;
+  readScroll(); fC = fT;
 
   const ptr = { x: 0, y: 0 }, ptrC = { x: 0, y: 0 };
-  addEventListener('pointermove', (ev) => {
+  addEventListener('pointermove', ev => {
     ptr.x = (ev.clientX / innerWidth - .5) * 2;
     ptr.y = (ev.clientY / innerHeight - .5) * 2;
   }, { passive: true });
@@ -351,56 +396,43 @@ if (renderer) {
   const easeInOut = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
   const tmpP = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
   const clock = new THREE.Clock();
+  const LAST = 4;
 
   function frame() {
     requestAnimationFrame(frame);
     if (!awake) { clock.getDelta(); return; }
     const dt = Math.min(clock.getDelta(), .05);
+    const t = clock.elapsedTime;
 
-    /* Frame-rate independent smoothing, so the easing is identical at 60Hz and
-       144Hz and the formation never snaps or overshoots. */
-    scrollC += (scrollT - scrollC) * (1 - Math.pow(.0025, dt));
+    fC += (fT - fC) * (1 - Math.pow(.0025, dt));
     ptrC.x += (ptr.x - ptrC.x) * (1 - Math.pow(.0022, dt));
     ptrC.y += (ptr.y - ptrC.y) * (1 - Math.pow(.0022, dt));
 
-    const span = FORMATIONS.length - 1;
-    const at = Math.min(scrollC, .9999) * span;
-    const i0 = Math.floor(at), i1 = Math.min(i0 + 1, span);
-    const local = at - i0;
-    const t = clock.elapsedTime;
+    const at = Math.max(0, Math.min(fC, LAST - .0001));
+    const i0 = Math.floor(at), i1 = Math.min(i0 + 1, LAST), local = at - i0;
 
     for (let i = 0; i < N; i++) {
-      const c = cards[i];
-      // Stagger so the formation resolves as a ripple, not a single snap.
-      const k = easeInOut(Math.min(Math.max((local - c.stagger) / (1 - .34), 0), 1));
-      const A = FORMATIONS[i0][i], B = FORMATIONS[i1][i];
-
+      const it = items[i];
+      const k = easeInOut(Math.min(Math.max((local - it.stagger) / (1 - .30), 0), 1));
+      const A = it.forms[i0], B = it.forms[i1];
       tmpP.copy(A.p).lerp(B.p, k);
       tmpQ.copy(A.q).slerp(B.q, k);
 
-      // Only the scattered state drifts; order, once reached, stays still.
       const loose = (1 - k) * (i0 === 0 ? 1 : 0);
-      c.m.position.set(
-        tmpP.x + Math.sin(t * .32 + i) * .05 * loose,
-        tmpP.y + Math.cos(t * .27 + i * 1.7) * .05 * loose,
-        tmpP.z
-      );
-      c.m.quaternion.copy(tmpQ);
-      if (loose > .001 && !reduced) c.m.rotateY(t * c.spin * loose);
-      const s = A.s + (B.s - A.s) * k;
-      c.m.scale.setScalar(s);
+      it.mesh.position.set(
+        tmpP.x + Math.sin(t * .30 + i) * .055 * loose,
+        tmpP.y + Math.cos(t * .25 + i * 1.7) * .055 * loose,
+        tmpP.z);
+      it.mesh.quaternion.copy(tmpQ);
+      if (loose > .001 && !reduced) it.mesh.rotateY(t * it.spin * loose);
+      it.mesh.scale.setScalar(A.s + (B.s - A.s) * k);
     }
 
-    group.rotation.y = ptrC.x * .17;
-    group.rotation.x = ptrC.y * .12;
-    group.position.y = -scrollC * .30;
-
+    group.rotation.y = ptrC.x * .15;
+    group.rotation.x = ptrC.y * .10;
     renderer.render(scene, camera);
   }
   frame();
-
-  // A signal that the module reached the end of setup, so a blank canvas can be
-  // told apart from a module that failed to load.
   document.documentElement.dataset.gl = 'ready';
 }
 </script>
