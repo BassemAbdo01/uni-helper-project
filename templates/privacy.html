@@ -1,0 +1,115 @@
+{% extends "auth_base.html" %}
+{% block title %}Privacy — Nexora{% endblock %}
+
+{% block body %}
+<style>
+.policy{max-width:65ch;text-align:left}
+.policy h2{font-family:"Fraunces",Georgia,serif;font-weight:400;font-size:1.15rem;
+  letter-spacing:-.01em;margin:32px 0 10px}
+.policy h2:first-of-type{margin-top:26px}
+.policy p{margin:0 0 13px;color:var(--fg-2);font-size:14.5px;line-height:1.65}
+.policy ul{margin:0 0 13px;padding-left:20px;color:var(--fg-2);font-size:14.5px;line-height:1.65}
+.policy li{margin-bottom:7px}
+.policy strong{color:var(--fg);font-weight:500}
+.policy .updated{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--fg-3);margin-bottom:0}
+.policy a{color:var(--amber)}
+</style>
+
+<div class="policy">
+  <p class="eyebrow">Nexora and Nexora Sync</p>
+  <h1>Privacy</h1>
+  <p class="updated">Last updated {{ updated }}</p>
+
+  <h2>The short version</h2>
+  <p>
+    Nexora reads your university's learning management system through the session you
+    are <strong>already signed into</strong>, so that your coursework appears in one place.
+    It never asks for, sees, or stores your university password. Your coursework is
+    stored against your Nexora account and is not sold, shared with other students, or
+    used for advertising.
+  </p>
+
+  <h2>What the browser extension does</h2>
+  <p>
+    Nexora Sync runs only when you ask it to. When you press <strong>Import my
+    courses</strong>, it reads the Brightspace pages you already have access to and sends
+    the following to your Nexora account:
+  </p>
+  <ul>
+    <li>Course codes, names, terms, and course images</li>
+    <li>Assignment, quiz, and deadline titles and their due dates</li>
+    <li>Announcement titles and text</li>
+    <li>Links back to the original items in your LMS</li>
+    <li>The text of a lecture or course outline — <strong>only</strong> for the specific
+        file you ask Nexora to summarise, analyse, or turn into study tools</li>
+  </ul>
+  <p>
+    It does not read anything outside your LMS. It has no access to your other tabs,
+    your browsing history, or any site you have not explicitly granted it.
+  </p>
+
+  <h2>Permissions, and why each one exists</h2>
+  <ul>
+    <li><strong>Your university's domain</strong> — requested one origin at a time, when
+        you press "Allow this Brightspace" on your own LMS. Nothing is granted at install.</li>
+    <li><strong>storage</strong> — remembers your Nexora address, your sync preference,
+        and the key that links the extension to your account.</li>
+    <li><strong>tabs</strong> — finds the Brightspace tab you already have open.</li>
+    <li><strong>scripting</strong> — runs the reader on that page when you ask it to.</li>
+    <li><strong>alarms</strong> — schedules the optional background refresh, if you turn
+        it on.</li>
+  </ul>
+
+  <h2>Artificial intelligence</h2>
+  <p>
+    When you ask Nexora to analyse a course outline or build a summary, flashcards, a
+    quiz, or a study guide, <strong>the text of that document is sent to Google's Gemini
+    API</strong> to produce the result. Google processes it to return the response.
+    Nothing is sent to any AI service unless you press a button that asks for it.
+  </p>
+
+  <h2>What is stored, and where</h2>
+  <p>
+    Your account, courses, deadlines, grades, and generated study material are stored in
+    a private database belonging to this application, hosted on Render. Passwords are
+    stored only as salted hashes and are never recoverable. Password-reset tokens are
+    stored hashed, expire after an hour, and can be used once.
+  </p>
+
+  <h2>Error reporting</h2>
+  <p>
+    If error reporting is enabled, crash reports are sent to Sentry with personal
+    information deliberately switched off. Your grades and the text of your course
+    documents are your private record and are never attached to a crash report.
+  </p>
+
+  <h2>Deleting your data</h2>
+  <p>
+    Removing a course from Nexora deletes its imported content, grades, outline analysis,
+    and tasks. Uninstalling the extension stops all reading immediately. To delete your
+    account and everything in it, email
+    <a href="mailto:bassemtamer2016@gmail.com">bassemtamer2016@gmail.com</a> and it will
+    be removed.
+  </p>
+
+  <h2>What Nexora never does</h2>
+  <ul>
+    <li>Ask for or store your university password</li>
+    <li>Sell your data, or share it with advertisers or data brokers</li>
+    <li>Show your coursework to any other student</li>
+    <li>Read pages outside the LMS domain you granted</li>
+    <li>Submit work, post, or change anything in your LMS — it only reads</li>
+  </ul>
+
+  <h2>Contact</h2>
+  <p>
+    Questions about any of the above:
+    <a href="mailto:bassemtamer2016@gmail.com">bassemtamer2016@gmail.com</a>.
+  </p>
+</div>
+
+<div class="foot">
+  <span><a href="{{ url_for('landing') }}">Back to Nexora</a></span>
+</div>
+{% endblock %}

@@ -5509,6 +5509,13 @@ def handle_unexpected(exc):
     )
 
 
+@app.route("/privacy")
+def privacy():
+    """Public, and deliberately not behind login: the Chrome Web Store listing
+    has to link to it, and a reviewer reads it without an account."""
+    return render_template("privacy.html", updated="31 August 2026")
+
+
 @app.route("/healthz")
 @limiter.exempt
 def healthz():
