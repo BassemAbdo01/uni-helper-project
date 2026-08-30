@@ -1,7 +1,101 @@
-<!doctype html><html><head><meta charset="utf-8"><style>
-body{width:370px;margin:0;padding:18px;background:#080b18;color:#fff;font-family:Inter,Arial}h1{font-size:19px;margin:0 0 4px}.sub{color:#929ab7;font-size:12px;margin-bottom:14px}label{display:block;font-size:12px;margin:9px 0 6px}input,select{width:100%;box-sizing:border-box;background:#0e1326;border:1px solid #2b3150;color:#fff;padding:10px;border-radius:10px}button{width:100%;margin-top:10px;padding:11px;border:0;border-radius:10px;background:linear-gradient(90deg,#6d28d9,#9333ea);color:#fff;font-weight:700;cursor:pointer}.secondary{background:#151a30;border:1px solid #303754}.row{display:grid;grid-template-columns:1fr 110px;gap:8px;align-items:end}.toggle{display:flex;align-items:center;gap:8px;font-size:12px;margin-top:12px}.toggle input{width:auto}#status{font-size:12px;color:#cbd5e1;margin-top:12px;white-space:pre-wrap;line-height:1.45;padding:10px;background:#0d1224;border-radius:10px;min-height:44px;max-height:245px;overflow:auto}.note{font-size:11px;color:#777f9c;margin-top:12px;line-height:1.4}</style></head>
-<body><h1>Nexora Sync <small style="font-size:10px;color:#8b93b4">2.8</small></h1><div class="sub">Smart Sync + Course Intelligence Bridge</div>
-<label>Nexora URL</label><input id="apiBase" placeholder="https://your-app.onrender.com"><label>Extension key</label><input id="token" type="password" placeholder="Paste key from Nexora">
-<div class="row"><label class="toggle"><input id="autoSync" type="checkbox"> Auto-sync while Chrome runs</label><div><label>Interval</label><select id="interval"><option value="15">15 min</option><option value="30">30 min</option><option value="60">60 min</option></select></div></div>
-<button id="save">Save connection</button><button class="secondary" id="scan">1. Detect & clean courses</button><button id="sync">2. Scan every course now</button><button class="secondary" id="import">Open Brightspace</button><button class="secondary" id="outline">Auto-detect current outline</button>
-<div id="status">Not connected yet.</div><div class="note">Smart Sync reads Brightspace through your existing signed-in session. It stores course metadata and links, not permanent lecture copies. Brightspace tabs may be closed. Keep Chrome running and stay signed in; Nexora will ask you to reconnect only when the university session expires.</div><script src="popup.js"></script></body></html>
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+/* Same palette as the Nexora app. No web fonts: an extension popup should not
+   depend on the network to render, so this uses the system stack. */
+:root{
+  --bg:#151310; --surface:#1E1B17; --surface-2:#262218;
+  --line:#37322B; --line-2:#4A443B;
+  --fg:#F7F4EF; --fg-2:#B8B1A5; --fg-3:#857E74;
+  --amber:#E8A94A; --green:#7FB08A; --red:#C9705C;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{width:376px;margin:0;padding:18px;background:var(--bg);color:var(--fg);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.5}
+h1{font-size:17px;margin:0;display:flex;align-items:center;gap:9px;font-weight:600}
+h1 i{width:7px;height:7px;border-radius:50%;background:var(--amber);font-style:normal;flex:none}
+h1 b{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--fg-3);font-weight:400}
+.sub{color:var(--fg-2);font-size:12.5px;margin:6px 0 16px}
+
+label{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--fg-3);margin:12px 0 6px}
+input,select{width:100%;background:var(--surface-2);border:1px solid var(--line-2);color:var(--fg);
+  padding:9px 11px;border-radius:5px;font:inherit;font-size:13.5px}
+input:focus,select:focus{outline:none;border-color:var(--amber)}
+
+button{width:100%;margin-top:9px;padding:10px;border-radius:5px;border:1px solid var(--amber);
+  background:var(--amber);color:#140F09;font:inherit;font-weight:600;font-size:13.5px;cursor:pointer}
+button.secondary{background:transparent;border-color:var(--line-2);color:var(--fg);font-weight:500}
+button.secondary:hover{border-color:var(--fg-3)}
+button:disabled{opacity:.5;cursor:default}
+
+.row{display:grid;grid-template-columns:1fr 116px;gap:9px;align-items:end}
+.toggle{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-2);margin-top:14px}
+.toggle input{width:auto}
+
+.site{margin-top:14px;padding:11px 12px;border:1px solid var(--line);border-radius:6px;
+  background:var(--surface)}
+.site .k{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--fg-3);display:flex;align-items:center;gap:7px}
+.site .k i{width:6px;height:6px;border-radius:50%;background:var(--fg-3);font-style:normal;flex:none}
+.site.on .k i{background:var(--green)}
+.site p{margin:6px 0 0;font-size:12.5px;color:var(--fg-2);overflow-wrap:anywhere}
+.site button{margin-top:9px}
+
+hr{border:0;border-top:1px solid var(--line);margin:16px 0}
+
+#status{font-size:12px;color:var(--fg-2);margin-top:14px;white-space:pre-wrap;line-height:1.5;
+  padding:11px;background:var(--surface);border:1px solid var(--line);border-radius:6px;
+  min-height:42px;max-height:230px;overflow:auto}
+.note{font-size:11px;color:var(--fg-3);margin-top:12px;line-height:1.5}
+</style>
+</head>
+<body>
+  <h1><i></i>Nexora Sync<b>3.0.0</b></h1>
+  <div class="sub">Brings your Brightspace courses, deadlines and lectures into Nexora.</div>
+
+  <div class="site" id="siteBox">
+    <span class="k"><i></i><span id="siteState">No university connected</span></span>
+    <p id="siteOrigin">Open your university's Brightspace in a tab, then press the button below.</p>
+    <button class="secondary" id="allow">Allow this Brightspace</button>
+  </div>
+
+  <hr>
+
+  <label for="apiBase">Nexora URL</label>
+  <input id="apiBase" placeholder="https://your-app.onrender.com">
+
+  <label for="token">Extension key</label>
+  <input id="token" type="password" placeholder="Paste the key from Nexora">
+
+  <div class="row">
+    <label class="toggle"><input id="autoSync" type="checkbox"> Auto-sync while Chrome runs</label>
+    <div>
+      <label for="interval">Interval</label>
+      <select id="interval">
+        <option value="15">15 min</option>
+        <option value="30">30 min</option>
+        <option value="60">60 min</option>
+      </select>
+    </div>
+  </div>
+
+  <button id="save">Save connection</button>
+  <button class="secondary" id="scan">1. Detect &amp; clean courses</button>
+  <button class="secondary" id="sync">2. Scan every course now</button>
+  <button class="secondary" id="outline">Read the outline on this page</button>
+
+  <div id="status">Not connected yet.</div>
+
+  <div class="note">
+    Nexora reads Brightspace through the session you are already signed into. It never
+    sees or stores your university password. Course metadata and links are saved to your
+    Nexora account; lecture text is fetched only when you ask for it.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

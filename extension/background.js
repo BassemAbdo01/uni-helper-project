@@ -1,6 +1,10 @@
 const ALARM_NAME = 'nexora-auto-sync';
-const DEFAULT_ORIGIN = 'https://brightspace.carleton.ca';
-const BRIGHTSPACE_PATTERNS = ['https://brightspace.carleton.ca/*', 'https://*.brightspace.com/*'];
+
+// Every Brightspace instance, whoever hosts it, serves its app under /d2l/ and
+// exposes the same /d2l/api/le/ REST API. That path is the reliable signal --
+// the domain is not, because most universities self-host on their own.
+const D2L_PATH = /\/d2l\//i;
+const DEFAULT_ORIGIN = '';
 
 const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -20,10 +24,20 @@ async function getConfig() {
 
 function normalizeOrigin(value) {
   try {
-    const url = new URL(String(value || DEFAULT_ORIGIN));
-    return url.origin;
+    return new URL(String(value || '')).origin;
   } catch (_) {
-    return DEFAULT_ORIGIN;
+    return DEFAULT_ORIGIN;   // '' until the student's own Brightspace is seen
+  }
+}
+
+// Has the student granted us their university's domain? Needed for background
+// sync; a click on the toolbar icon covers the active tab on its own.
+async function hasOriginPermission(origin) {
+  if (!origin) return false;
+  try {
+    return await chrome.permissions.contains({ origins: [`${origin}/*`] });
+  } catch (_) {
+    return false;
   }
 }
 
@@ -132,8 +146,15 @@ async function brightspaceJsonAllPages(path, origin, { maxPages = 40 } = {}) {
 }
 
 async function findBrightspaceTab() {
-  const tabs = await chrome.tabs.query({ url: BRIGHTSPACE_PATTERNS });
-  return tabs.find(t => /\/d2l\//i.test(t.url || '')) || tabs[0] || null;
+  // Look at every open tab and pick the one that is actually Brightspace,
+  // whatever domain the university runs it on. A tab sitting on /d2l/home or
+  // deeper wins over one merely parked on the login page.
+  const tabs = await chrome.tabs.query({});
+  const candidates = tabs.filter(t => D2L_PATH.test(t.url || ''));
+  if (!candidates.length) return null;
+  return candidates.find(t => /\/d2l\/(home|le|lms)\b/i.test(t.url || ''))
+      || candidates.find(t => t.active)
+      || candidates[0];
 }
 
 async function pingBrightspaceContentScript(tabId) {
@@ -154,6 +175,10 @@ async function ensureBrightspaceContentScript(tab) {
       files: ['content.js']
     });
   } catch (error) {
+    const origin = normalizeOrigin(tab.url);
+    if (origin && !(await hasOriginPermission(origin))) {
+      throw new Error(`Nexora needs your permission for ${origin}. Open the Nexora Sync popup while that tab is in front and press "Allow this Brightspace".`);
+    }
     throw new Error(`Nexora could not activate on this Brightspace page: ${error?.message || 'script injection failed'}`);
   }
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -165,7 +190,7 @@ async function ensureBrightspaceContentScript(tab) {
 
 async function sendToBrightspace(message, retries = 2) {
   const tab = await findBrightspaceTab();
-  if (!tab) throw new Error('Open Brightspace once and sign in so Nexora can connect your courses.');
+  if (!tab) throw new Error('Open your university\'s Brightspace in a tab and sign in, then try again.');
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -185,7 +210,7 @@ async function sendToBrightspace(message, retries = 2) {
 
 async function discoverCourses() {
   const tab = await findBrightspaceTab();
-  if (!tab) throw new Error('Open the Brightspace My Courses page and sign in first.');
+  if (!tab) throw new Error('Open your university\'s Brightspace My Courses page and sign in first.');
   const origin = normalizeOrigin(tab.url);
   await chrome.storage.sync.set({ brightspaceOrigin: origin });
 
@@ -634,7 +659,7 @@ async function downloadLectureBlob(request, cfg) {
             }
           } catch (_) {}
         }
-        throw new Error('Brightspace returned a page instead of the file. Run “Scan every course now” using Nexora Sync v1.0 so the direct file link is refreshed.');
+        throw new Error('Brightspace returned a page instead of the file. Run “Scan every course now” using Nexora Sync v3.0 so the direct file link is refreshed.');
       }
       return { ...fetched, blob };
     } catch (error) {
@@ -729,8 +754,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message?.type === 'NEXORA_START_IMPORT') {
         const cfg = await getConfig();
+        if (!cfg.brightspaceOrigin) {
+          throw new Error('Nexora does not know your university yet. Open your Brightspace in a tab and press "Allow this Brightspace" first.');
+        }
         const tab = await chrome.tabs.create({ url: `${cfg.brightspaceOrigin}/d2l/home`, active: true });
         sendResponse({ ok: true, tabId: tab.id });
+        return;
+      }
+      // The popup asks for the permission (it needs a user gesture) and then
+      // hands the origin here to be remembered as this student's university.
+      if (message?.type === 'NEXORA_SET_ORIGIN') {
+        const origin = normalizeOrigin(message.origin || '');
+        if (!origin) throw new Error('That tab does not look like a Brightspace page.');
+        await chrome.storage.sync.set({ brightspaceOrigin: origin });
+        sendResponse({ ok: true, origin, granted: await hasOriginPermission(origin) });
         return;
       }
       if (message?.type === 'NEXORA_FETCH_AND_PROCESS_LECTURE') {
@@ -745,7 +782,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message?.type === 'NEXORA_STATUS') {
         const config = await getConfig();
         const local = await chrome.storage.local.get(['syncStatus', 'lastSync', 'detectedCourses']);
-        sendResponse({ ok: true, configured: !!(config.apiBase && config.token), config, ...local });
+        sendResponse({
+          ok: true,
+          configured: !!(config.apiBase && config.token),
+          originGranted: await hasOriginPermission(config.brightspaceOrigin),
+          config,
+          ...local
+        });
         return;
       }
       sendResponse({ ok: true });
