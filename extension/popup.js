@@ -1,126 +1,163 @@
-const $ = id => document.getElementById(id);
+/* The popup is a state machine with exactly one primary button.
+   A student should never have to work out which of five buttons comes first. */
 
+const $ = id => document.getElementById(id);
 const D2L_PATH = /\/d2l\//i;
+const DEFAULT_API_BASE = 'https://uni-helper-project.onrender.com';
+
+let state = null;   // {kind, origin, apiBase}
+
+const originOf = url => { try { return new URL(String(url || '')).origin; } catch (_) { return ''; } };
 
 async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab || null;
 }
 
-function originOf(url) {
-  try { return new URL(String(url || '')).origin; } catch (_) { return ''; }
+function show({ step, headline, detail, action, disabled = false }) {
+  $('step').textContent = step || '';
+  $('step').style.visibility = step ? 'visible' : 'hidden';
+  $('headline').textContent = headline;
+  $('detail').textContent = detail;
+  $('go').textContent = action;
+  $('go').disabled = disabled;
 }
 
-async function refresh() {
-  const result = await chrome.runtime.sendMessage({ type: 'NEXORA_STATUS' }).catch(() => null);
-  if (!result) return;
+function say(text, kind = '') {
+  const box = $('result');
+  box.className = `result on ${kind}`;
+  box.textContent = text;
+}
+function clearSay() { $('result').className = 'result'; }
+function busy(on) { $('bar').className = on ? 'bar on' : 'bar'; $('go').disabled = on; }
 
-  $('apiBase').value = result.config?.apiBase || '';
-  $('token').value = result.config?.token || '';
-  $('autoSync').checked = result.config?.autoSyncEnabled !== false;
-  $('interval').value = String(result.config?.intervalMinutes || 30);
-
-  // The university is whatever Brightspace this student actually uses; it is
-  // learned from their own tab rather than shipped as a list of domains.
-  const origin = result.config?.brightspaceOrigin || '';
-  const granted = !!result.originGranted;
-  const box = $('siteBox');
-  box.classList.toggle('on', granted && !!origin);
-  if (origin) {
-    $('siteState').textContent = granted ? 'Connected' : 'Permission needed';
-    $('siteOrigin').textContent = granted
-      ? origin
-      : `${origin} — allow it so background sync can run.`;
-  } else {
-    $('siteState').textContent = 'No university connected';
-    $('siteOrigin').textContent = "Open your university's Brightspace in a tab, then press the button below.";
+/* ---------------- work out what the student should do next ---------------- */
+async function evaluate() {
+  const status = await chrome.runtime.sendMessage({ type: 'NEXORA_STATUS' }).catch(() => null);
+  if (!status) {
+    show({ headline: 'Extension not responding', detail: 'Reload the extension from chrome://extensions.', action: 'Retry' });
+    state = { kind: 'retry' };
+    return;
   }
 
-  const s = result.syncStatus || {};
-  const c = s.courseDiscovery || {};
-  const x = s.contentSummary || {};
-  const lines = [
-    result.configured ? '✓ Connected to Nexora' : 'Nexora URL and key not set',
-    result.lastSync ? `Last activity: ${new Date(result.lastSync).toLocaleString()}` : 'No activity yet',
-    s.running ? `Working: ${s.phase || 'syncing'} ${s.currentCourse || ''} ${s.progress || ''}` : '',
-    c.found !== undefined ? `Courses: ${c.found} detected · +${c.added || 0} · ${c.updated || 0} cleaned/updated · ${c.unchanged || 0} unchanged` : '',
-    x.courses !== undefined ? `Smart Sync: ${x.scanned}/${x.courses} courses · ${x.itemsFound} items mapped${x.preserved ? ` · ${x.preserved} safely preserved` : ''}` : '',
-    x.courses !== undefined ? `Nexora content: +${x.added || 0} · ${x.updated || 0} updated · ${x.unchanged || 0} unchanged · ${x.failed || 0} failed` : '',
-    s.connectionExpired ? '⚠ Brightspace session expired — open Brightspace and sign in again.' : '',
-    s.error ? `Error: ${s.error}` : '',
-    x.details?.length ? '\n' + x.details.slice(-8).map(d => `${d.course}: ${d.items ?? 0} items${d.error ? ` — ${d.error}` : ''}`).join('\n') : ''
-  ].filter(Boolean);
-  $('status').textContent = lines.join('\n');
-}
+  $('apiBase').value = status.config?.apiBase || '';
+  $('token').value = status.config?.token || '';
+  $('autoSync').checked = status.config?.autoSyncEnabled !== false;
+  $('interval').value = String(status.config?.intervalMinutes || 30);
 
-async function save() {
-  await chrome.storage.sync.set({
-    apiBase: $('apiBase').value.trim(),
-    token: $('token').value.trim(),
-    autoSyncEnabled: $('autoSync').checked,
-    intervalMinutes: Number($('interval').value)
-  });
-  await chrome.runtime.sendMessage({ type: 'NEXORA_CONFIG_CHANGED' });
-  await refresh();
-}
-
-/* Asking for the student's own Brightspace domain, one origin at a time.
-   chrome.permissions.request has to be called straight from a user gesture,
-   which is why it lives in the popup and not in the service worker. */
-$('allow').onclick = async () => {
+  const apiBase = status.config?.apiBase || DEFAULT_API_BASE;
   const tab = await activeTab();
-  const origin = originOf(tab?.url);
+  const onBrightspace = D2L_PATH.test(tab?.url || '');
+  const tabOrigin = originOf(tab?.url);
 
-  if (!origin) {
-    $('status').textContent = 'Could not read the current tab.';
+  // 1. Not linked to a Nexora account yet.
+  if (!status.configured) {
+    state = { kind: 'pair', apiBase };
+    show({
+      step: 'Step 1 of 2',
+      headline: 'Connect to Nexora',
+      detail: 'Opens Nexora and links this extension to your account. Nothing to copy or type.',
+      action: 'Connect to Nexora'
+    });
     return;
   }
-  if (!D2L_PATH.test(tab.url || '')) {
-    $('status').textContent =
-      'That tab is not a Brightspace page. Open your university\'s Brightspace ' +
-      '(the address will contain /d2l/), then press this again.';
+
+  // 2. Linked, but we have never seen their university's Brightspace.
+  if (!onBrightspace && !status.config?.brightspaceOrigin) {
+    state = { kind: 'needs-brightspace' };
+    show({
+      step: 'Step 2 of 2',
+      headline: 'Open your Brightspace',
+      detail: "Sign in to your university's Brightspace in a tab, then come back here. Any university works.",
+      action: 'Waiting for Brightspace…',
+      disabled: true
+    });
     return;
   }
 
-  let granted = false;
+  // 3. On a Brightspace page we do not have permission for yet. Syncing will
+  //    ask for it, so this is still one button.
+  if (onBrightspace && tabOrigin && !status.originGranted) {
+    state = { kind: 'sync', origin: tabOrigin, needsPermission: true };
+    show({
+      step: 'Step 2 of 2',
+      headline: 'Import your courses',
+      detail: `Chrome will ask permission for ${tabOrigin.replace(/^https?:\/\//, '')} first.`,
+      action: 'Import my courses'
+    });
+    return;
+  }
+
+  // 4. Ready.
+  const last = status.lastSync ? new Date(status.lastSync).toLocaleString() : null;
+  const summary = status.syncStatus?.contentSummary;
+  state = { kind: 'sync', origin: tabOrigin || status.config?.brightspaceOrigin };
+  show({
+    step: '',
+    headline: 'Ready to sync',
+    detail: last ? `Last synced ${last}.` : 'Bring your courses, deadlines and lectures into Nexora.',
+    action: last ? 'Sync again' : 'Import my courses'
+  });
+  if (summary?.courses !== undefined) {
+    say(`${summary.courses} courses · ${summary.itemsFound || 0} items in Nexora`, 'good');
+  }
+  if (status.syncStatus?.connectionExpired) {
+    say('Your Brightspace session expired. Open Brightspace, sign in again, then sync.', 'bad');
+  }
+}
+
+/* ---------------- the one button ---------------- */
+$('go').onclick = async () => {
+  clearSay();
+
+  if (state?.kind === 'retry') { await evaluate(); return; }
+
+  if (state?.kind === 'pair') {
+    // The website hands the key straight to the extension over the bridge.
+    await chrome.tabs.create({ url: `${state.apiBase}/connect-brightspace?pair=1` });
+    window.close();
+    return;
+  }
+
+  if (state?.kind !== 'sync') return;
+
+  // Asking for the university's domain has to happen on this click: Chrome
+  // only grants an optional permission from a user gesture.
+  if (state.needsPermission && state.origin) {
+    let granted = false;
+    try {
+      granted = await chrome.permissions.request({ origins: [`${state.origin}/*`] });
+    } catch (error) {
+      say(`Chrome refused the permission request: ${error?.message || error}`, 'bad');
+      return;
+    }
+    if (!granted) {
+      say('Without permission for that page Nexora cannot read your courses.', 'bad');
+      return;
+    }
+    await chrome.runtime.sendMessage({ type: 'NEXORA_SET_ORIGIN', origin: state.origin });
+  }
+
+  busy(true);
+  say('Finding your courses…');
   try {
-    granted = await chrome.permissions.request({ origins: [`${origin}/*`] });
+    const result = await chrome.runtime.sendMessage({ type: 'NEXORA_SYNC_EVERYTHING' });
+    if (!result?.ok) throw new Error(result?.error || 'Sync failed.');
+    const found = result.discovery?.courseDiscovery?.found ?? result.discovery?.found;
+    const items = result.summary?.itemsFound;
+    say(`Done. ${found ?? 0} courses${items !== undefined ? ` · ${items} items imported` : ''}.`, 'good');
   } catch (error) {
-    $('status').textContent = `Chrome refused the permission request: ${error?.message || error}`;
-    return;
+    say(error?.message || 'Sync failed.', 'bad');
+  } finally {
+    busy(false);
+    await evaluate();
   }
-
-  if (!granted) {
-    $('status').textContent = 'Permission declined, so Nexora cannot read that Brightspace.';
-    return;
-  }
-
-  const result = await chrome.runtime.sendMessage({ type: 'NEXORA_SET_ORIGIN', origin });
-  $('status').textContent = result?.ok
-    ? `${origin} connected. Press "Detect & clean courses" next.`
-    : (result?.error || 'Could not save that university.');
-  await refresh();
 };
 
-$('save').onclick = save;
-
-$('scan').onclick = async () => {
-  await save();
-  $('status').textContent = 'Scanning your open Brightspace for courses…';
-  await chrome.runtime.sendMessage({ type: 'NEXORA_SCAN_OPEN_TABS' });
-  await refresh();
-};
-
-$('sync').onclick = async () => {
-  await save();
-  $('status').textContent = 'Smart Sync is checking lectures, assignments, quizzes and announcements…';
-  chrome.runtime.sendMessage({ type: 'NEXORA_SYNC_ALL_COURSES' }).then(refresh);
-  setTimeout(refresh, 1500);
-};
-
+/* ---------------- secondary: outline on the current page ---------------- */
 $('outline').onclick = async () => {
-  await save();
-  $('status').textContent = 'Reading the current page for a course outline…';
+  clearSay();
+  say('Reading this page for a course outline…');
   try {
     const tab = await activeTab();
     if (!tab?.id) throw new Error('No active tab was found.');
@@ -134,7 +171,7 @@ $('outline').onclick = async () => {
       response = await chrome.tabs.sendMessage(tab.id, { action: 'extract_outline' });
     }
     if (!response?.ok || !response.text) {
-      throw new Error(response?.error || 'No outline text was detected on this page.');
+      throw new Error(response?.error || 'No outline text was found on this page.');
     }
 
     await chrome.storage.local.set({
@@ -144,13 +181,26 @@ $('outline').onclick = async () => {
     });
 
     const cfg = await chrome.storage.sync.get(['apiBase']);
-    const base = String(cfg.apiBase || '').replace(/\/$/, '');
-    if (!base) throw new Error('Save your Nexora URL first.');
+    const base = String(cfg.apiBase || DEFAULT_API_BASE).replace(/\/$/, '');
     await chrome.tabs.create({ url: `${base}/grade-calculator` });
-    $('status').textContent = 'Outline detected. Opening the Nexora grade calculator…';
+    window.close();
   } catch (error) {
-    $('status').textContent = `Outline detection failed: ${error?.message || error}`;
+    say(error?.message || String(error), 'bad');
   }
 };
 
-refresh();
+/* ---------------- advanced ---------------- */
+$('save').onclick = async () => {
+  await chrome.storage.sync.set({
+    apiBase: $('apiBase').value.trim() || DEFAULT_API_BASE,
+    token: $('token').value.trim(),
+    autoSyncEnabled: $('autoSync').checked,
+    intervalMinutes: Number($('interval').value)
+  });
+  await chrome.runtime.sendMessage({ type: 'NEXORA_CONFIG_CHANGED' });
+  say('Settings saved.', 'good');
+  await evaluate();
+};
+$('autoSync').onchange = () => $('save').click();
+
+evaluate();

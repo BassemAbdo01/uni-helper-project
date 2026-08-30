@@ -27,6 +27,18 @@
   font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--amber)}
 .steps li strong{color:var(--fg);font-weight:500}
 
+.pair{border:1px solid var(--amber);border-radius:9px;background:var(--surface-2);
+  padding:18px;margin-bottom:22px;display:flex;gap:15px;align-items:flex-start}
+.pair i{width:9px;height:9px;border-radius:50%;background:var(--amber);flex:none;margin-top:6px;
+  font-style:normal}
+.pair.done i{background:var(--green)}
+.pair.failed i{background:var(--red)}
+.pair.done{border-color:rgba(127,176,138,.5)}
+.pair.failed{border-color:rgba(201,112,92,.5)}
+.pair div{min-width:0}
+.pair strong{display:block;font-size:15px;font-weight:500}
+.pair p{margin:5px 0 0;color:var(--fg-2);font-size:13.5px}
+
 .keybox{margin-top:14px;padding:13px 15px;border-radius:6px;border:1px solid var(--line-2);
   background:var(--surface-3)}
 .keybox code{display:block;font-family:var(--mono);font-size:12.5px;word-break:break-all;
@@ -55,6 +67,16 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 </div>
 
 <div class="narrow">
+  {% if request.args.get('pair') == '1' %}
+  <div class="pair" id="pairCard">
+    <i></i>
+    <div>
+      <strong id="pairTitle">Connecting Nexora Sync…</strong>
+      <p id="pairDetail">Handing your extension key to the browser extension. This takes a second.</p>
+    </div>
+  </div>
+  {% endif %}
+
   <section class="card">
     <header><div><span class="k">Where things stand</span><h2>Sync status</h2></div></header>
     <div class="body pad">
@@ -143,6 +165,61 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 <script>
 (() => {
   "use strict";
+
+  /* One-click pairing. The extension sends the student here with ?pair=1; this
+     page already holds their session, so it fetches their own key and passes it
+     to the extension through the bridge content script. Nothing is displayed
+     and nothing is pasted. */
+  const card = document.getElementById('pairCard');
+  if (card) {
+    const CHANNEL = 'NEXORA_COURSE_INTELLIGENCE_V10';
+    const title = document.getElementById('pairTitle');
+    const detail = document.getElementById('pairDetail');
+    const finish = (kind, head, body) => {
+      card.className = `pair ${kind}`;
+      title.textContent = head;
+      detail.textContent = body;
+    };
+
+    (async () => {
+      let token;
+      try {
+        const res = await fetch('/api/sync/extension-key', { method: 'POST' });
+        const data = await res.json();
+        token = data.token;
+        if (!token) throw new Error('no key');
+      } catch (_) {
+        finish('failed', 'Could not create your extension key',
+               'Reload this page while signed in and try again.');
+        return;
+      }
+
+      // No reply means the extension is not installed on this browser.
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', listener);
+        finish('failed', 'Nexora Sync is not installed here',
+               'Install the extension in this browser, then press Connect again.');
+      }, 6000);
+
+      function listener(event) {
+        const d = event.data;
+        if (event.source !== window || d?.channel !== CHANNEL || d?.type !== 'PAIR_RESULT') return;
+        clearTimeout(timer);
+        window.removeEventListener('message', listener);
+        if (d.response?.ok) {
+          finish('done', 'Nexora Sync is connected',
+                 "Open your university's Brightspace, then press Import my courses in the extension.");
+        } else {
+          finish('failed', 'The extension refused the key',
+                 d.response?.error || 'Try pressing Connect in the extension again.');
+        }
+      }
+
+      window.addEventListener('message', listener);
+      window.postMessage({ channel: CHANNEL, type: 'PAIR', token, apiBase: location.origin }, location.origin);
+    })();
+  }
+
   const button = document.getElementById('generateExtensionKey');
   const box = document.getElementById('extensionKeyBox');
   const key = document.getElementById('extensionKey');

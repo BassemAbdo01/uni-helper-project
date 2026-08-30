@@ -6,6 +6,10 @@ const ALARM_NAME = 'nexora-auto-sync';
 const D2L_PATH = /\/d2l\//i;
 const DEFAULT_ORIGIN = '';
 
+// A student should never have to type this. It is still editable under
+// Advanced for anyone running their own copy.
+const DEFAULT_API_BASE = 'https://uni-helper-project.onrender.com';
+
 const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -14,7 +18,7 @@ async function getConfig() {
     'apiBase', 'token', 'autoSyncEnabled', 'intervalMinutes', 'brightspaceOrigin'
   ]);
   return {
-    apiBase: String(v.apiBase || '').replace(/\/$/, ''),
+    apiBase: String(v.apiBase || DEFAULT_API_BASE).replace(/\/$/, ''),
     token: String(v.token || ''),
     autoSyncEnabled: v.autoSyncEnabled !== false,
     intervalMinutes: Math.max(15, Number(v.intervalMinutes) || 30),
@@ -774,6 +778,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true, result: await fetchAndProcessLecture(message.request || {}) });
         return;
       }
+      // The website hands the key over directly, so nobody copies a token.
+      // The page can only reach here through the bridge content script, which
+      // runs on the Nexora origin and nowhere else.
+      if (message?.type === 'NEXORA_PAIR') {
+        const token = String(message.token || '').trim();
+        if (!token) throw new Error('Nexora did not return a key.');
+        const apiBase = String(message.apiBase || DEFAULT_API_BASE).replace(/\/$/, '');
+        await chrome.storage.sync.set({ token, apiBase });
+        await configureAlarm();
+        sendResponse({ ok: true, apiBase });
+        return;
+      }
+
+      // "Detect courses" then "scan every course" was never two decisions a
+      // student needed to make; it is one button now.
+      if (message?.type === 'NEXORA_SYNC_EVERYTHING') {
+        await setStatus({ running: true, phase: 'finding-courses', error: '' });
+        const discovery = await discoverCourses();
+        const summary = await syncAllCourses('manual');
+        sendResponse({ ok: true, discovery, summary });
+        return;
+      }
+
       if (message?.type === 'NEXORA_CONFIG_CHANGED') {
         await configureAlarm();
         sendResponse({ ok: true });

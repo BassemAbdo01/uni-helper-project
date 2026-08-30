@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <style>
-/* Same palette as the Nexora app. No web fonts: an extension popup should not
-   depend on the network to render, so this uses the system stack. */
+/* Same palette as the Nexora app. No web fonts: a popup should never wait on
+   the network to render. */
 :root{
   --bg:#151310; --surface:#1E1B17; --surface-2:#262218;
   --line:#37322B; --line-2:#4A443B;
@@ -13,88 +13,95 @@
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box}
-body{width:376px;margin:0;padding:18px;background:var(--bg);color:var(--fg);
+body{width:340px;margin:0;padding:18px;background:var(--bg);color:var(--fg);
   font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.5}
-h1{font-size:17px;margin:0;display:flex;align-items:center;gap:9px;font-weight:600}
-h1 i{width:7px;height:7px;border-radius:50%;background:var(--amber);font-style:normal;flex:none}
-h1 b{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--fg-3);font-weight:400}
-.sub{color:var(--fg-2);font-size:12.5px;margin:6px 0 16px}
 
+h1{font-size:16px;margin:0 0 16px;display:flex;align-items:center;gap:9px;font-weight:600}
+h1 i{width:7px;height:7px;border-radius:50%;background:var(--amber);font-style:normal;flex:none}
+h1 b{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--fg-3);font-weight:400}
+
+/* The whole popup is one instruction and one button. */
+.step{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--amber);margin-bottom:8px}
+.headline{font-size:16px;font-weight:600;margin:0 0 6px;line-height:1.35}
+.detail{color:var(--fg-2);font-size:13px;margin:0}
+
+button{width:100%;margin-top:14px;padding:11px;border-radius:6px;border:1px solid var(--amber);
+  background:var(--amber);color:#140F09;font:inherit;font-weight:600;font-size:14px;cursor:pointer}
+button:hover:not(:disabled){filter:brightness(1.06)}
+button.secondary{background:transparent;border-color:var(--line-2);color:var(--fg-2);font-weight:500;
+  font-size:13px;padding:9px}
+button.secondary:hover:not(:disabled){border-color:var(--fg-3);color:var(--fg)}
+button:disabled{opacity:.45;cursor:default}
+
+.bar{height:3px;border-radius:2px;background:var(--surface-2);overflow:hidden;margin-top:14px;display:none}
+.bar.on{display:block}
+.bar i{display:block;height:100%;width:35%;background:var(--amber);
+  animation:slide 1.1s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+
+.result{margin-top:14px;padding:11px 12px;border:1px solid var(--line);border-radius:6px;
+  background:var(--surface);font-size:12.5px;color:var(--fg-2);white-space:pre-wrap;
+  max-height:170px;overflow:auto;display:none}
+.result.on{display:block}
+.result.bad{border-color:rgba(201,112,92,.45)}
+.result.good{border-color:rgba(127,176,138,.45)}
+
+details{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
+summary{font-size:12px;color:var(--fg-3);cursor:pointer;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary:before{content:"› ";color:var(--fg-3)}
+details[open] summary:before{content:"⌄ "}
 label{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
   color:var(--fg-3);margin:12px 0 6px}
 input,select{width:100%;background:var(--surface-2);border:1px solid var(--line-2);color:var(--fg);
-  padding:9px 11px;border-radius:5px;font:inherit;font-size:13.5px}
+  padding:8px 10px;border-radius:5px;font:inherit;font-size:13px}
 input:focus,select:focus{outline:none;border-color:var(--amber)}
-
-button{width:100%;margin-top:9px;padding:10px;border-radius:5px;border:1px solid var(--amber);
-  background:var(--amber);color:#140F09;font:inherit;font-weight:600;font-size:13.5px;cursor:pointer}
-button.secondary{background:transparent;border-color:var(--line-2);color:var(--fg);font-weight:500}
-button.secondary:hover{border-color:var(--fg-3)}
-button:disabled{opacity:.5;cursor:default}
-
-.row{display:grid;grid-template-columns:1fr 116px;gap:9px;align-items:end}
-.toggle{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-2);margin-top:14px}
+.toggle{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-2);margin-top:12px}
 .toggle input{width:auto}
-
-.site{margin-top:14px;padding:11px 12px;border:1px solid var(--line);border-radius:6px;
-  background:var(--surface)}
-.site .k{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
-  color:var(--fg-3);display:flex;align-items:center;gap:7px}
-.site .k i{width:6px;height:6px;border-radius:50%;background:var(--fg-3);font-style:normal;flex:none}
-.site.on .k i{background:var(--green)}
-.site p{margin:6px 0 0;font-size:12.5px;color:var(--fg-2);overflow-wrap:anywhere}
-.site button{margin-top:9px}
-
-hr{border:0;border-top:1px solid var(--line);margin:16px 0}
-
-#status{font-size:12px;color:var(--fg-2);margin-top:14px;white-space:pre-wrap;line-height:1.5;
-  padding:11px;background:var(--surface);border:1px solid var(--line);border-radius:6px;
-  min-height:42px;max-height:230px;overflow:auto}
-.note{font-size:11px;color:var(--fg-3);margin-top:12px;line-height:1.5}
+.foot{font-size:11px;color:var(--fg-3);margin-top:14px;line-height:1.5}
 </style>
 </head>
 <body>
-  <h1><i></i>Nexora Sync<b>3.0.0</b></h1>
-  <div class="sub">Brings your Brightspace courses, deadlines and lectures into Nexora.</div>
+  <h1><i></i>Nexora Sync<b id="ver">3.0.0</b></h1>
 
-  <div class="site" id="siteBox">
-    <span class="k"><i></i><span id="siteState">No university connected</span></span>
-    <p id="siteOrigin">Open your university's Brightspace in a tab, then press the button below.</p>
-    <button class="secondary" id="allow">Allow this Brightspace</button>
-  </div>
+  <p class="step" id="step">Step 1 of 2</p>
+  <p class="headline" id="headline">Connect to Nexora</p>
+  <p class="detail" id="detail">Checking…</p>
 
-  <hr>
+  <button id="go" disabled>…</button>
+  <div class="bar" id="bar"><i></i></div>
+  <div class="result" id="result"></div>
 
-  <label for="apiBase">Nexora URL</label>
-  <input id="apiBase" placeholder="https://your-app.onrender.com">
-
-  <label for="token">Extension key</label>
-  <input id="token" type="password" placeholder="Paste the key from Nexora">
-
-  <div class="row">
-    <label class="toggle"><input id="autoSync" type="checkbox"> Auto-sync while Chrome runs</label>
-    <div>
-      <label for="interval">Interval</label>
-      <select id="interval">
-        <option value="15">15 min</option>
-        <option value="30">30 min</option>
-        <option value="60">60 min</option>
-      </select>
-    </div>
-  </div>
-
-  <button id="save">Save connection</button>
-  <button class="secondary" id="scan">1. Detect &amp; clean courses</button>
-  <button class="secondary" id="sync">2. Scan every course now</button>
   <button class="secondary" id="outline">Read the outline on this page</button>
 
-  <div id="status">Not connected yet.</div>
+  <details id="advanced">
+    <summary>Advanced</summary>
 
-  <div class="note">
-    Nexora reads Brightspace through the session you are already signed into. It never
-    sees or stores your university password. Course metadata and links are saved to your
-    Nexora account; lecture text is fetched only when you ask for it.
-  </div>
+    <label class="toggle" style="margin-top:14px">
+      <input id="autoSync" type="checkbox"> Keep courses up to date automatically
+    </label>
+
+    <label for="interval">Check every</label>
+    <select id="interval">
+      <option value="15">15 minutes</option>
+      <option value="30">30 minutes</option>
+      <option value="60">60 minutes</option>
+    </select>
+
+    <label for="apiBase">Nexora URL</label>
+    <input id="apiBase" placeholder="https://uni-helper-project.onrender.com">
+
+    <label for="token">Extension key</label>
+    <input id="token" type="password" placeholder="Set automatically when you connect">
+
+    <button class="secondary" id="save">Save these settings</button>
+  </details>
+
+  <p class="foot">
+    Nexora reads Brightspace through the session you are already signed into, and never
+    sees your university password.
+  </p>
 
   <script src="popup.js"></script>
 </body>

@@ -39,7 +39,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://*.onrender.com/*"
+        "https://uni-helper-project.onrender.com/*"
       ],
       "js": [
         "nexora-bridge.js"

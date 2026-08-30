@@ -17,6 +17,21 @@
       window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '3.0.0' }, window.location.origin);
       return;
     }
+    // Pairing: the page has the student's session, fetches their own key and
+    // hands it over, so the key never appears on screen or gets pasted.
+    if (data.type === 'PAIR') {
+      try {
+        const result = await extensionRequest({
+          type: 'NEXORA_PAIR',
+          token: data.token,
+          apiBase: data.apiBase || window.location.origin
+        });
+        window.postMessage({ channel: CHANNEL, type: 'PAIR_RESULT', response: { ok: true, result } }, window.location.origin);
+      } catch (error) {
+        window.postMessage({ channel: CHANNEL, type: 'PAIR_RESULT', response: { ok: false, error: error?.message || 'Pairing failed.' } }, window.location.origin);
+      }
+      return;
+    }
     if (data.type !== 'FETCH_LECTURE') return;
     const requestId = data.requestId;
     if (!requestId || pending.has(requestId)) return;
