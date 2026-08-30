@@ -499,9 +499,20 @@ if (renderer) {
      rather than design. It now belongs to the hero and the close, and fades out
      in between -- the panels carry those sections alone.
 
-     PRESENCE is scale, OPACITY is what actually removes it. */
+     PRESENCE is scale. Opacity is a separate, much steeper curve: interpolating
+     it formation-to-formation left it at 0.16 by section 01 and still ramping
+     down through the top of section 02, so faint cards lingered over both. It
+     now reaches zero barely past the hero and stays there until the close is
+     approaching. */
   const PRESENCE = [1, .62, .55, .55, 1];
-  const OPACITY  = [1, .16, 0, 0, 1];
+  const FADE_OUT_BY = .55;        // formations after the hero
+  const FADE_IN_FROM = 3.45;      // formations before the close
+  const smooth = t => t * t * (3 - 2 * t);
+  function sceneAlpha(at) {
+    if (at <= FADE_OUT_BY) return smooth(1 - at / FADE_OUT_BY);
+    if (at >= FADE_IN_FROM) return smooth((at - FADE_IN_FROM) / (4 - FADE_IN_FROM));
+    return 0;
+  }
 
   const key = new THREE.DirectionalLight('#FFF6E8', 2.9);
   key.position.set(-4.6, 5.4, 5.0); scene.add(key);
@@ -590,7 +601,7 @@ if (renderer) {
     }
 
     const presence = PRESENCE[i0] + (PRESENCE[i1] - PRESENCE[i0]) * local;
-    const alpha = OPACITY[i0] + (OPACITY[i1] - OPACITY[i0]) * local;
+    const alpha = sceneAlpha(at);
 
     group.scale.setScalar(presence);
     group.position.x = (1 - presence) * 1.2;
@@ -602,8 +613,10 @@ if (renderer) {
       for (let i = 0; i < allMats.length; i++) allMats[i].opacity = alpha;
       lastAlpha = alpha;
     }
-    // Fully faded: skip the draw entirely rather than composite 20 invisible meshes.
-    if (alpha < .01) { group.visible = false; renderer.clear(); return; }
+    // Faded: skip the draw entirely rather than composite 20 near-invisible
+    // meshes. The threshold is generous because anything under a few percent is
+    // still perceptible as a smudge on a dark ground.
+    if (alpha < .025) { group.visible = false; renderer.clear(); return; }
     group.visible = true;
 
     renderer.render(scene, camera);
