@@ -202,7 +202,7 @@ footer{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--fg-3);fo
   <section class="hero"><div class="shell"><div class="hero-copy">
     <p class="eyebrow rv">The intelligent student OS</p>
     <h1 class="rv">Your semester, <em>solved</em> before it starts.</h1>
-    <p class="lede rv">Nexora pulls your term out of Brightspace, reads the rules that decide your grade, and turns your lectures into something you can actually study.</p>
+    <p class="lede rv">Six tabs, a syllabus nobody reads twice, deadlines you are already behind on. Nexora pulls the whole mess out of Brightspace, reads the rules that decide your grade, and turns your lectures into something you can study.</p>
     <div class="acts rv">
       <a class="btn" href="#">Start free</a>
       <a class="btn quiet" href="#grades">See it read an outline</a>
@@ -312,9 +312,9 @@ Assignments (<mark>best 2 of 3</mark>) · Labs (<mark>best 10 of 12</mark>) · B
   </div></section>
 
   <section class="close"><div class="shell"><div class="hero-copy">
-    <p class="num rv">04 — Ready</p>
-    <h2 class="rv">Know where you stand in <em>week one</em>.</h2>
-    <p class="lede rv">Not in April, when the arithmetic finally catches up with you.</p>
+    <p class="num rv">04 — In order</p>
+    <h2 class="rv">Every course <em>in order</em>, in week one.</h2>
+    <p class="lede rv">The mess you started with, stacked and sorted — so you know where you stand now, not in April when the arithmetic finally catches up with you.</p>
     <div class="acts rv"><a class="btn" href="#">Start free</a>
       <a class="btn quiet" href="#sync">Back to the top</a></div>
   </div></div></section>
@@ -575,7 +575,10 @@ if (renderer) {
     shelf.push({ mesh, rest, from: { x: rr(1.4, 2.6), y: rest.y + rr(1.4, 2.6), z: rr(-.6, .5),
                                      ry: rr(-.5, .5), rz: rr(-.35, .35) }, delay: i * .085 });
   });
-  books.position.y = -.15;
+  /* The stack builds upward from -0.92 and is about 1.35 tall, so its centre
+     sits near -0.25 in its own space. Lifting the group puts that centre level
+     with the copy instead of hanging below it. */
+  books.position.y = .34;
 
   const key = new THREE.DirectionalLight('#FFF6E8', 2.9);
   key.position.set(-4.6, 5.4, 5.0); scene.add(key);
