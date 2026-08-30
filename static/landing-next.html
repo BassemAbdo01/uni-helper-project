@@ -2,106 +2,187 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Nexora — concept</title>
+<title>Nexora</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600&family=Archivo:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600&family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
 :root{
-  --bg:#100E0C;
-  --fg:#F4F1EC; --fg-2:#ADA79D; --fg-3:#756E64;
-  --rule:#272420; --rule-2:#3A352F;
-  --accent:#E0A340;
+  --bg:#0E0C0B;
+  --surface:#171512;
+  --surface-2:#1E1B17;
+  --line:#292521;
+  --line-2:#3A342D;
+  --fg:#F5F2ED;
+  --fg-2:#A9A297;
+  --fg-3:#6F6961;
+  --amber:#E8A94A;
+  --amber-soft:rgba(232,169,74,.13);
+  --green:#7FB08A;
+  --red:#C9705C;
   --ease:cubic-bezier(.22,.61,.36,1);
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{
   margin:0;background:var(--bg);color:var(--fg);overflow-x:hidden;
-  font-family:"Archivo",ui-sans-serif,system-ui,sans-serif;font-size:17px;line-height:1.65;
+  font-family:"Archivo",ui-sans-serif,system-ui,sans-serif;font-size:16.5px;line-height:1.62;
   -webkit-font-smoothing:antialiased;
 }
-/* Not a flat black field: a vertical lift plus two slow washes, so the page has
-   somewhere for the eye to rest even where the scene is quiet. */
+.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+
 #wash{position:fixed;inset:0;z-index:0;pointer-events:none;
   background:
-    radial-gradient(62% 48% at 76% 24%, rgba(224,163,64,.10), transparent 66%),
-    radial-gradient(56% 44% at 18% 86%, rgba(128,150,198,.06), transparent 70%),
-    linear-gradient(180deg,#181512 0%,#100E0C 40%,#131110 100%)}
+    radial-gradient(64% 50% at 74% 18%, rgba(232,169,74,.10), transparent 64%),
+    radial-gradient(52% 44% at 14% 88%, rgba(120,146,200,.055), transparent 70%),
+    linear-gradient(180deg,#1A1613 0%,#0E0C0B 38%,#121010 100%)}
 #gl{position:fixed;inset:0;z-index:1;display:block;pointer-events:none}
 #glfallback{position:fixed;inset:0;z-index:1;display:none;
-  background:radial-gradient(46% 52% at 74% 46%,rgba(224,163,64,.12),transparent 70%)}
+  background:radial-gradient(46% 52% at 72% 40%,rgba(232,169,74,.13),transparent 70%)}
 #grain{position:fixed;inset:0;z-index:2;pointer-events:none;opacity:.04;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E")}
 .content{position:relative;z-index:3}
+.shell{width:100%;max-width:1280px;margin:0 auto;padding:0 clamp(22px,4.5vw,72px)}
 
-/* .shell sits inside display:flex sections, so it needs an explicit width.
-   Without it the flex item shrank to its content and every percentage inside
-   collapsed with it -- the copy column came out at 247px instead of 620px. */
-.shell{width:100%;max-width:1320px;margin:0 auto;padding:0 clamp(24px,5vw,80px)}
-
-nav{position:absolute;top:0;left:0;right:0;z-index:20}
-.nav-in{display:flex;align-items:center;justify-content:space-between;padding:30px 0}
+/* ---------- nav ---------- */
+nav{position:fixed;top:0;left:0;right:0;z-index:40;transition:background .4s var(--ease),border-color .4s var(--ease);
+  border-bottom:1px solid transparent}
+nav.stuck{background:rgba(14,12,11,.82);backdrop-filter:blur(16px);border-bottom-color:var(--line)}
+.nav-in{display:flex;align-items:center;justify-content:space-between;padding:20px 0}
 .brand{font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:19px;letter-spacing:-.02em;
-  display:flex;align-items:center;gap:11px}
-.brand i{width:6px;height:6px;border-radius:50%;background:var(--accent);font-style:normal}
-.nav-l{display:flex;gap:34px;font-size:14px;color:var(--fg-2)}
+  display:flex;align-items:center;gap:10px}
+.brand i{width:6px;height:6px;border-radius:50%;background:var(--amber);font-style:normal}
+.nav-l{display:flex;gap:30px;font-size:14px;color:var(--fg-2)}
 .nav-l a{color:inherit;text-decoration:none;transition:color .3s var(--ease)}
 .nav-l a:hover{color:var(--fg)}
 
-.btn{--lift:0px;display:inline-flex;align-items:center;gap:11px;font-size:14.5px;font-weight:500;
-  padding:14px 26px;border-radius:2px;text-decoration:none;cursor:pointer;
-  background:var(--accent);color:#100E0C;border:1px solid var(--accent);
+.btn{--lift:0px;display:inline-flex;align-items:center;gap:10px;font-size:14.5px;font-weight:600;
+  padding:13px 24px;border-radius:3px;text-decoration:none;cursor:pointer;
+  background:var(--amber);color:#140F09;border:1px solid var(--amber);
   transform:translateY(var(--lift)) scale(1);box-shadow:0 1px 2px rgba(0,0,0,.5);
-  transition:transform .42s var(--ease),box-shadow .42s var(--ease),background .42s var(--ease)}
-.btn:hover{--lift:-2px;transform:translateY(var(--lift)) scale(1.018);
-  box-shadow:0 18px 42px -18px rgba(224,163,64,.5),0 2px 6px rgba(0,0,0,.6)}
+  transition:transform .4s var(--ease),box-shadow .4s var(--ease)}
+.btn:hover{--lift:-2px;transform:translateY(var(--lift)) scale(1.02);
+  box-shadow:0 20px 44px -18px rgba(232,169,74,.55),0 2px 6px rgba(0,0,0,.6)}
 .btn:active{transform:translateY(0) scale(.995);transition-duration:.09s}
-.btn.quiet{background:transparent;color:var(--fg);border-color:var(--rule-2)}
-.btn.quiet:hover{border-color:var(--fg-3);background:rgba(244,241,236,.05);
+.btn.quiet{background:transparent;color:var(--fg);border-color:var(--line-2);font-weight:500}
+.btn.quiet:hover{border-color:var(--fg-3);background:rgba(245,242,237,.045);
   box-shadow:0 18px 40px -22px rgba(0,0,0,.9)}
-a:focus-visible{outline:1px solid var(--accent);outline-offset:4px}
+a:focus-visible,button:focus-visible{outline:1px solid var(--amber);outline-offset:4px}
 
-.rv{opacity:0;filter:blur(12px);transform:translateY(14px);
-  transition:opacity 1s var(--ease),filter 1s var(--ease),transform 1s var(--ease)}
+.rv{opacity:0;filter:blur(11px);transform:translateY(14px);
+  transition:opacity .95s var(--ease),filter .95s var(--ease),transform .95s var(--ease)}
 .rv.in{opacity:1;filter:blur(0);transform:none}
 
-.hero{min-height:100vh;display:flex;align-items:center;padding:140px 0 96px}
-.copy{width:min(600px,48%)}
-@media (max-width:1000px){.copy{width:100%}}
-.eyebrow{font-size:11px;letter-spacing:.32em;text-transform:uppercase;color:var(--fg-3);
-  margin:0 0 32px;display:flex;align-items:center;gap:15px;font-weight:500}
-.eyebrow::before{content:"";width:40px;height:1px;background:var(--accent);opacity:.85}
+/* ---------- hero ---------- */
+.hero{min-height:100vh;display:flex;align-items:center;padding:132px 0 80px}
+.hero-copy{width:min(560px,47%)}
+@media (max-width:1040px){.hero-copy{width:100%}}
+.eyebrow{font-size:10.5px;letter-spacing:.32em;text-transform:uppercase;color:var(--fg-3);
+  margin:0 0 30px;display:flex;align-items:center;gap:14px;font-weight:600}
+.eyebrow::before{content:"";width:36px;height:1px;background:var(--amber);opacity:.85}
 h1{font-family:"Fraunces",Georgia,serif;font-weight:300;
-  font-size:clamp(2.8rem,4.9vw,4.5rem);line-height:1.02;letter-spacing:-.038em;
-  margin:0 0 28px;text-wrap:balance;font-variation-settings:"SOFT" 0,"WONK" 1}
-h1 em{font-style:italic;font-weight:400;color:var(--accent)}
-.lede{font-size:1.05rem;color:var(--fg-2);max-width:46ch;margin:0 0 36px;line-height:1.72}
-.acts{display:flex;gap:13px;flex-wrap:wrap}
-.scrollcue{position:absolute;bottom:40px;left:clamp(24px,5vw,80px);font-size:10.5px;
-  letter-spacing:.28em;text-transform:uppercase;color:var(--fg-3);display:flex;align-items:center;gap:13px}
-.scrollcue span{width:1px;height:30px;background:linear-gradient(var(--accent),transparent)}
+  font-size:clamp(2.7rem,4.7vw,4.3rem);line-height:1.03;letter-spacing:-.038em;
+  margin:0 0 26px;text-wrap:balance;font-variation-settings:"SOFT" 0,"WONK" 1}
+h1 em{font-style:italic;font-weight:400;color:var(--amber)}
+.lede{font-size:1.05rem;color:var(--fg-2);max-width:44ch;margin:0 0 34px}
+.acts{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.microcopy{font-size:12.5px;color:var(--fg-3);margin:16px 0 0}
 
-.chapter{min-height:100vh;display:flex;align-items:center;padding:110px 0}
-.num{font-family:"Fraunces",serif;font-size:12px;letter-spacing:.28em;color:var(--accent);margin:0 0 20px}
-h2{font-family:"Fraunces",Georgia,serif;font-weight:300;font-size:clamp(1.9rem,3.1vw,2.8rem);
-  line-height:1.1;letter-spacing:-.03em;margin:0 0 18px;text-wrap:balance;max-width:19ch}
-h2 em{font-style:italic;color:var(--accent);font-weight:400}
-.chapter p{color:var(--fg-2);font-size:1.01rem;max-width:46ch;margin:0 0 28px}
-.detail{list-style:none;padding:0;margin:0;border-top:1px solid var(--rule)}
-.detail li{display:grid;grid-template-columns:130px 1fr;gap:20px;align-items:baseline;
-  padding:12px 0;border-bottom:1px solid var(--rule);font-size:14.2px;color:var(--fg-2)}
-.detail b{color:var(--fg);font-weight:500}
+/* ---------- proof strip ---------- */
+.proof{border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  background:rgba(23,21,18,.55);backdrop-filter:blur(8px)}
+.proof-in{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:0}
+.stat{padding:26px 0;border-right:1px solid var(--line)}
+.stat:last-child{border-right:0}
+.stat b{display:block;font-family:"Fraunces",serif;font-size:2.1rem;font-weight:400;
+  line-height:1;letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:var(--fg)}
+.stat span{display:block;font-size:12.5px;color:var(--fg-3);margin-top:8px;letter-spacing:.02em}
 
-.close{min-height:100vh;display:flex;align-items:center;padding:110px 0}
-.close h2{font-size:clamp(2.2rem,4vw,3.5rem);max-width:16ch;margin-bottom:26px}
-footer{border-top:1px solid var(--rule);padding:26px 0 40px;color:var(--fg-3);font-size:12.5px}
+/* ---------- sections ---------- */
+section.band{padding:130px 0;position:relative}
+.sec-head{max-width:640px;margin:0 0 52px}
+.num{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.24em;
+  color:var(--amber);margin:0 0 18px;text-transform:uppercase}
+h2{font-family:"Fraunces",Georgia,serif;font-weight:300;font-size:clamp(1.9rem,3.2vw,2.9rem);
+  line-height:1.1;letter-spacing:-.03em;margin:0 0 16px;text-wrap:balance;max-width:20ch}
+h2 em{font-style:italic;color:var(--amber);font-weight:400}
+.sec-head p{color:var(--fg-2);font-size:1.02rem;max-width:52ch;margin:0}
+
+/* real product surfaces */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 1px 0 rgba(255,255,255,.02),0 40px 80px -50px rgba(0,0,0,.9)}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:14px 18px;border-bottom:1px solid var(--line);font-size:12px;color:var(--fg-3);
+  font-family:"JetBrains Mono",monospace;letter-spacing:.1em;text-transform:uppercase}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;margin-right:8px}
+
+/* 01 · sync — two panes, before and after */
+.syncgrid{display:grid;grid-template-columns:1fr auto 1fr;gap:0;align-items:stretch}
+@media (max-width:1040px){.syncgrid{grid-template-columns:1fr}}
+.tabs{display:flex;flex-direction:column;gap:9px;padding:20px 18px}
+.tab{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--line);
+  border-radius:6px;background:var(--surface-2);font-size:13.5px;color:var(--fg-2)}
+.tab i{width:14px;height:14px;border-radius:3px;background:var(--line-2);display:block;font-style:normal;flex:none}
+.tab small{margin-left:auto;font-size:11px;color:var(--fg-3)}
+.arrowcell{display:grid;place-items:center;padding:0 24px;color:var(--amber);font-size:20px}
+@media (max-width:1040px){.arrowcell{padding:18px 0;transform:rotate(90deg)}}
+.feed{padding:20px 18px;display:flex;flex-direction:column;gap:0}
+.feeditem{display:grid;grid-template-columns:52px 1fr auto;gap:14px;align-items:center;
+  padding:12px 0;border-bottom:1px solid var(--line)}
+.feeditem:last-child{border-bottom:0}
+.when{font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--fg-3);text-align:right}
+.what{font-size:14px}
+.what small{display:block;color:var(--fg-3);font-size:11.5px;margin-top:2px}
+.pill{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  padding:3px 8px;border-radius:3px;border:1px solid var(--line-2);color:var(--fg-3);white-space:nowrap}
+.pill.due{color:var(--red);border-color:rgba(201,112,92,.4);background:rgba(201,112,92,.1)}
+.pill.soon{color:var(--amber);border-color:rgba(232,169,74,.4);background:var(--amber-soft)}
+
+/* 02 · grades — the transformation, full width */
+.xform{display:grid;grid-template-columns:1fr 1fr;gap:0}
+@media (max-width:1040px){.xform{grid-template-columns:1fr}}
+.xform > div{padding:24px 26px}
+.xform > div + div{border-left:1px solid var(--line)}
+@media (max-width:1040px){.xform > div + div{border-left:0;border-top:1px solid var(--line)}}
+.src{font-family:"JetBrains Mono",monospace;font-size:12.4px;line-height:1.9;color:var(--fg-2);white-space:pre-wrap}
+.src mark{background:var(--amber-soft);color:var(--fg);box-shadow:0 1px 0 rgba(232,169,74,.5);padding:1px 3px}
+.wrow{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:9px 0}
+.wrow .k{font-size:14px}
+.wrow .k small{display:block;color:var(--fg-3);font-size:11.5px;font-family:"JetBrains Mono",monospace}
+.bar{grid-column:1/-1;height:8px;border-radius:2px;background:var(--surface-2);overflow:hidden;margin-top:2px}
+.bar i{display:block;height:100%;background:var(--amber);width:0;transition:width 1.1s var(--ease)}
+.bar.bonus i{background:var(--green)}
+.in .bar i{width:var(--w)}
+.wtotal{display:flex;align-items:baseline;justify-content:space-between;margin-top:14px;
+  padding-top:14px;border-top:1px solid var(--line)}
+.wtotal b{font-family:"Fraunces",serif;font-size:1.7rem;font-weight:400;font-variant-numeric:tabular-nums}
+.wtotal b em{font-style:normal;color:var(--green);font-size:.95rem;margin-left:7px}
+
+/* 03 · study — three artifacts, not twenty */
+.arts{display:grid;grid-template-columns:repeat(auto-fit,minmax(288px,1fr));gap:20px}
+.art{padding:22px 22px 24px;min-height:236px;display:flex;flex-direction:column}
+.art .kind{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--amber);margin-bottom:16px}
+.art h3{font-family:"Fraunces",serif;font-weight:400;font-size:1.24rem;line-height:1.25;margin:0 0 14px}
+.art p{color:var(--fg-2);font-size:13.8px;margin:0}
+.art .cite{margin-top:auto;padding-top:16px;font-family:"JetBrains Mono",monospace;
+  font-size:10.5px;color:var(--fg-3);letter-spacing:.06em}
+.opt{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);
+  border-radius:5px;font-size:13.4px;color:var(--fg-2);margin-bottom:7px}
+.opt.right{border-color:rgba(127,176,138,.45);background:rgba(127,176,138,.1);color:var(--fg)}
+.opt b{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--fg-3);width:14px;flex:none}
+
+/* close */
+.close{min-height:96vh;display:flex;align-items:center;padding:120px 0}
+.close h2{font-size:clamp(2.2rem,4.2vw,3.6rem);max-width:16ch;margin-bottom:22px}
+footer{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--fg-3);font-size:12.5px}
 .foot-in{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
 
-@media (max-width:1000px){.nav-l{display:none}.detail li{grid-template-columns:1fr;gap:4px}}
+@media (max-width:1040px){.nav-l{display:none}}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}
-  .rv{opacity:1;filter:none;transform:none;transition:none}.btn{transition:none}}
+  .rv{opacity:1;filter:none;transform:none;transition:none}.btn{transition:none}
+  .bar i{transition:none}}
 </style>
 </head>
 <body>
@@ -112,69 +193,135 @@ footer{border-top:1px solid var(--rule);padding:26px 0 40px;color:var(--fg-3);fo
 <div id="grain" aria-hidden="true"></div>
 
 <div class="content">
-  <nav><div class="shell nav-in">
+  <nav id="nav"><div class="shell nav-in">
     <div class="brand"><i></i>Nexora</div>
     <div class="nav-l"><a href="#sync">Sync</a><a href="#grades">Grades</a><a href="#study">Study</a></div>
     <a class="btn quiet" href="#">Start free</a>
   </div></nav>
 
-  <section class="hero"><div class="shell"><div class="copy">
+  <section class="hero"><div class="shell"><div class="hero-copy">
     <p class="eyebrow rv">The intelligent student OS</p>
     <h1 class="rv">Your semester, <em>solved</em> before it starts.</h1>
-    <p class="lede rv">Nexora pulls your whole term out of Brightspace, understands the rules that decide your grade, and turns your lectures into something you can actually study.</p>
+    <p class="lede rv">Nexora pulls your term out of Brightspace, reads the rules that decide your grade, and turns your lectures into something you can actually study.</p>
     <div class="acts rv">
       <a class="btn" href="#">Start free</a>
-      <a class="btn quiet" href="#sync">See how it works</a>
+      <a class="btn quiet" href="#grades">See it read an outline</a>
     </div>
+    <p class="microcopy rv">Free while you study. No card.</p>
+  </div></div></section>
+
+  <div class="proof"><div class="shell proof-in">
+    <div class="stat rv"><b>6</b><span>course pages, one workspace</span></div>
+    <div class="stat rv"><b>4</b><span>AI passes per outline</span></div>
+    <div class="stat rv"><b>12/12</b><span>grading patterns handled</span></div>
+    <div class="stat rv"><b>&lt;60s</b><span>from upload to your real grade</span></div>
   </div></div>
-  <div class="scrollcue"><span></span>Scroll</div></section>
 
-  <section class="chapter" id="sync"><div class="shell"><div class="copy">
-    <p class="num rv">01 — Sync</p>
-    <h2 class="rv">Six course pages, <em>one</em> place.</h2>
-    <p class="rv">The extension reads your courses, deadlines, announcements and lecture files, and keeps them current. You stop checking six tabs to find out what is due.</p>
-    <ul class="detail rv">
-      <li><b>Courses</b><span>Discovered automatically, each with its own workspace</span></li>
-      <li><b>Deadlines</b><span>Assignments, quizzes and labs on one timeline</span></li>
-      <li><b>Files</b><span>Slides and outlines pulled in as they are posted</span></li>
-      <li><b>Auto-sync</b><span>Runs on an interval, so the term stays current</span></li>
-    </ul>
-  </div></div></section>
+  <section class="band" id="sync"><div class="shell">
+    <div class="sec-head">
+      <p class="num rv">01 — Sync</p>
+      <h2 class="rv">Six tabs become <em>one</em> timeline.</h2>
+      <p class="rv">The extension reads every course you are enrolled in, then keeps deadlines, announcements and lecture files current without you opening Brightspace again.</p>
+    </div>
+    <div class="panel rv">
+      <div class="panel-head"><span><span class="dot"></span>Auto-sync · 8 minutes ago</span><span>4 courses</span></div>
+      <div class="syncgrid">
+        <div class="tabs">
+          <div class="tab"><i></i>SYSC 1006 — Foundations<small>Brightspace</small></div>
+          <div class="tab"><i></i>MATH 1104 — Linear Algebra<small>Brightspace</small></div>
+          <div class="tab"><i></i>ECOR 1042 — Design<small>Brightspace</small></div>
+          <div class="tab"><i></i>PSYC 1001 — Intro Psych<small>Brightspace</small></div>
+        </div>
+        <div class="arrowcell" aria-hidden="true">&rarr;</div>
+        <div class="feed">
+          <div class="feeditem"><span class="when">Today</span>
+            <span class="what">Lab 7 report<small>SYSC 1006</small></span><span class="pill due">Due 6pm</span></div>
+          <div class="feeditem"><span class="when">Thu</span>
+            <span class="what">Quiz 4 — Matrices<small>MATH 1104</small></span><span class="pill soon">3 days</span></div>
+          <div class="feeditem"><span class="when">Oct 18</span>
+            <span class="what">Midterm<small>SYSC 1006</small></span><span class="pill">2 weeks</span></div>
+          <div class="feeditem"><span class="when">Oct 21</span>
+            <span class="what">Design brief<small>ECOR 1042</small></span><span class="pill">3 weeks</span></div>
+        </div>
+      </div>
+    </div>
+  </div></section>
 
-  <section class="chapter" id="grades"><div class="shell"><div class="copy">
-    <p class="num rv">02 — Grades</p>
-    <h2 class="rv">It reads the paragraph that <em>decides</em> your grade.</h2>
-    <p class="rv">Best ten of twelve labs. A final you must reach 50% on regardless of your total. A second scheme that only opens if the first reaches C-. Nexora extracts all of it, then tells you what you need.</p>
-    <ul class="detail rv">
-      <li><b>Dropped marks</b><span>Best-n-of-m applied for you</span></li>
-      <li><b>Hurdles</b><span>Minimums that override the total</span></li>
-      <li><b>Alt schemes</b><span>Every eligible one computed, the best applied</span></li>
-      <li><b>Bonuses</b><span>Added on top, so 104% shows as 104%</span></li>
-    </ul>
-  </div></div></section>
+  <section class="band" id="grades"><div class="shell">
+    <div class="sec-head">
+      <p class="num rv">02 — Grades</p>
+      <h2 class="rv">It reads the paragraph that <em>decides</em> your grade.</h2>
+      <p class="rv">Best ten of twelve labs. A final you must reach 50% on whatever your total says. A second scheme that only opens above C-. Every calculator ignores these. Nexora extracts them and does the arithmetic properly.</p>
+    </div>
+    <div class="panel rv">
+      <div class="panel-head"><span>SYSC 1006 · outline.pdf</span><span>Confidence 100%</span></div>
+      <div class="xform">
+        <div>
+          <div class="src">To pass the course, students must pass the final examination (<mark>at least 50%</mark>), and achieve <mark>at least 4/10 on the lab component</mark>.
 
-  <section class="chapter" id="study"><div class="shell"><div class="copy">
-    <p class="num rv">03 — Study</p>
-    <h2 class="rv">Your lectures, turned into <em>practice</em>.</h2>
-    <p class="rv">Point at any slide deck you have synced. Nexora writes flashcards, quizzes, summaries and study guides from it, each cited back to the slide it came from, so you can check it rather than trust it.</p>
-    <ul class="detail rv">
-      <li><b>Flashcards</b><span>Front and back, drawn from your own material</span></li>
-      <li><b>Quizzes</b><span>Multiple choice with worked explanations</span></li>
-      <li><b>Summaries</b><span>Key concepts, with the slide reference kept</span></li>
-      <li><b>Copilot</b><span>Ask anything, answered against your course</span></li>
-    </ul>
-  </div></div></section>
+If the letter grade under Scheme 1 is <mark>C- or higher</mark>, a second mark is calculated. <mark>The final grade is the higher of the two.</mark>
 
-  <section class="close"><div class="shell"><div class="copy">
+Assignments (<mark>best 2 of 3</mark>) · Labs (<mark>best 10 of 12</mark>) · Bonus: Participation <mark>4%</mark></div>
+        </div>
+        <div>
+          <div class="wrow"><span class="k">Assignments<small>best 2 of 3 · min 4/10</small></span><span class="mono">10%</span>
+            <span class="bar" style="--w:10%"><i></i></span></div>
+          <div class="wrow"><span class="k">Labs<small>best 10 of 12 · min 4/10</small></span><span class="mono">10%</span>
+            <span class="bar" style="--w:10%"><i></i></span></div>
+          <div class="wrow"><span class="k">Midterm</span><span class="mono">20%</span>
+            <span class="bar" style="--w:20%"><i></i></span></div>
+          <div class="wrow"><span class="k">Final exam<small>must reach 50%</small></span><span class="mono">60%</span>
+            <span class="bar" style="--w:60%"><i></i></span></div>
+          <div class="wrow"><span class="k">Participation<small>bonus, added on top</small></span><span class="mono">+4%</span>
+            <span class="bar bonus" style="--w:4%"><i></i></span></div>
+          <div class="wtotal"><span class="num" style="margin:0">Base weight</span>
+            <b>100<em>+4 achievable</em></b></div>
+        </div>
+      </div>
+    </div>
+  </div></section>
+
+  <section class="band" id="study"><div class="shell">
+    <div class="sec-head">
+      <p class="num rv">03 — Study</p>
+      <h2 class="rv">Your lectures, turned into <em>practice</em>.</h2>
+      <p class="rv">Point at any deck you have synced. Everything below was written from it, and every card carries the slide it came from, so you can check it rather than trust it.</p>
+    </div>
+    <div class="arts">
+      <div class="panel art rv">
+        <div class="kind">Flashcard</div>
+        <h3>What is a binary search tree?</h3>
+        <p>An ordered tree where every left child is smaller than its parent and every right child is larger.</p>
+        <div class="cite">SYSC 1006 · Lecture 07 · Slide 14</div>
+      </div>
+      <div class="panel art rv">
+        <div class="kind">Quiz</div>
+        <h3>Which traversal visits the left subtree first?</h3>
+        <div class="opt"><b>A</b>Pre-order</div>
+        <div class="opt right"><b>B</b>In-order</div>
+        <div class="opt"><b>C</b>Post-order</div>
+        <div class="cite">Answer explained · Slide 22</div>
+      </div>
+      <div class="panel art rv">
+        <div class="kind">Summary</div>
+        <h3>Tree traversals</h3>
+        <p>Three depth-first orders differ only in when the node is visited relative to its children. Level-order is breadth-first and needs a queue.</p>
+        <div class="cite">4 key concepts · Slides 11–24</div>
+      </div>
+    </div>
+  </div></section>
+
+  <section class="close"><div class="shell"><div class="hero-copy">
     <p class="num rv">04 — Ready</p>
     <h2 class="rv">Know where you stand in <em>week one</em>.</h2>
     <p class="lede rv">Not in April, when the arithmetic finally catches up with you.</p>
-    <div class="acts rv"><a class="btn" href="#">Start free</a></div>
+    <div class="acts rv"><a class="btn" href="#">Start free</a>
+      <a class="btn quiet" href="#sync">Back to the top</a></div>
   </div></div></section>
 
   <footer><div class="shell foot-in">
-    <span>Nexora — concept build</span>
-    <span>Course material resolving into order</span>
+    <span>Nexora — the intelligent student OS</span>
+    <span>Concept build</span>
   </div></footer>
 </div>
 
@@ -191,11 +338,14 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const io = new IntersectionObserver((es) => {
   es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
-}, { threshold: .16, rootMargin: '0px 0px -6% 0px' });
+}, { threshold: .14, rootMargin: '0px 0px -6% 0px' });
 document.querySelectorAll('.rv').forEach((el, i) => {
-  el.style.transitionDelay = Math.min(i, 6) * 70 + 'ms';
+  el.style.transitionDelay = Math.min(i % 6, 5) * 70 + 'ms';
   io.observe(el);
 });
+
+const nav = document.getElementById('nav');
+addEventListener('scroll', () => nav.classList.toggle('stuck', scrollY > 40), { passive: true });
 
 const canvas = document.getElementById('gl');
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -212,7 +362,7 @@ try {
 if (renderer) {
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.22;
+  renderer.toneMappingExposure = 1.24;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   const scene = new THREE.Scene();
@@ -220,141 +370,77 @@ if (renderer) {
   camera.position.set(0, 0, 7.4);
   scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), .04).texture;
 
-  /* A blank white rectangle cannot say "course material" to anybody, which is
-     why the last pass was unreadable as an idea. Each card is printed at
-     runtime on a 2D canvas -- a syllabus with its decisive clause highlighted,
-     a weighting table, a flashcard, a term calendar, notes, a generated quiz.
-     Drawn in code, so there are no image files to download. */
+  /* Printed at runtime on a 2D canvas. A card lands about 150px wide on screen,
+     so nothing here is meant to be read -- only recognised. Type runs large,
+     rules are thick, accents are solid. */
   const TW = 420, TH = 556;
   function sheet(draw) {
-    const c = document.createElement('canvas');
-    c.width = TW; c.height = TH;
+    const c = document.createElement('canvas'); c.width = TW; c.height = TH;
     const g = c.getContext('2d');
-    g.fillStyle = '#F7F3EA'; g.fillRect(0, 0, TW, TH);
-    g.textBaseline = 'top';
+    g.fillStyle = '#F7F3EA'; g.fillRect(0, 0, TW, TH); g.textBaseline = 'top';
     draw(g);
     const t = new THREE.CanvasTexture(c);
-    t.colorSpace = THREE.SRGBColorSpace;
-    t.anisotropy = 4;
+    t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
     return t;
   }
-  /* A card renders roughly 150px wide on screen, so 15px of texture type lands
-     at about 5px -- unreadable. Nothing here is meant to be read; it has to be
-     recognised. So the type runs large, the rules run thick, and the accents
-     are solid rather than translucent, because a 40% wash over cream paper
-     composites to rgb(238,211,166) against rgb(247,243,234) and simply
-     disappears at this scale. */
-  function head(g, label) {
-    g.fillStyle = '#7E7565'; g.font = '600 19px Archivo, sans-serif';
-    g.fillText(label, 34, 28);
-    g.fillStyle = '#C6BEAB'; g.fillRect(34, 60, TW - 68, 3);
-  }
-  function lines(g, top, count, gap, col) {
-    g.fillStyle = col || '#BCB4A4';
-    for (let i = 0; i < count; i++) {
-      g.fillRect(34, top + i * gap, 200 + ((i * 61) % 150), 8);
-    }
-  }
+  const head = (g, s) => { g.fillStyle = '#7E7565'; g.font = '600 19px Archivo, sans-serif';
+    g.fillText(s, 34, 28); g.fillStyle = '#C6BEAB'; g.fillRect(34, 60, TW - 68, 3); };
+  const lines = (g, top, n, gap, col) => { g.fillStyle = col || '#BCB4A4';
+    for (let i = 0; i < n; i++) g.fillRect(34, top + i * gap, 200 + ((i * 61) % 150), 8); };
 
   const TEXTURES = [
-    sheet(g => {                                   // the outline itself
-      head(g, 'SYSC 1006 — COURSE OUTLINE');
-      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif';
-      g.fillText('Evaluation', 34, 80);
+    sheet(g => { head(g, 'SYSC 1006 — OUTLINE');
+      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif'; g.fillText('Evaluation', 34, 80);
       lines(g, 132, 3, 26);
-      g.fillStyle = '#EFC169'; g.fillRect(30, 218, 350, 34);      // solid, so it reads small
-      g.fillStyle = '#241F1A'; g.font = '600 17px Archivo, sans-serif';
-      g.fillText('final exam — minimum 50%', 40, 225);
-      lines(g, 274, 2, 26);
-      [['Assignments', '10'], ['Labs', '10'], ['Midterm', '20'], ['Final exam', '60']]
-        .forEach(([k, v], i) => {
-          const y = 346 + i * 38;
-          g.fillStyle = '#2E2922'; g.font = '600 17px Archivo, sans-serif'; g.fillText(k, 36, y);
-          g.fillStyle = '#6E6656'; g.fillText(v + '%', 316, y);
-          g.fillStyle = '#DCD4C1'; g.fillRect(34, y + 27, TW - 68, 2);
-        });
-    }),
-    sheet(g => {                                   // what Nexora understood
-      head(g, 'GRADING SCHEME — UNDERSTOOD');
-      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif';
-      g.fillText('Scheme 2', 34, 80);
-      [['Assignments', '10', .10], ['Labs', '10', .10], ['Midterm', '20', .20],
-       ['Final exam', '60', .60], ['Participation', '+4', .04]].forEach((row, i) => {
+      g.fillStyle = '#EFC169'; g.fillRect(30, 218, 350, 34);
+      g.fillStyle = '#241F1A'; g.font = '600 17px Archivo, sans-serif'; g.fillText('final exam — minimum 50%', 40, 225);
+      [['Assignments','10'],['Labs','10'],['Midterm','20'],['Final exam','60']].forEach(([k,v],i)=>{
+        const y = 300 + i * 38;
+        g.fillStyle = '#2E2922'; g.font = '600 17px Archivo, sans-serif'; g.fillText(k, 36, y);
+        g.fillStyle = '#6E6656'; g.fillText(v + '%', 316, y);
+        g.fillStyle = '#DCD4C1'; g.fillRect(34, y + 27, TW - 68, 2); }); }),
+    sheet(g => { head(g, 'GRADING SCHEME');
+      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif'; g.fillText('Scheme 2', 34, 80);
+      [['Assignments',.10],['Labs',.10],['Midterm',.20],['Final exam',.60],['Participation',.04]].forEach((r,i)=>{
         const y = 142 + i * 72;
-        g.fillStyle = '#2E2922'; g.font = '600 17px Archivo, sans-serif'; g.fillText(row[0], 34, y);
-        g.fillStyle = '#6E6656'; g.fillText(row[1] + '%', 318, y);
-        g.fillStyle = '#E2DAC7'; g.fillRect(34, y + 28, 342, 16);   // thick enough to survive scale
-        g.fillStyle = i === 4 ? '#6E9B6D' : '#D9A441'; g.fillRect(34, y + 28, 342 * row[2], 16);
-      });
-      g.fillStyle = '#7E7565'; g.font = '600 15px Archivo, sans-serif';
-      g.fillText('104% achievable', 34, 508);
-    }),
-    sheet(g => {                                   // a generated flashcard
-      head(g, 'FLASHCARD — LECTURE 07');
+        g.fillStyle = '#2E2922'; g.font = '600 17px Archivo, sans-serif'; g.fillText(r[0], 34, y);
+        g.fillStyle = '#E2DAC7'; g.fillRect(34, y + 28, 342, 16);
+        g.fillStyle = i === 4 ? '#6E9B6D' : '#D9A441'; g.fillRect(34, y + 28, 342 * r[1], 16); }); }),
+    sheet(g => { head(g, 'FLASHCARD — LEC 07');
       g.fillStyle = '#241F1A'; g.font = '600 34px Fraunces, Georgia, serif';
-      g.fillText('What is a', 34, 112); g.fillText('binary search', 34, 154);
-      g.fillText('tree?', 34, 196);
+      g.fillText('What is a', 34, 112); g.fillText('binary search', 34, 154); g.fillText('tree?', 34, 196);
       g.fillStyle = '#C6BEAB'; g.fillRect(34, 264, TW - 68, 3);
-      lines(g, 296, 3, 30, '#B0A897');
-      g.fillStyle = '#7E7565'; g.font = '600 15px Archivo, sans-serif';
-      g.fillText('Slide 14', 34, 506);
-    }),
-    sheet(g => {                                   // the term on one calendar
-      head(g, 'TERM CALENDAR');
-      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif';
-      g.fillText('October', 34, 80);
+      lines(g, 296, 3, 30, '#B0A897'); }),
+    sheet(g => { head(g, 'TERM CALENDAR');
+      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif'; g.fillText('October', 34, 80);
       for (let i = 0; i < 35; i++) {
         const cx = 34 + (i % 7) * 50, cy = 136 + Math.floor(i / 7) * 50;
         g.fillStyle = '#E6DFCE'; g.fillRect(cx, cy, 44, 44);
-        // A marked day is filled, not underlined -- a 4px rule vanishes at scale.
         if (i === 9 || i === 26) { g.fillStyle = '#C4794E'; g.fillRect(cx, cy, 44, 44); }
-        if (i === 17) { g.fillStyle = '#D9A441'; g.fillRect(cx, cy, 44, 44); }
-      }
-      g.fillStyle = '#7E7565'; g.font = '600 16px Archivo, sans-serif';
-      g.fillText('Midterm · Oct 18', 34, 408);
-      g.fillStyle = '#B0A897'; g.fillRect(34, 440, 250, 8); g.fillRect(34, 462, 190, 8);
-    }),
-    sheet(g => {                                   // lecture notes
-      head(g, 'LECTURE NOTES');
-      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif';
-      g.fillText('Binary trees', 34, 80);
+        if (i === 17) { g.fillStyle = '#D9A441'; g.fillRect(cx, cy, 44, 44); } }
+      g.fillStyle = '#7E7565'; g.font = '600 16px Archivo, sans-serif'; g.fillText('Midterm · Oct 18', 34, 408); }),
+    sheet(g => { head(g, 'LECTURE NOTES');
+      g.fillStyle = '#241F1A'; g.font = '600 30px Fraunces, Georgia, serif'; g.fillText('Binary trees', 34, 80);
       for (let i = 0; i < 11; i++) { g.fillStyle = '#E4DCCA'; g.fillRect(34, 148 + i * 34, TW - 68, 2); }
-      lines(g, 134, 11, 34, '#B0A897');
-    }),
-    sheet(g => {                                   // a generated quiz
-      head(g, 'QUIZ — GENERATED');
+      lines(g, 134, 11, 34, '#B0A897'); }),
+    sheet(g => { head(g, 'QUIZ — GENERATED');
       g.fillStyle = '#241F1A'; g.font = '600 24px Fraunces, Georgia, serif';
       g.fillText('Which traversal', 34, 84); g.fillText('visits left first?', 34, 116);
-      ['Pre-order', 'In-order', 'Post-order', 'Level-order'].forEach((o, i) => {
+      ['Pre-order','In-order','Post-order','Level-order'].forEach((o,i)=>{
         const y = 190 + i * 68;
         g.fillStyle = i === 1 ? '#D9A441' : '#E6DFCE'; g.fillRect(34, y, TW - 68, 54);
         g.fillStyle = i === 1 ? '#241F1A' : '#5E5749';
-        g.font = '600 18px Archivo, sans-serif'; g.fillText(o, 52, y + 17);
-      });
-      g.fillStyle = '#7E7565'; g.font = '600 15px Archivo, sans-serif';
-      g.fillText('Slide 22', 34, 490);
-    }),
+        g.font = '600 18px Archivo, sans-serif'; g.fillText(o, 52, y + 17); }); }),
   ];
 
-  /* Paper, not chrome. Metal on a near-black page has nothing to reflect, which
-     is exactly why the previous cards went dark the moment the hero key light
-     fell away. Mostly diffuse stock holds its value in every section. */
   const paper = new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color('#F0EBDE'), metalness: 0, roughness: .60,
-    clearcoat: .26, clearcoatRoughness: .42, envMapIntensity: .9,
-  });
+    color: new THREE.Color('#F0EBDE'), metalness: 0, roughness: .58,
+    clearcoat: .26, clearcoatRoughness: .42, envMapIntensity: .95 });
   const edge = new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color('#D6CEBB'), metalness: 0, roughness: .8, envMapIntensity: .6,
-  });
-  function faces(tex) {
-    const printed = paper.clone();
-    printed.map = tex;
-    // BoxGeometry face order is +X -X +Y -Y +Z -Z. Print both broad faces so a
-    // card stays legible whichever way it has tumbled.
-    return [edge, edge, edge, edge, printed, printed];
-  }
+    color: new THREE.Color('#D6CEBB'), metalness: 0, roughness: .8, envMapIntensity: .6 });
+  const faces = tex => { const p = paper.clone(); p.map = tex; return [edge, edge, edge, edge, p, p]; };
 
-  const N = 24;
+  const N = 20;
   const cardGeo = new THREE.BoxGeometry(.94, 1.24, .05);
   const group = new THREE.Group();
   scene.add(group);
@@ -365,76 +451,66 @@ if (renderer) {
   const pose = (x, y, z, rx, ry, rz, s) => ({
     p: new THREE.Vector3(x, y, z),
     q: new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),
-    s: s === undefined ? 1 : s,
-  });
+    s: s === undefined ? 1 : s });
 
   const items = [];
   for (let i = 0; i < N; i++) {
     const mesh = new THREE.Mesh(cardGeo, faces(TEXTURES[i % TEXTURES.length]));
     group.add(mesh);
-    items.push({ mesh, stagger: rnd() * .30, spin: rr(-.16, .16), forms: [] });
+    items.push({ mesh, stagger: rnd() * .28, spin: rr(-.15, .15), forms: [] });
   }
 
-  /* 0 · scattered — tumbled, but turned mostly toward the camera so the
-     printing stays readable instead of presenting edges. */
+  /* Formation 0 owns the hero. In the three middle sections the scene steps
+     back so the real product panels carry the page -- one animated object
+     cannot hold four screens on its own, and trying made every section below
+     the fold look like an empty room. Formation 4 brings it forward again for
+     the close. */
   items.forEach(it => it.forms[0] = pose(
-    rr(-1.85, 1.85), rr(-1.55, 1.55), rr(-2.1, .8),
-    rr(-.65, .65), rr(-.85, .85), rr(-Math.PI, Math.PI), rr(.92, 1.08)));
+    rr(-1.75, 1.75), rr(-1.5, 1.5), rr(-2.0, .8),
+    rr(-.6, .6), rr(-.8, .8), rr(-Math.PI, Math.PI), rr(.94, 1.08)));
 
-  /* 1 · one stack — tilted well off edge-on, or it collapses to hairlines. */
-  { let y = -1.0;
-    items.forEach(it => { it.forms[1] = pose(rr(-.05,.05), y, rr(-.05,.05),
-      -1.08 + rr(-.02,.02), rr(-.07,.07), rr(-.03,.03), 1.02); y += .082; }); }
+  { let y = -.86;                                   // 01 · a tidy stack, held back
+    items.forEach(it => { it.forms[1] = pose(rr(-.04,.04), y, rr(-.04,.04),
+      -1.06 + rr(-.02,.02), rr(-.06,.06), rr(-.03,.03), .95); y += .086; }); }
 
-  /* 2 · weighted column — four bands sized by real weights, 10/10/20/60. */
-  { const bands = [2,2,5,15]; let y = -1.42, ci = 0;
-    bands.forEach(count => {
-      for (let k = 0; k < count; k++) {
-        items[ci++].forms[2] = pose(rr(-.02,.02), y, rr(-.02,.02), -1.18, rr(-.03,.03), 0, 1.24);
-        y += .07;
-      }
-      y += .24;
-    }); }
+  { const bands = [2,2,4,12]; let y = -1.2, ci = 0;  // 02 · weighted, 10/10/20/60
+    bands.forEach(c => { for (let k = 0; k < c; k++) {
+        items[ci++].forms[2] = pose(rr(-.02,.02), y, rr(-.02,.02), -1.16, rr(-.03,.03), 0, 1.05);
+        y += .066; } y += .22; }); }
 
-  /* 3 · card grid — four columns, shrunk and pushed right. At six wide it ran
-     straight across the copy and made the text unreadable. */
-  { const cols = 4, gx = .82, gy = 1.04, ox = .62;
-    items.forEach((it, i) => {
-      const c = i % cols, r = Math.floor(i / cols);
-      it.forms[3] = pose(ox + (c - (cols-1)/2) * gx, (2.5 - r) * gy - 1.3, 0,
-                         0, rr(-.04,.04), rr(-.02,.02), .66);
-    }); }
+  { const cols = 4, gx = .62, gy = .8;               // 03 · a small, tidy fan
+    items.forEach((it, i) => { const c = i % cols, r = Math.floor(i / cols);
+      it.forms[3] = pose(.3 + (c - 1.5) * gx, (2 - r) * gy - .8, 0,
+        0, rr(-.03,.03), rr(-.02,.02), .48); }); }
 
-  /* 4 · resolved — one tight aligned block, angled into the key light. */
-  { let y = -.56;
-    items.forEach(it => { it.forms[4] = pose(0, y, 0, -1.22, .30, 0, 1.42); y += .05; }); }
+  { let y = -.5;                                     // 04 · one resolved block
+    items.forEach(it => { it.forms[4] = pose(0, y, 0, -1.2, .3, 0, 1.34); y += .05; }); }
+
+  /* How much of the frame the scene is allowed to occupy in each formation. The
+     middle sections belong to the product panels. */
+  const PRESENCE = [1, .52, .52, .46, 1];
 
   const key = new THREE.DirectionalLight('#FFF6E8', 2.9);
   key.position.set(-4.6, 5.4, 5.0); scene.add(key);
-  const rim = new THREE.PointLight('#E0A340', 34, 28, 2);
+  const rim = new THREE.PointLight('#E8A94A', 32, 28, 2);
   rim.position.set(5.2, -1.6, -1.8); scene.add(rim);
   const fill = new THREE.DirectionalLight('#A8BBDC', .9);
   fill.position.set(2.6, -3.4, 4.2); scene.add(fill);
-  scene.add(new THREE.AmbientLight('#7A8090', .7));
+  scene.add(new THREE.AmbientLight('#7A8090', .72));
 
-  /* Formations are pinned to the sections themselves; a flat fraction of page
-     height drifted out of step and left the closing section with nothing. */
   let marks = [];
   function computeMarks() {
     const els = [document.querySelector('.hero'), document.getElementById('sync'),
                  document.getElementById('grades'), document.getElementById('study'),
                  document.querySelector('.close')];
-    marks = els.map(el => {
-      const r = el.getBoundingClientRect();
-      return r.top + scrollY + r.height / 2 - innerHeight / 2;
-    });
+    marks = els.map(el => { const r = el.getBoundingClientRect();
+      return r.top + scrollY + r.height / 2 - innerHeight / 2; });
   }
   function formationAt(y) {
     if (!marks.length) return 0;
     if (y <= marks[0]) return 0;
-    for (let i = 0; i < marks.length - 1; i++) {
+    for (let i = 0; i < marks.length - 1; i++)
       if (y < marks[i + 1]) return i + (y - marks[i]) / ((marks[i + 1] - marks[i]) || 1);
-    }
     return marks.length - 1;
   }
 
@@ -443,9 +519,9 @@ if (renderer) {
     if (w < 2 || h < 2) return;
     renderer.setSize(w, h);
     camera.aspect = w / h;
-    const narrow = w < 1000;
-    camera.position.z = narrow ? 9.8 : 7.4;
-    camera.setViewOffset(w, h, narrow ? 0 : -w * .22, narrow ? h * .07 : 0, w, h);
+    const narrow = w < 1040;
+    camera.position.z = narrow ? 10 : 7.4;
+    camera.setViewOffset(w, h, narrow ? 0 : -w * .23, narrow ? h * .06 : 0, w, h);
     camera.updateProjectionMatrix();
     computeMarks();
   }
@@ -460,8 +536,7 @@ if (renderer) {
   const ptr = { x: 0, y: 0 }, ptrC = { x: 0, y: 0 };
   addEventListener('pointermove', ev => {
     ptr.x = (ev.clientX / innerWidth - .5) * 2;
-    ptr.y = (ev.clientY / innerHeight - .5) * 2;
-  }, { passive: true });
+    ptr.y = (ev.clientY / innerHeight - .5) * 2; }, { passive: true });
 
   let awake = !document.hidden;
   document.addEventListener('visibilitychange', () => { awake = !document.hidden; });
@@ -486,11 +561,10 @@ if (renderer) {
 
     for (let i = 0; i < N; i++) {
       const it = items[i];
-      const k = easeInOut(Math.min(Math.max((local - it.stagger) / (1 - .30), 0), 1));
+      const k = easeInOut(Math.min(Math.max((local - it.stagger) / (1 - .28), 0), 1));
       const A = it.forms[i0], B = it.forms[i1];
       tmpP.copy(A.p).lerp(B.p, k);
       tmpQ.copy(A.q).slerp(B.q, k);
-
       const loose = (1 - k) * (i0 === 0 ? 1 : 0);
       it.mesh.position.set(
         tmpP.x + Math.sin(t * .28 + i) * .05 * loose,
@@ -501,6 +575,9 @@ if (renderer) {
       it.mesh.scale.setScalar(A.s + (B.s - A.s) * k);
     }
 
+    const presence = PRESENCE[i0] + (PRESENCE[i1] - PRESENCE[i0]) * local;
+    group.scale.setScalar(presence);
+    group.position.x = (1 - presence) * 1.5;        // slide aside as it shrinks
     group.rotation.y = ptrC.x * .13;
     group.rotation.x = ptrC.y * .09;
     renderer.render(scene, camera);
