@@ -88,9 +88,9 @@
   <p>
     Removing a course from Nexora deletes its imported content, grades, outline analysis,
     and tasks. Uninstalling the extension stops all reading immediately. To delete your
-    account and everything in it, email
-    <a href="mailto:bassemtamer2016@gmail.com">bassemtamer2016@gmail.com</a> and it will
-    be removed.
+    account and everything in it, ask through the
+    {% if contact_email %}<a href="mailto:{{ contact_email }}">{{ contact_email }}</a>{% else %}<a href="{{ url_for('support') }}">help page</a>{% endif %}
+    and it will be removed.
   </p>
 
   <h2>What Nexora never does</h2>
@@ -105,7 +105,7 @@
   <h2>Contact</h2>
   <p>
     Questions about any of the above:
-    <a href="mailto:bassemtamer2016@gmail.com">bassemtamer2016@gmail.com</a>.
+    {% if contact_email %}<a href="mailto:{{ contact_email }}">{{ contact_email }}</a>{% else %}see the <a href="{{ url_for('support') }}">help page</a>{% endif %}.
   </p>
 </div>
 

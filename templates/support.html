@@ -83,9 +83,10 @@
 
   <h2>Still stuck</h2>
   <p>
-    Email <a href="mailto:bassemtamer2016@gmail.com">bassemtamer2016@gmail.com</a> with
-    your university and what happened, and it will get looked at. If you are signed in,
-    the <a href="{{ url_for('feedback') }}">feedback form</a> works too.
+    {% if contact_email %}Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a> with
+    your university and what happened, and it will get looked at.{% else %}Send it through the
+    <a href="{{ url_for('feedback') }}">feedback form</a> in your account, with your university
+    and what happened.{% endif %}
   </p>
 
   <p><a href="{{ url_for('privacy') }}">What Nexora does with your data &rarr;</a></p>

@@ -5509,6 +5509,16 @@ def handle_unexpected(exc):
     )
 
 
+# Shown on the two public pages. Kept out of the templates so a personal address
+# never ends up hardcoded on a page the whole internet can read.
+CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "nexora.notify@gmail.com").strip()
+
+
+@app.context_processor
+def _inject_contact():
+    return {"contact_email": CONTACT_EMAIL}
+
+
 @app.route("/support")
 def support():
     """Public for the same reason /privacy is: the person who needs it most is

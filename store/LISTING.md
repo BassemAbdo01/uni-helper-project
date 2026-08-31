@@ -89,9 +89,10 @@ lecture content are available in one place.
 
 **Data usage disclosures — tick these**
 
-- [x] Personally identifiable information — *name and email, to identify the student's own account*
-- [x] Website content — *course pages, deadlines and lecture text from the student's own LMS*
-- [ ] Health, financial, authentication, personal communications, location, user activity
+- [x] Website content — *course titles, due dates, announcements and lecture text from the student's own LMS*
+- [ ] **Everything else, including Personally identifiable information** — verified: the
+      extension captures no name, email or profile field anywhere. Do not tick PII.
+      Do not tick Authentication information either; it never sees the university password.
 
 Then affirm all three certifications: data is not sold, not used for unrelated
 purposes, and not used to determine creditworthiness.
@@ -109,6 +110,7 @@ https://uni-helper-project.onrender.com/privacy
 | Official URL | leave **None** — it only lists sites verified in Search Console |
 | Homepage URL | `https://uni-helper-project.onrender.com` |
 | Support URL | `https://uni-helper-project.onrender.com/support` |
+| Contact email | `nexora.notify@gmail.com` — publicly displayed on the listing, so never a personal address |
 | Mature content | off |
 
 ---
