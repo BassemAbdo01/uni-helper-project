@@ -117,6 +117,10 @@ app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # up to 8 outline screensho
 # page size: a student's courses should all be on their dashboard.
 DASHBOARD_COURSE_LIMIT = int(os.environ.get("DASHBOARD_COURSE_LIMIT", "60"))
 
+# Render sets RENDER_GIT_COMMIT on every deploy. Reported by /healthz so "did it
+# ship?" has an answer that does not depend on spotting a changed word somewhere.
+BUILD_REVISION = (os.environ.get("RENDER_GIT_COMMIT", "").strip() or "dev")[:12]
+
 OCR_MAX_EDGE = int(os.environ.get("OCR_MAX_EDGE", "2600"))
 OCR_MIN_EDGE = int(os.environ.get("OCR_MIN_EDGE", "1800"))
 
@@ -6377,10 +6381,16 @@ def privacy():
 @app.route("/healthz")
 @limiter.exempt
 def healthz():
-    """Cheap liveness probe: confirms the process is up and the database answers."""
+    """Cheap liveness probe: confirms the process is up and the database answers.
+
+    It also reports which commit is running. Every deploy so far has been
+    confirmed by guessing at some string that happened to change on a public
+    page, which fails entirely when a release only touches pages behind a
+    login -- as the one fixing the dashboard course cap did.
+    """
     try:
         db.session.execute(text("SELECT 1"))
-        return jsonify({"status": "ok", "database": "ok"})
+        return jsonify({"status": "ok", "database": "ok", "build": BUILD_REVISION})
     except Exception as exc:
         app.logger.exception("Health check failed: %s", exc)
         return jsonify({"status": "degraded", "database": "unreachable"}), 503
