@@ -174,8 +174,10 @@ async function ensureBrightspaceContentScript(tab) {
   if (!tab?.id) throw new Error('Brightspace tab is unavailable.');
   if (await pingBrightspaceContentScript(tab.id)) return;
   try {
+    // Brightspace puts My Courses in a widget iframe, so the top document alone
+    // is the one place the course cards are guaranteed not to be.
     await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: false },
+      target: { tabId: tab.id, allFrames: true },
       files: ['content.js']
     });
   } catch (error) {

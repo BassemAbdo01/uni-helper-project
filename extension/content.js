@@ -541,17 +541,27 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.0.0' }); return false; }
+    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.0.1' }); return false; }
     if (message?.type === 'NEXORA_SESSION_CHECK') { sessionCheck().then(sendResponse); return true; }
     if (message?.type === 'NEXORA_DISCOVER_COURSES') {
+      // Every frame gets asked. A frame that finds nothing stays quiet so the
+      // one holding the My Courses widget wins the reply; the top document
+      // answers for failure, and waits longer than a subframe needs to succeed.
+      const isTop = window === window.top;
       (async () => {
-        for (let i = 0; i < 8; i++) {
+        for (let i = 0; i < (isTop ? 14 : 8); i++) {
           const courses = discoverCoursesFromDom();
           if (courses.length) return { ok: true, courses, method: 'course-card-dom' };
           await sleep(600);
         }
-        return { ok: false, courses: [], error: 'No course cards were found. Open the Brightspace My Courses page.' };
-      })().then(sendResponse);
+        return null;
+      })().then(result => {
+        if (result) { sendResponse(result); return; }
+        if (isTop) {
+          sendResponse({ ok: false, courses: [], error: 'No course cards were found. Open the Brightspace My Courses page.' });
+        }
+        // a subframe with nothing to add says nothing at all
+      });
       return true;
     }
     if (message?.type === 'NEXORA_SMART_SCAN_COURSE') {
