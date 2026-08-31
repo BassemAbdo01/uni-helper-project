@@ -56,7 +56,13 @@
   function parseCourse(raw, id) {
     const original = clean(raw).replace(/\b(Open|Closed)\b/ig, '').trim();
     const term = (original.match(/\b(Fall|Winter|Summer|Spring)\s+20\d{2}\b/i) || [])[0] || '';
-    const codeMatch = original.match(/\b([A-Z]{3,6})\s*[-:]?\s*(\d{4}[A-Z]?)\b/i);
+    // "Winter 2026" fits "three to six letters then four digits" as neatly as
+    // "ECOR1056" does, so the first match is not necessarily a course code.
+    const NOT_A_SUBJECT = /^(WINTER|SPRING|SUMMER|FALL|AUTUMN|TERM|SEM|YEAR|SECTION)$/i;
+    let codeMatch = null;
+    for (const m of original.matchAll(/\b([A-Z]{3,6})\s*[-:]?\s*(\d{4}[A-Z]?)\b/gi)) {
+      if (!NOT_A_SUBJECT.test(m[1])) { codeMatch = m; break; }
+    }
     const code = codeMatch ? `${codeMatch[1]}${codeMatch[2]}`.toUpperCase() : `COURSE${id}`;
     let name = original
       .replace(/^\s*(Merge|Crosslist)\s+/i, '')
@@ -66,6 +72,10 @@
       .replace(/\b(Fall|Winter|Summer|Spring)\s+20\d{2}\b/ig, ' ')
       .replace(/\((LEC|LAB|TUT|SEM|DIS|PRA)(?:\s+[^)]*)?\)/ig, ' ')
       .replace(new RegExp(`^${code}\\s*[-:]?\\s*`, 'i'), '')
+      // A crosslist names both courses; the second one is not part of the title.
+      .replace(/^[A-Z]{3,6}\s*[-:]?\s*\d{4}[A-Z]?\s*[-:]?\s*/i, '')
+      // A merge lists its sections -- "D:E", "A:B:C" -- ahead of the real name.
+      .replace(/^[A-Z](?:\s*:\s*[A-Z])+\s+/, '')
       .replace(/^\s*[,._-]+|[,._-]+\s*$/g, '')
       .replace(/\s+/g, ' ')
       .trim();
@@ -108,6 +118,58 @@
         image_url: imageFrom(card) || old?.image_url || '',
         brightspace_url: `${location.origin}/d2l/home/${id}`
       });
+    }
+    return [...map.values()];
+  }
+
+  // Brightspace types its org units; 3 is a Course Offering. Without this filter
+  // the list also carries departments, semesters and the org itself.
+  const COURSE_OFFERING_TYPE = 3;
+
+  function courseFromEnrollment(row) {
+    const unit = row?.OrgUnit || row?.orgUnit || {};
+    const typeId = Number(unit?.Type?.Id ?? unit?.type?.id ?? NaN);
+    if (Number.isFinite(typeId) && typeId !== COURSE_OFFERING_TYPE) return null;
+
+    const id = String(unit.Id ?? unit.id ?? '').trim();
+    if (!id) return null;
+
+    // Name is what a student sees; Code is the registrar's string. Either can
+    // carry the course code, so both are offered to the same parser the DOM
+    // path uses, and whichever yields a real code wins.
+    const name = clean(unit.Name || unit.name || '');
+    const code = clean(unit.Code || unit.code || '');
+    if (!name && !code) return null;
+
+    let parsed = parseCourse(name || code, id);
+    if (parsed.code.startsWith('COURSE') && code) {
+      const fromCode = parseCourse(`${code} ${name}`, id);
+      if (!fromCode.code.startsWith('COURSE')) parsed = fromCode;
+    }
+
+    return {
+      source_uid: id,
+      course_code: parsed.code,
+      course_name: parsed.name,
+      raw_course_name: parsed.original,
+      term: parsed.term,
+      instructor: '',
+      image_url: '',
+      brightspace_url: `${location.origin}/d2l/home/${id}`
+    };
+  }
+
+  async function discoverCoursesFromApi() {
+    const versions = await detectApiVersions();
+    const paged = await firstWorkingPaged([
+      v => `/d2l/api/lp/${v}/enrollments/myenrollments/?orgUnitTypeId=${COURSE_OFFERING_TYPE}`,
+      v => `/d2l/api/lp/${v}/enrollments/myenrollments/`
+    ], versions);
+
+    const map = new Map();
+    for (const row of paged.items || []) {
+      const course = courseFromEnrollment(row);
+      if (course) map.set(course.source_uid, course);
     }
     return [...map.values()];
   }
@@ -541,7 +603,7 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.0.1' }); return false; }
+    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.0.2' }); return false; }
     if (message?.type === 'NEXORA_SESSION_CHECK') { sessionCheck().then(sendResponse); return true; }
     if (message?.type === 'NEXORA_DISCOVER_COURSES') {
       // Every frame gets asked. A frame that finds nothing stays quiet so the
@@ -549,6 +611,27 @@
       // answers for failure, and waits longer than a subframe needs to succeed.
       const isTop = window === window.top;
       (async () => {
+        // The API knows every enrolment. The page only knows the tab it is on.
+        let fromApi = [];
+        try {
+          fromApi = await discoverCoursesFromApi();
+        } catch (_) {
+          fromApi = [];
+        }
+
+        if (fromApi.length) {
+          // The one thing the API does not carry is the course image, so take
+          // those from whatever cards this frame can see.
+          const images = new Map();
+          for (const card of discoverCoursesFromDom()) {
+            if (card.image_url) images.set(card.source_uid, card.image_url);
+          }
+          const courses = fromApi.map(c => ({ ...c, image_url: images.get(c.source_uid) || '' }));
+          return { ok: true, courses, method: 'enrollments-api' };
+        }
+
+        // No API on this tenant: fall back to reading the page, which sees one
+        // term at a time but is better than nothing.
         for (let i = 0; i < (isTop ? 14 : 8); i++) {
           const courses = discoverCoursesFromDom();
           if (courses.length) return { ok: true, courses, method: 'course-card-dom' };

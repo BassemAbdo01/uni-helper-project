@@ -3130,12 +3130,26 @@ def start_my_day():
 
 
 
+# Every column holding one of these is String(40). A longer value is silently
+# kept by SQLite and rejected outright by Postgres, so the cap belongs here,
+# once, rather than at each of the call sites that forgets it.
+COURSE_CODE_MAX = 40
+
+# A term reads exactly like a course code: three to six letters, four digits.
+# "Winter 2026" is not a subject.
+_TERM_WORD = re.compile(r"^(WINTER|SPRING|SUMMER|FALL|AUTUMN|TERM|SEM|SEMESTER|YEAR|SECTION)$", re.I)
+
+
 def _normalize_course_code(value):
     detected = extract_course_from_text(value or "")
-    if detected:
-        return detected
+    if detected and not _TERM_WORD.match(re.sub(r"\d.*$", "", detected)):
+        return detected[:COURSE_CODE_MAX]
     cleaned = re.sub(r"[^A-Za-z0-9]", "", value or "").upper()
-    return cleaned or "OTHER"
+    if _TERM_WORD.match(re.sub(r"\d.*$", "", cleaned)):
+        # Nothing here identifies a course, and inventing one from the term
+        # would file every unrelated org unit under the same made-up code.
+        return "OTHER"
+    return cleaned[:COURSE_CODE_MAX] or "OTHER"
 
 
 def _lecture_sequence_key(item):

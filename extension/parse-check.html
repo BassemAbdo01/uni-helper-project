@@ -1,0 +1,63 @@
+<meta charset="utf-8"><title>course parsing</title>
+<style>body{background:#151310;color:#B8B1A5;font:13px ui-monospace,Menlo,monospace;padding:20px}
+pre{white-space:pre-wrap;line-height:1.6}b{color:#E8A94A}</style>
+<pre id="out">running…</pre>
+<script>
+(async () => {
+  const out = document.getElementById('out');
+  try {
+    const COURSE_OFFERING_TYPE = 3;
+    const src = await (await fetch('content.js?' + Date.now())).text();
+
+    // lift the two pure functions out of the IIFE and run them in isolation
+    const grab = name => {
+      const i = src.indexOf('function ' + name + '(');
+      if (i < 0) throw new Error('could not find function ' + name);
+      let depth = 0, started = false;
+      for (let j = i; j < src.length; j++) {
+        if (src[j] === '{') { depth++; started = true; }
+        else if (src[j] === '}') { depth--; if (started && depth === 0) return src.slice(i, j + 1); }
+      }
+      throw new Error('unbalanced braces reading ' + name);
+    };
+
+    const clean = v => String(v ?? '').replace(/\s+/g, ' ').trim();
+    const parseCourse = eval('(' + grab('parseCourse') + ')');
+    const courseFromEnrollment = eval('(' + grab('courseFromEnrollment') + ')');
+
+    // exactly the names Carleton shows on My Courses, across two terms
+    const rows = [
+      ['ECOR1056D Eng Disciplines II (LEC) Winter 2026', 'ECOR1056D-W26'],
+      ['Merge ECOR1031 D:E Programming and Data Management (LEC) Winter 2026 [11939:11940]', ''],
+      ['ECOR1034D Dynamics (LEC) Winter 2026', ''],
+      ['Crosslist MATH1104F:MATH1107F [13424:13494] Linear Algebra (Eng or Sci ) (LEC) Winter 2026', ''],
+      ['ECOR1033D Statics (LEC) Winter 2026', ''],
+      ['Merge PHYS1004 A:B:C Electromagnetism and Wave Motion (LEC) Winter 2026 [14078:14079:14080]', ''],
+      ['(MS-LAP) Math and Stats Learning Assistance Program - Winter 2026', ''],
+      ['SYSC2004A Object-Oriented Software Development (LEC) Fall 2026', 'SYSC2004A-F26']
+    ];
+
+    const lines = [];
+    rows.forEach(([name, code], i) => {
+      const c = courseFromEnrollment({ OrgUnit: { Id: 1000 + i, Type: { Id: 3 }, Name: name, Code: code } });
+      lines.push(c
+        ? 'code=' + String(c.course_code).padEnd(11) + 'term=' + String(c.term || '—').padEnd(13) + 'name=' + c.course_name
+        : 'REJECTED: ' + name);
+    });
+
+    lines.push('');
+    const dept = courseFromEnrollment({ OrgUnit: { Id: 9, Type: { Id: 2 }, Name: 'Faculty of Engineering' } });
+    lines.push('department (type 2) rejected : ' + (dept === null));
+    const semester = courseFromEnrollment({ OrgUnit: { Id: 8, Type: { Id: 5 }, Name: '2026 Winter' } });
+    lines.push('semester (type 5) rejected   : ' + (semester === null));
+    const untyped = courseFromEnrollment({ OrgUnit: { Id: 10, Name: 'ECOR1042 Something (LEC) Fall 2026' } });
+    lines.push('untyped unit kept            : ' + (untyped !== null) + (untyped ? '  -> ' + untyped.course_code : ''));
+    const empty = courseFromEnrollment({ OrgUnit: { Id: 11, Type: { Id: 3 } } });
+    lines.push('nameless unit rejected       : ' + (empty === null));
+
+    out.textContent = lines.join('\n');
+  } catch (e) {
+    out.textContent = 'ERROR ' + e.name + ': ' + e.message + '\n\n' + (e.stack || '');
+  }
+})();
+</script>
