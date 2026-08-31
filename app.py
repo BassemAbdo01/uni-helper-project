@@ -1,5 +1,6 @@
 import os
 import re
+import html as html_module
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -352,6 +353,25 @@ class HiddenCourse(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
     course_code = db.Column(db.String(40), nullable=False, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class CanvasAccount(db.Model):
+    """One Canvas connection per student.
+
+    The token is stored encrypted rather than hashed, because unlike a password
+    it has to be replayed to Canvas on every sync. It is a bearer credential for
+    the student's whole Canvas account, so the database holding it must not be
+    enough to use it.
+    """
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, unique=True, index=True)
+    base_url = db.Column(db.String(400), nullable=False)
+    token_encrypted = db.Column(db.Text, nullable=False)
+    canvas_name = db.Column(db.String(255), default="")
+    last_sync = db.Column(db.DateTime, nullable=True)
+    last_error = db.Column(db.Text, default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class PasswordResetToken(db.Model):
@@ -3122,6 +3142,27 @@ def _content_payload_hash(payload):
     return hashlib.sha256(raw).hexdigest()
 
 
+def _html_to_text(value):
+    """Flatten an LMS description to readable text.
+
+    Canvas returns assignment and announcement bodies as HTML. Everything
+    downstream -- the AI pipeline, search, the study tools -- wants plain text,
+    and storing markup would also mean storing script tags from a course page.
+    """
+    text = str(value or "")
+    if not text.strip():
+        return ""
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</(p|div|li|tr|h[1-6])>", "\n", text)
+    text = re.sub(r"(?i)<li[^>]*>", "\u2022 ", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_module.unescape(text)
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
+    return text.strip()[:120000]
+
+
 def _sanitize_extracted_text(value):
     """Make extracted document text safe for PostgreSQL and Gemini."""
     if value is None:
@@ -4884,6 +4925,16 @@ def sync_courses():
     if not isinstance(courses, list):
         return jsonify({"error": "courses must be a list."}), 400
 
+    result = _import_courses(user, courses)
+    return jsonify({"ok": True, **result})
+
+
+def _import_courses(user, courses):
+    """Upsert a list of courses for one student.
+
+    Called by the extension's sync route and by the Canvas sync, so a course
+    imported from either LMS is stored identically.
+    """
     counts = {"added": 0, "updated": 0, "unchanged": 0}
     imported = []
     for item in courses[:80]:
@@ -4948,7 +4999,7 @@ def sync_courses():
         imported.append({"course_code": code, "course_name": name, "brightspace_url": url})
 
     db.session.commit()
-    return jsonify({"ok": True, **counts, "courses": imported})
+    return {**counts, "courses": imported}
 
 
 @app.route("/api/sync/status")
@@ -4977,10 +5028,19 @@ def sync_course_content():
         return jsonify({"error": "Invalid or missing extension token."}), 401
 
     payload = request.get_json(silent=True) or {}
-    items = payload.get("items") or []
-    if not isinstance(items, list):
+    if not isinstance(payload.get("items") or [], list):
         return jsonify({"error": "items must be a list."}), 400
 
+    return jsonify({"ok": True, **_import_content(user, payload)})
+
+
+def _import_content(user, payload):
+    """Upsert course content for one student, from either LMS.
+
+    `payload` keeps the extension's shape -- items, replace_courses, scan_meta --
+    so the Canvas sync builds the same dict rather than a second format.
+    """
+    items = payload.get("items") or []
     hidden_codes = {h.course_code for h in HiddenCourse.query.filter_by(user_id=user.id).all()}
     replace_courses = [_normalize_course_code(c) for c in (payload.get("replace_courses") or [])]
     replace_courses = [c for c in replace_courses if c not in hidden_codes]
@@ -5089,7 +5149,7 @@ def sync_course_content():
             else:
                 course_row.last_sync_error = ""
     db.session.commit()
-    return jsonify({"ok": True, **counts, "received": len(items), "replaced_courses": replace_courses})
+    return {**counts, "received": len(items), "replaced_courses": replace_courses}
 
 
 @app.route("/api/updates")
@@ -5517,6 +5577,384 @@ CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "nexora.notify@gmail.com").strip
 @app.context_processor
 def _inject_contact():
     return {"contact_email": CONTACT_EMAIL}
+
+
+# ============================
+# Canvas
+# ============================
+# Brightspace has no student-facing API, which is why it needs a scraping
+# extension. Canvas has one, so Canvas needs no extension at all: the student
+# issues a token in their own Canvas settings and the server reads through it.
+
+CANVAS_TIMEOUT = int(os.environ.get("CANVAS_TIMEOUT", "25"))
+CANVAS_MAX_PAGES = 12
+
+
+def _canvas_fernet():
+    """Key derived from SECRET_KEY so there is no second secret to manage.
+
+    Rotating SECRET_KEY therefore invalidates stored Canvas tokens and every
+    student reconnects. That is the safer failure: a rotated secret should not
+    leave old credentials readable.
+    """
+    from base64 import urlsafe_b64encode
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    secret = (app.config.get("SECRET_KEY") or "").encode("utf-8")
+    if not secret:
+        raise RuntimeError("SECRET_KEY is required before a Canvas token can be stored.")
+    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=b"nexora-canvas-v1",
+               info=b"canvas-access-token").derive(secret)
+    return Fernet(urlsafe_b64encode(key))
+
+
+def _canvas_encrypt(token):
+    return _canvas_fernet().encrypt(token.encode("utf-8")).decode("ascii")
+
+
+def _canvas_decrypt(blob):
+    return _canvas_fernet().decrypt(blob.encode("ascii")).decode("utf-8")
+
+
+def _canvas_base_url(raw):
+    """Accept whatever a student pastes and reduce it to a scheme and host."""
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    if not re.match(r"(?i)^https?://", value):
+        value = "https://" + value
+    try:
+        parsed = urllib.parse.urlparse(value)
+    except ValueError:
+        return ""
+    host = (parsed.hostname or "").strip().lower()
+    if not host or "." not in host or parsed.scheme != "https":
+        return ""
+    return f"https://{host}"
+
+
+def _canvas_request(base_url, token, path, params=None):
+    url = f"{base_url}/api/v1/{path.lstrip('/')}"
+    if params:
+        url += ("&" if "?" in url else "?") + urllib.parse.urlencode(params, doseq=True)
+    request_obj = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    })
+    with urllib.request.urlopen(request_obj, timeout=CANVAS_TIMEOUT) as response:
+        body = response.read().decode("utf-8", "replace")
+        link = response.headers.get("Link", "") or ""
+    return json.loads(body) if body.strip() else [], link
+
+
+def _canvas_next_link(link_header):
+    # Canvas paginates with RFC 5988 Link headers; follow rel="next" only.
+    for part in (link_header or "").split(","):
+        chunk = part.strip()
+        if not chunk.startswith("<"):
+            continue
+        url, _, rest = chunk[1:].partition(">")
+        if 'rel="next"' in rest:
+            return url
+    return ""
+
+
+def _canvas_list(base_url, token, path, params=None):
+    """Every list endpoint, followed to the end of its pages."""
+    merged = []
+    page_params = dict(params or {})
+    page_params.setdefault("per_page", 100)
+    url = None
+    for _ in range(CANVAS_MAX_PAGES):
+        if url is None:
+            data, link = _canvas_request(base_url, token, path, page_params)
+        else:
+            request_obj = urllib.request.Request(url, headers={
+                "Authorization": f"Bearer {token}", "Accept": "application/json"})
+            with urllib.request.urlopen(request_obj, timeout=CANVAS_TIMEOUT) as response:
+                data = json.loads(response.read().decode("utf-8", "replace") or "[]")
+                link = response.headers.get("Link", "") or ""
+        if isinstance(data, dict):
+            data = [data]
+        merged.extend(data or [])
+        url = _canvas_next_link(link)
+        if not url:
+            break
+    return merged
+
+
+def _canvas_error_message(exc):
+    """Turn a urllib failure into something a student can act on."""
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code in (401, 403):
+            return ("Canvas rejected that token. Generate a new access token in Canvas "
+                    "under Account \u2192 Settings \u2192 New Access Token, and paste it again.")
+        if exc.code == 404:
+            return "That address does not look like a Canvas site. Check the web address you pasted."
+        return f"Canvas returned an error ({exc.code})."
+    if isinstance(exc, urllib.error.URLError):
+        return "Could not reach that Canvas address. Check the web address and try again."
+    return "Could not read from Canvas."
+
+
+def _canvas_term_label(course):
+    term = course.get("term") if isinstance(course.get("term"), dict) else {}
+    name = str(term.get("name") or "").strip()
+    # Canvas often names the default term "Default Term", which tells a student nothing.
+    if name and name.lower() not in {"default term", "term", "the end of time"}:
+        return name[:120]
+    start = str(course.get("start_at") or term.get("start_at") or "")[:10]
+    if len(start) == 10:
+        month = int(start[5:7])
+        season = "Winter" if month <= 4 else ("Summer" if month <= 8 else "Fall")
+        return f"{season} {start[:4]}"
+    return ""
+
+
+def _canvas_due_date(value):
+    """Canvas sends ISO 8601 with a Z; the app stores plain YYYY-MM-DD."""
+    text = str(value or "")[:10]
+    return text if re.match(r"^\d{4}-\d{2}-\d{2}$", text) else ""
+
+
+def canvas_sync(user):
+    """Pull the student's Canvas into the same tables Brightspace writes to."""
+    account = CanvasAccount.query.filter_by(user_id=user.id).first()
+    if not account:
+        raise ValueError("No Canvas account is connected.")
+    token = _canvas_decrypt(account.token_encrypted)
+    base = account.base_url
+
+    courses = _canvas_list(base, token, "courses", {
+        "enrollment_state": "active",
+        "include[]": ["term", "course_image"],
+        "state[]": ["available"],
+    })
+
+    course_payload, content_items, task_rows, announcements = [], [], [], []
+    seen_courses = 0
+
+    for course in courses:
+        if not isinstance(course, dict) or course.get("access_restricted_by_date"):
+            continue
+        cid = course.get("id")
+        if not cid:
+            continue
+        seen_courses += 1
+        raw_code = str(course.get("course_code") or course.get("name") or "OTHER")
+        code = _normalize_course_code(raw_code)
+        course_payload.append({
+            "source_uid": f"canvas:{base}:{cid}",
+            "course_code": raw_code,
+            "course_name": str(course.get("name") or raw_code),
+            "term": _canvas_term_label(course),
+            "image_url": str(course.get("image_download_url") or ""),
+            "brightspace_url": f"{base}/courses/{cid}",
+        })
+
+        try:
+            assignments = _canvas_list(base, token, f"courses/{cid}/assignments",
+                                       {"order_by": "due_at"})
+        except Exception:
+            assignments = []
+        for row in assignments:
+            if not isinstance(row, dict):
+                continue
+            title = str(row.get("name") or "").strip()
+            if not title:
+                continue
+            uid = f"canvas:{base}:{cid}:assignment:{row.get('id')}"
+            content_items.append({
+                "course": code,
+                "title": title,
+                "content_type": "assignment",
+                "source_url": str(row.get("html_url") or ""),
+                "source_uid": uid,
+                "content_text": _html_to_text(str(row.get("description") or "")),
+                "module_name": "Assignments",
+                "published_at": str(row.get("created_at") or "")[:80],
+            })
+            due = _canvas_due_date(row.get("due_at"))
+            if due:
+                task_rows.append({"course": code, "title": title, "due": due, "uid": uid})
+
+        try:
+            posts = _canvas_list(base, token, f"courses/{cid}/discussion_topics",
+                                 {"only_announcements": "true"})
+        except Exception:
+            posts = []
+        for row in posts[:25]:
+            if not isinstance(row, dict):
+                continue
+            title = str(row.get("title") or "").strip()
+            if not title:
+                continue
+            announcements.append({
+                "course": code,
+                "title": title,
+                "detail": _html_to_text(str(row.get("message") or ""))[:2000],
+                "uid": f"canvas:{base}:{cid}:announcement:{row.get('id')}",
+            })
+
+        try:
+            pages = _canvas_list(base, token, f"courses/{cid}/modules",
+                                 {"include[]": ["items"]})
+        except Exception:
+            pages = []
+        for module in pages:
+            if not isinstance(module, dict):
+                continue
+            module_name = str(module.get("name") or "")[:1000]
+            for entry in (module.get("items") or [])[:80]:
+                if not isinstance(entry, dict):
+                    continue
+                title = str(entry.get("title") or "").strip()
+                kind = str(entry.get("type") or "").lower()
+                if not title or kind in {"subheader", "assignment"}:
+                    continue
+                content_items.append({
+                    "course": code,
+                    "title": title,
+                    "content_type": "lecture" if kind in {"page", "file"} else "resource",
+                    "source_url": str(entry.get("html_url") or ""),
+                    "source_uid": f"canvas:{base}:{cid}:item:{entry.get('id')}",
+                    "content_text": "",
+                    "module_name": module_name,
+                    "published_at": "",
+                })
+
+    course_counts = _import_courses(user, course_payload)
+    content_counts = _import_content(user, {"items": content_items})
+    task_counts = _import_canvas_tasks(user, task_rows)
+    update_counts = _import_canvas_announcements(user, announcements)
+
+    account.last_sync = datetime.utcnow()
+    account.last_error = ""
+    db.session.commit()
+
+    return {
+        "courses": seen_courses,
+        "course_counts": course_counts,
+        "content": content_counts,
+        "tasks": task_counts,
+        "announcements": update_counts,
+    }
+
+
+def _import_canvas_tasks(user, rows):
+    """Assignments with a due date become the same Tasks the ICS feed creates,
+    so deadlines, the calendar and the dashboard need no Canvas-specific path."""
+    counts = {"added": 0, "updated": 0, "unchanged": 0}
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for row in rows[:600]:
+        course = row["course"]
+        base_name = base_title(row["title"])
+        group_id = make_group_id(course, base_name)
+        existing = Task.query.filter_by(user_id=user.id, source_uid=row["uid"]).first()
+        if existing:
+            if existing.due_raw == row["due"] and existing.title == row["title"]:
+                counts["unchanged"] += 1
+                continue
+            existing.title = row["title"]
+            existing.base_title = base_name
+            existing.due_raw = row["due"]
+            existing.group_id = group_id
+            counts["updated"] += 1
+            continue
+        db.session.add(Task(
+            id=uuid4().hex, user_id=user.id, group_id=group_id,
+            title=row["title"], base_title=base_name, course_full=course,
+            course_prefix=course_prefix(course) if course != "OTHER" else "OTHER",
+            due_raw=row["due"], kind="due", is_deadline=True, source="canvas",
+            created_at=stamp, source_uid=row["uid"], sync_state="active",
+        ))
+        counts["added"] += 1
+    db.session.commit()
+    return counts
+
+
+def _import_canvas_announcements(user, rows):
+    counts = {"added": 0, "unchanged": 0}
+    for row in rows[:200]:
+        if AcademicUpdate.query.filter_by(user_id=user.id, related_uid=row["uid"]).first():
+            counts["unchanged"] += 1
+            continue
+        db.session.add(AcademicUpdate(
+            id=uuid4().hex, user_id=user.id, course_full=row["course"],
+            update_type="announcement", title=row["title"][:500],
+            detail=row["detail"], related_uid=row["uid"],
+        ))
+        counts["added"] += 1
+    db.session.commit()
+    return counts
+
+
+@app.route("/connect-canvas")
+@login_required
+def connect_canvas():
+    account = CanvasAccount.query.filter_by(user_id=current_user.id).first()
+    return render_template("connect_canvas.html", account=account)
+
+
+@app.route("/api/canvas/connect", methods=["POST"])
+@limiter.limit("12 per hour")
+@login_required
+def canvas_connect():
+    data = request.get_json(silent=True) or {}
+    base = _canvas_base_url(data.get("base_url"))
+    token = str(data.get("token") or "").strip()
+    if not base:
+        return jsonify({"error": "Enter your Canvas web address, for example canvas.yourschool.edu."}), 400
+    if len(token) < 20:
+        return jsonify({"error": "That does not look like a Canvas access token."}), 400
+
+    # Prove the token works before storing it, and learn who it belongs to.
+    try:
+        profile, _ = _canvas_request(base, token, "users/self/profile")
+    except Exception as exc:
+        return jsonify({"error": _canvas_error_message(exc)}), 400
+    if not isinstance(profile, dict) or not profile.get("id"):
+        return jsonify({"error": "Canvas did not recognise that token."}), 400
+
+    account = CanvasAccount.query.filter_by(user_id=current_user.id).first()
+    if not account:
+        account = CanvasAccount(id=uuid4().hex, user_id=current_user.id)
+        db.session.add(account)
+    account.base_url = base
+    account.token_encrypted = _canvas_encrypt(token)
+    account.canvas_name = str(profile.get("name") or "")[:255]
+    account.last_error = ""
+    db.session.commit()
+    return jsonify({"ok": True, "name": account.canvas_name, "base_url": base})
+
+
+@app.route("/api/canvas/sync", methods=["POST"])
+@limiter.limit("30 per hour")
+@login_required
+def canvas_sync_now():
+    account = CanvasAccount.query.filter_by(user_id=current_user.id).first()
+    if not account:
+        return jsonify({"error": "Connect Canvas first."}), 400
+    try:
+        summary = canvas_sync(current_user)
+    except Exception as exc:
+        app.logger.exception("Canvas sync failed")
+        message = _canvas_error_message(exc)
+        account.last_error = message
+        db.session.commit()
+        return jsonify({"error": message}), 502
+    return jsonify({"ok": True, **summary})
+
+
+@app.route("/api/canvas/disconnect", methods=["POST"])
+@login_required
+def canvas_disconnect():
+    """Forget the token. Imported coursework stays; only the connection goes."""
+    CanvasAccount.query.filter_by(user_id=current_user.id).delete()
+    db.session.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/support")

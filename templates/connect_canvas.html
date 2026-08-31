@@ -1,0 +1,201 @@
+{% extends "app_base.html" %}
+{% set nav_active = 'connect_canvas' %}
+{% block title %}Canvas — Nexora{% endblock %}
+
+{% block head %}
+<style>
+.narrow{max-width:760px}
+.state{display:flex;gap:12px;align-items:flex-start;padding:14px 15px;border-radius:6px;
+  border:1px solid var(--line);background:var(--surface-2)}
+.state i{width:8px;height:8px;border-radius:50%;flex:none;margin-top:6px;background:var(--fg-3);
+  font-style:normal}
+.state.on{border-color:rgba(127,176,138,.35)}
+.state.on i{background:var(--green)}
+.state.bad{border-color:rgba(201,112,92,.35)}
+.state.bad i{background:var(--red)}
+.state strong{display:block;font-size:14.5px;font-weight:500}
+.state span{display:block;color:var(--fg-2);font-size:13.5px;margin-top:3px;overflow-wrap:anywhere}
+
+.steps{counter-reset:step;list-style:none;margin:0 0 18px;padding:0}
+.steps li{counter-increment:step;position:relative;padding:0 0 14px 34px;font-size:14px;color:var(--fg-2)}
+.steps li:last-child{padding-bottom:0}
+.steps li::before{content:counter(step,decimal-leading-zero);position:absolute;left:0;top:1px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--amber)}
+.steps li strong{color:var(--fg);font-weight:500}
+.steps code{font-family:var(--mono);font-size:12.5px;color:var(--fg);background:var(--surface-3);
+  padding:1px 6px;border-radius:3px}
+
+.status{margin-top:14px;font-size:13.5px;color:var(--fg-2);min-height:1.2em}
+.status.error{color:var(--red)}
+.status.success{color:var(--green)}
+.rowbtns{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="top">
+  <div>
+    <p class="eyebrow">Canvas</p>
+    <h1>Connect <em>Canvas</em>.</h1>
+    <p class="lede">
+      Canvas has a proper API, so there is no extension to install. Nexora reads your
+      courses, assignments, deadlines and announcements directly.
+    </p>
+  </div>
+  {% if account %}
+  <div class="actions">
+    <button class="btn" id="syncBtn" type="button">Sync now</button>
+  </div>
+  {% endif %}
+</div>
+
+<div class="narrow">
+  <section class="card">
+    <header><div><span class="k">Where things stand</span><h2>Connection</h2></div></header>
+    <div class="body pad">
+      {% if account %}
+        <div class="state {% if account.last_error %}bad{% else %}on{% endif %}">
+          <i></i>
+          <div>
+            <strong>
+              {% if account.last_error %}Needs attention{% else %}Connected{% endif %}
+              {% if account.canvas_name %} — {{ account.canvas_name }}{% endif %}
+            </strong>
+            <span>{{ account.base_url }}</span>
+            <span>
+              {% if account.last_sync %}Last synced {{ account.last_sync.strftime('%b %d at %I:%M %p') }}
+              {% else %}Not synced yet — press Sync now.{% endif %}
+            </span>
+            {% if account.last_error %}<span>{{ account.last_error }}</span>{% endif %}
+          </div>
+        </div>
+        <p class="status" id="syncStatus" role="status"></p>
+      {% else %}
+        <div class="state">
+          <i></i>
+          <div>
+            <strong>Not connected</strong>
+            <span>Follow the three steps below. It takes about a minute.</span>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="card">
+    <header><div><span class="k">One minute</span><h2>Get your access token</h2></div></header>
+    <div class="body pad">
+      <ol class="steps">
+        <li>In Canvas, open <strong>Account &rarr; Settings</strong>.</li>
+        <li>Scroll to <strong>Approved Integrations</strong> and press
+            <strong>+ New Access Token</strong>. Put <code>Nexora</code> as the purpose and
+            leave the expiry blank.</li>
+        <li>Press <strong>Generate Token</strong> and copy it. Canvas shows it
+            <strong>once</strong> — if you close that box you will need a new one.</li>
+      </ol>
+
+      <div class="field">
+        <label for="baseUrl">Your Canvas web address</label>
+        <input id="baseUrl" placeholder="canvas.yourschool.edu"
+               value="{{ account.base_url if account else '' }}">
+        <p class="hint">The address you use for Canvas. Copying the whole URL is fine.</p>
+      </div>
+
+      <div class="field">
+        <label for="token">Access token</label>
+        <input id="token" type="password" placeholder="Paste the token from Canvas">
+        <p class="hint">
+          Stored encrypted, and only ever used to read your own courses.
+          <a href="{{ url_for('privacy') }}" style="color:var(--amber)">What Nexora does with it &rarr;</a>
+        </p>
+      </div>
+
+      <div class="rowbtns">
+        <button class="btn" id="connectBtn" type="button">
+          {% if account %}Replace token{% else %}Connect Canvas{% endif %}
+        </button>
+        {% if account %}
+        <button class="btn danger" id="disconnectBtn" type="button">Disconnect</button>
+        {% endif %}
+      </div>
+      <p class="status" id="connectStatus" role="status"></p>
+    </div>
+  </section>
+
+  <div class="note">
+    A token is a key to your whole Canvas account, so treat it like a password. If you ever
+    want it revoked, delete it in Canvas under Approved Integrations — Nexora loses access
+    immediately.
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const say = (el, message, kind = '') => {
+    el.className = 'status' + (kind ? ' ' + kind : '');
+    el.textContent = message;
+  };
+
+  $('connectBtn').onclick = async () => {
+    const status = $('connectStatus');
+    const base = $('baseUrl').value.trim();
+    const token = $('token').value.trim();
+    if (!base) return say(status, 'Enter your Canvas web address first.', 'error');
+    if (!token) return say(status, 'Paste the access token you generated in Canvas.', 'error');
+
+    say(status, 'Checking that token with Canvas…');
+    $('connectBtn').disabled = true;
+    try {
+      const res = await fetch('/api/canvas/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base_url: base, token })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not connect Canvas.');
+      say(status, `Connected as ${data.name || 'your Canvas account'}. Importing your courses…`, 'success');
+      $('token').value = '';
+      const sync = await fetch('/api/canvas/sync', { method: 'POST' });
+      const summary = await sync.json();
+      if (!sync.ok) throw new Error(summary.error || 'Connected, but the first sync failed.');
+      say(status, `Imported ${summary.courses} course${summary.courses === 1 ? '' : 's'}. Reloading…`, 'success');
+      setTimeout(() => location.reload(), 900);
+    } catch (error) {
+      say(status, error.message, 'error');
+    } finally {
+      $('connectBtn').disabled = false;
+    }
+  };
+
+  const syncBtn = $('syncBtn');
+  if (syncBtn) syncBtn.onclick = async () => {
+    const status = $('syncStatus');
+    syncBtn.disabled = true;
+    say(status, 'Reading your Canvas courses…');
+    try {
+      const res = await fetch('/api/canvas/sync', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Sync failed.');
+      const added = (data.tasks && data.tasks.added) || 0;
+      say(status, `Done. ${data.courses} course${data.courses === 1 ? '' : 's'}, `
+        + `${data.content.added + data.content.updated} items, ${added} new deadlines.`, 'success');
+    } catch (error) {
+      say(status, error.message, 'error');
+    } finally {
+      syncBtn.disabled = false;
+    }
+  };
+
+  const off = $('disconnectBtn');
+  if (off) off.onclick = async () => {
+    if (!confirm('Disconnect Canvas? Your imported courses stay in Nexora; only the connection is removed.')) return;
+    await fetch('/api/canvas/disconnect', { method: 'POST' });
+    location.reload();
+  };
+})();
+</script>
+{% endblock %}

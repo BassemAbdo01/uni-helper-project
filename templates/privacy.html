@@ -23,8 +23,10 @@
 
   <h2>The short version</h2>
   <p>
-    Nexora reads your university's learning management system through the session you
-    are <strong>already signed into</strong>, so that your coursework appears in one place.
+    Nexora reads your university's learning management system so that your coursework
+    appears in one place &mdash; Brightspace through the session you are
+    <strong>already signed into</strong>, Canvas through an access token you issue
+    yourself.
     It never asks for, sees, or stores your university password. Your coursework is
     stored against your Nexora account and is not sold, shared with other students, or
     used for advertising.
@@ -47,6 +49,25 @@
   <p>
     It does not read anything outside your LMS. It has no access to your other tabs,
     your browsing history, or any site you have not explicitly granted it.
+  </p>
+
+  <h2>If you use Canvas instead</h2>
+  <p>
+    Canvas publishes an API, so there is no extension and nothing is scraped. You create
+    an <strong>access token</strong> in your own Canvas settings and give it to Nexora,
+    which then reads your courses, assignments, due dates, announcements and module
+    listings directly.
+  </p>
+  <p>
+    That token is a key to your Canvas account, so it is <strong>stored encrypted</strong>
+    rather than in the clear: reading the database is not enough to use it. It is only
+    ever sent back to your own university's Canvas, never anywhere else, and Nexora only
+    ever reads &mdash; it never submits work or changes anything.
+  </p>
+  <p>
+    You can revoke it at any time from Canvas under <strong>Account &rarr; Settings &rarr;
+    Approved Integrations</strong>, which cuts Nexora off immediately, or press
+    <strong>Disconnect</strong> in Nexora, which deletes the token from the database.
   </p>
 
   <h2>Permissions, and why each one exists</h2>
