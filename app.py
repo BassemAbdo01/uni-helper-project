@@ -4222,10 +4222,17 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
     # available on this key. That silently lowers reasoning quality on the one
     # task where it matters most, so say so rather than hiding it.
     if models_used and not any("pro" in str(m).lower() for m in models_used):
+        # The operator half of this -- which model, which variable to set -- goes
+        # to the log and /admin/health. A student cannot act on an environment
+        # variable, and "needs your review" is a list of facts about their own
+        # outline, not a place to file someone else's configuration.
+        app.logger.warning(
+            "CONFIG: outline analysed with %s because no Pro-tier Gemini model was available "
+            "for this key. Accuracy on complex grading schemes is lower than usual; set "
+            "GEMINI_REASONING_MODEL to a Pro model to restore it.", models_used[0])
         ambiguities.append(
-            "Analyzed with " + str(models_used[0]) + " because no Pro-tier Gemini model was "
-            "available for this API key. Accuracy on complex grading schemes is lower than "
-            "usual -- set GEMINI_REASONING_MODEL to a Pro model to restore it."
+            "This outline was read by a smaller model than usual, so the weights and rules "
+            "below are worth checking more carefully than normal before you confirm them."
         )
     for v in (facts.get("missing_or_ambiguous_information") or []):
         cleaned = _clean_ambiguity_item(v)

@@ -235,7 +235,8 @@
               {% if options %}
                 {% for opt in options %}
                   {% for comp in (opt.components or []) %}
-                    {% if comp.source and comp.source == c.name %}
+                    {% if (comp.source and comp.source == c.name)
+                          or (comp.name and comp.name|lower|trim == c.name|lower|trim) %}
                       {% set ns.direct = ns.direct + [comp.weight|float] %}
                     {% elif comp.source_group and c.name in comp.source_group %}
                       {% set ns.grouped = true %}
@@ -249,7 +250,9 @@
                 {% elif ns.grouped %}
                   {% set ns.label = 'Combined with others — see schemes above' %}
                 {% else %}
-                  {% set ns.label = 'Not scored directly — used for pass/fail check' %}
+                  {# Not finding it in any scheme means we do not know its weight,
+                     which is not the same as knowing it has none. #}
+                  {% set ns.label = 'Weight not detected — check the schemes above' %}
                 {% endif %}
               {% endif %}
               <div class="rule-chip editable-weight" data-component-name="{{ c.name|e }}"><span class="rule-chip-text">{{ c.name }} · {{ ns.label }}</span><span class="rule-chip-edit"><input type="text" aria-label="Component name" class="name-edit-input weight-edit-input" value="{{ c.name|e }}" style="width:130px;text-align:left"> <input type="number" aria-label="Component weight, percent" class="weight-edit-input" value="{{ c.weight }}" step="1" min="0" max="100">%<button type="button" class="chip-remove-btn" data-remove-component="{{ c.name|e }}" title="Remove this component">×</button></span></div>
