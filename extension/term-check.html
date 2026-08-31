@@ -1,0 +1,58 @@
+<meta charset="utf-8"><title>term tab detection</title>
+<style>body{background:#151310;color:#B8B1A5;font:13px ui-monospace,Menlo,monospace;padding:20px}
+pre{white-space:pre-wrap;line-height:1.7}</style>
+<div id="stage" style="display:none"></div>
+<pre id="out">running…</pre>
+<script>
+(async () => {
+  const out = document.getElementById('out');
+  try {
+    const src = await (await fetch('content.js?' + Date.now())).text();
+
+    const grab = name => {
+      const i = src.indexOf('function ' + name + '(');
+      if (i < 0) throw new Error('missing ' + name);
+      let depth = 0, started = false;
+      for (let j = i; j < src.length; j++) {
+        if (src[j] === '{') { depth++; started = true; }
+        else if (src[j] === '}') { depth--; if (started && depth === 0) return src.slice(i, j + 1); }
+      }
+    };
+
+    // the two things selectedTermLabel closes over
+    const clean = v => String(v ?? '').replace(/\s+/g, ' ').trim();
+    const queryAll = sel => [...document.querySelectorAll(sel)];
+    const SEASON_BY_CODE = { '10': 'Winter', '20': 'Summer', '30': 'Fall' };
+    const selectedTermLabel = eval('(' + grab('selectedTermLabel') + ')');
+
+    const stage = document.getElementById('stage');
+    const cases = [
+      ['D2L coded tab, Winter',  '<div role="tablist"><div>2026.30 Fall</div><div aria-selected="true">2026.10 Winter</div></div>', 'Winter 2026'],
+      ['D2L coded tab, Fall',    '<div role="tablist"><div aria-selected="true">2026.30 Fall</div><div>2026.10 Winter</div></div>', 'Fall 2026'],
+      ['D2L coded tab, Summer',  '<div aria-selected="true">2026.20 Summer</div>', 'Summer 2026'],
+      ['plain wording',          '<div aria-selected="true">Winter 2026</div>', 'Winter 2026'],
+      ['lowercase wording',      '<div aria-selected="true">fall 2025</div>', 'Fall 2025'],
+      ['Autumn folded to Fall',  '<div aria-selected="true">Autumn 2025</div>', 'Fall 2025'],
+      ['selected class instead', '<div class="d2l-tab-selected">2025.30 Fall</div>', 'Fall 2025'],
+      ['no tab selected',        '<div role="tablist"><div>2026.10 Winter</div></div>', ''],
+      ['selected but not a term','<div aria-selected="true">All courses</div>', ''],
+      ['long text ignored',      '<div aria-selected="true">' + 'x'.repeat(60) + ' Winter 2026</div>', '']
+    ];
+
+    const lines = [];
+    let bad = 0;
+    for (const [label, html, expected] of cases) {
+      stage.innerHTML = html;
+      const got = selectedTermLabel();
+      const ok = got === expected;
+      if (!ok) bad++;
+      lines.push(`${ok ? 'ok  ' : 'FAIL'}  ${label.padEnd(26)} -> ${JSON.stringify(got)}${ok ? '' : '   expected ' + JSON.stringify(expected)}`);
+    }
+    lines.push('');
+    lines.push(bad ? `${bad} failing` : 'all cases pass');
+    out.textContent = lines.join('\n');
+  } catch (e) {
+    out.textContent = 'ERROR ' + e.name + ': ' + e.message + '\n\n' + (e.stack || '');
+  }
+})();
+</script>

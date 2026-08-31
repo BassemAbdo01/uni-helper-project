@@ -5074,7 +5074,17 @@ def _import_courses(user, courses):
         imported.append({"course_code": code, "course_name": name, "brightspace_url": url})
 
     db.session.commit()
-    return {**counts, "courses": imported}
+
+    # What the extension reported as "62 imported" was the number it discovered,
+    # while the dashboard showed the rows that exist -- fewer whenever two org
+    # units normalise to one code, or a course carries a removal tombstone. Both
+    # were true and they answered different questions, so the count the student
+    # will see on their dashboard is returned here and reported instead.
+    hidden = {h.course_code for h in HiddenCourse.query.filter_by(user_id=user.id).all()}
+    stored = sum(1 for c in SyncedCourse.query.filter_by(user_id=user.id).all()
+                 if not bool(getattr(c, "is_hidden", False)) and c.course_code not in hidden)
+
+    return {**counts, "courses": imported, "stored": stored}
 
 
 @app.route("/api/sync/status")

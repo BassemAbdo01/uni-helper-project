@@ -159,6 +159,31 @@
     };
   }
 
+  // D2L labels its term tabs "2026.10 Winter", "2026.30 Fall". The selected one
+  // is the term the student is looking at, and the only one they asked for.
+  const SEASON_BY_CODE = { '10': 'Winter', '20': 'Summer', '30': 'Fall' };
+
+  function selectedTermLabel() {
+    const candidates = queryAll('[aria-selected="true"],[selected],.d2l-tab-selected,[class*="selected"]');
+    for (const node of candidates) {
+      const text = clean(node.textContent || node.getAttribute?.('aria-label') || '');
+      if (!text || text.length > 40) continue;
+
+      // "2026.10 Winter" and "Winter 2026" are the same tab written two ways.
+      const coded = text.match(/\b(20\d{2})\s*[.\-]\s*(10|20|30)\b/);
+      if (coded) {
+        const season = SEASON_BY_CODE[coded[2]];
+        if (season) return `${season} ${coded[1]}`;
+      }
+      const plain = text.match(/\b(Winter|Spring|Summer|Fall|Autumn)\s+(20\d{2})\b/i);
+      if (plain) {
+        const season = plain[1][0].toUpperCase() + plain[1].slice(1).toLowerCase();
+        return `${season === 'Autumn' ? 'Fall' : season} ${plain[2]}`;
+      }
+    }
+    return '';
+  }
+
   async function discoverCoursesFromApi(includeFinished) {
     const versions = await detectApiVersions();
 
@@ -624,7 +649,7 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.1.0' }); return false; }
+    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.2.0' }); return false; }
     if (message?.type === 'NEXORA_SESSION_CHECK') { sessionCheck().then(sendResponse); return true; }
     if (message?.type === 'NEXORA_DISCOVER_COURSES') {
       // Every frame gets asked. A frame that finds nothing stays quiet so the
@@ -640,6 +665,13 @@
           fromApi = [];
         }
 
+        // Only the term on screen, when the page says which one that is.
+        const term = selectedTermLabel();
+        if (term && fromApi.length) {
+          const onlyThisTerm = fromApi.filter(c => c.term === term);
+          if (onlyThisTerm.length) fromApi = onlyThisTerm;
+        }
+
         if (fromApi.length) {
           // Cards on the page are real enrolments too. The API may have been
           // filtered, and it carries no images, so the page is merged in rather
@@ -649,11 +681,14 @@
             const existing = merged.get(card.source_uid);
             if (existing) {
               if (!existing.image_url && card.image_url) existing.image_url = card.image_url;
-            } else {
+            } else if (!term || card.term === term) {
+              // Cards from a term the student is not looking at would undo the
+              // filter, so only this term's are added.
               merged.set(card.source_uid, card);
             }
           }
-          return { ok: true, courses: [...merged.values()], method: 'enrollments-api+dom' };
+          return { ok: true, courses: [...merged.values()], term,
+                   method: term ? `enrollments-api+dom (${term})` : 'enrollments-api+dom' };
         }
 
         // No API on this tenant: fall back to reading the page, which sees one

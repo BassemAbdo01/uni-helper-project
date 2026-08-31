@@ -144,9 +144,15 @@ $('go').onclick = async () => {
   try {
     const result = await chrome.runtime.sendMessage({ type: 'NEXORA_SYNC_EVERYTHING' });
     if (!result?.ok) throw new Error(result?.error || 'Sync failed.');
-    const found = result.discovery?.courseDiscovery?.found ?? result.discovery?.found;
+    // The count the dashboard will show, not the count discovered on the page:
+    // those differ whenever two sections share a course code or a course was
+    // removed, and two numbers for one thing reads as a bug.
+    const d = result.discovery?.courseDiscovery || result.discovery || {};
+    const courses = d.stored ?? d.found ?? 0;
     const items = result.summary?.itemsFound;
-    say(`Done. ${found ?? 0} courses${items !== undefined ? ` · ${items} items imported` : ''}.`, 'good');
+    const term = result.discovery?.term;
+    say(`Done. ${courses} course${courses === 1 ? '' : 's'}${term ? ` from ${term}` : ''}`
+      + `${items !== undefined ? ` · ${items} items imported` : ''}.`, 'good');
   } catch (error) {
     say(error?.message || 'Sync failed.', 'bad');
   } finally {

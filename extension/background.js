@@ -46,6 +46,44 @@ async function hasOriginPermission(origin) {
   }
 }
 
+// A Manifest V3 worker is collected after roughly thirty seconds without an
+// event, and a full sync runs for minutes. Touching an extension API on an
+// interval resets that timer, so a sync survives the popup closing and the
+// student clicking elsewhere. Held only while work is genuinely in flight.
+let keepAliveTimer = null;
+let keepAliveDepth = 0;
+
+function holdWorkerAwake() {
+  keepAliveDepth += 1;
+  if (!keepAliveTimer) {
+    keepAliveTimer = setInterval(() => {
+      chrome.runtime.getPlatformInfo().catch(() => {});
+    }, 20000);
+  }
+}
+
+function releaseWorker() {
+  keepAliveDepth = Math.max(0, keepAliveDepth - 1);
+  if (keepAliveDepth === 0 && keepAliveTimer) {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+  }
+}
+
+async function notify(title, message) {
+  // The popup is usually gone by the time a sync finishes; without this the
+  // student has no way to know it worked.
+  try {
+    await chrome.notifications.create({
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title,
+      message,
+      priority: 0
+    });
+  } catch (_) {}
+}
+
 async function setStatus(patch) {
   const old = await chrome.storage.local.get(['syncStatus']);
   const syncStatus = { ...(old.syncStatus || {}), ...patch };
@@ -216,6 +254,16 @@ async function sendToBrightspace(message, retries = 2) {
 }
 
 async function discoverCourses() {
+  holdWorkerAwake();
+  try {
+    return await runDiscoverCourses();
+  } finally {
+    releaseWorker();
+  }
+}
+
+
+async function runDiscoverCourses() {
   const tab = await findBrightspaceTab();
   if (!tab) throw new Error('Open your university\'s Brightspace My Courses page and sign in first.');
   const origin = normalizeOrigin(tab.url);
@@ -229,13 +277,18 @@ async function discoverCourses() {
   const courses = result.courses || [];
   const imported = await api('/api/sync/courses', { method: 'POST', body: { courses } });
   await chrome.storage.local.set({ detectedCourses: courses });
+  // found is what the page offered, stored is what Nexora now holds. They differ
+  // when two sections share a course code or a course carries a removal
+  // tombstone, and showing the first while the dashboard shows the second is
+  // what produced "62 here, 60 there".
+  const courseDiscovery = { found: courses.length, ...imported, term: result.term || '' };
   await setStatus({
     phase: 'courses-imported',
-    courseDiscovery: { found: courses.length, ...imported },
+    courseDiscovery,
     connectionExpired: false,
     error: ''
   });
-  return { courses, imported };
+  return { courses, imported, courseDiscovery, term: result.term || '' };
 }
 
 function htmlToText(value) {
@@ -524,6 +577,16 @@ async function verifySession(origin) {
 }
 
 async function syncAllCourses(trigger = 'manual') {
+  holdWorkerAwake();
+  try {
+    return await runSyncAllCourses(trigger);
+  } finally {
+    releaseWorker();
+  }
+}
+
+
+async function runSyncAllCourses(trigger = 'manual') {
   const cfg = await getConfig();
   if (!cfg.apiBase || !cfg.token) throw new Error('Configure Nexora Sync first.');
   const origin = cfg.brightspaceOrigin;
@@ -608,6 +671,12 @@ async function syncAllCourses(trigger = 'manual') {
   // undefined, treats the data as infinitely old, and syncs on every single
   // page view -- the hammering the check exists to prevent.
   await chrome.storage.local.set({ lastFullSync: Date.now() });
+  await notify(
+    summary.failed === courses.length ? 'Nexora Sync could not finish' : 'Nexora is up to date',
+    summary.failed === courses.length
+      ? 'Open Brightspace and sign in again, then sync.'
+      : `${summary.scanned} of ${courses.length} courses · ${summary.itemsFound} items imported.`
+  );
   return summary;
 }
 
