@@ -102,15 +102,28 @@ purposes, and not used to determine creditworthiness.
 https://uni-helper-project.onrender.com/privacy
 ```
 
+## Additional fields
+
+| Field | Value |
+|---|---|
+| Official URL | leave **None** — it only lists sites verified in Search Console |
+| Homepage URL | `https://uni-helper-project.onrender.com` |
+| Support URL | `https://uni-helper-project.onrender.com/support` |
+| Mature content | off |
+
 ---
 
 ## Screenshots (1280×800, in `store/screenshots/`)
 
 | File | Shows |
 |---|---|
-| `1-one-click-any-university.png` | The popup on first run — one button |
-| `2-your-semester-in-one-place.png` | The Nexora dashboard after a sync |
-| `3-every-course-organised.png` | A course workspace with imported material |
+| `1-connect-in-two-clicks.png` | The popup on first run |
+| `2-works-at-any-university.png` | The popup connected to a university |
+| `3-everything-in-one-pass.png` | The popup after a sync |
+| `4-your-semester-in-one-place.png` | The Nexora dashboard after a sync |
+| `5-every-course-organised.png` | A course workspace with imported material |
+
+Also available: `promo-small-440x280.png` and `promo-marquee-1400x560.png`.
 
 ## Store icon
 

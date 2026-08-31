@@ -5509,6 +5509,14 @@ def handle_unexpected(exc):
     )
 
 
+@app.route("/support")
+def support():
+    """Public for the same reason /privacy is: the person who needs it most is
+    the one who cannot get the extension to connect, so it cannot sit behind a
+    login. Linked as the support URL on the Chrome Web Store listing."""
+    return render_template("support.html")
+
+
 @app.route("/privacy")
 def privacy():
     """Public, and deliberately not behind login: the Chrome Web Store listing

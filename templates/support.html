@@ -1,0 +1,97 @@
+{% extends "auth_base.html" %}
+{% block title %}Help — Nexora{% endblock %}
+
+{% block body %}
+<style>
+.help{max-width:66ch;text-align:left}
+.help h2{font-family:"Fraunces",Georgia,serif;font-weight:400;font-size:1.15rem;
+  letter-spacing:-.01em;margin:34px 0 12px}
+.help h2:first-of-type{margin-top:26px}
+.help h3{font-size:14.5px;font-weight:500;color:var(--fg);margin:20px 0 6px}
+.help p{margin:0 0 12px;color:var(--fg-2);font-size:14.5px;line-height:1.65}
+.help ol,.help ul{margin:0 0 12px;padding-left:20px;color:var(--fg-2);font-size:14.5px;line-height:1.65}
+.help li{margin-bottom:8px}
+.help strong{color:var(--fg);font-weight:500}
+.help a{color:var(--amber)}
+.help .step{counter-reset:s;list-style:none;padding:0}
+.help .step li{counter-increment:s;position:relative;padding-left:32px}
+.help .step li:before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:1px;
+  font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.1em;color:var(--amber)}
+.help .box{border:1px solid var(--line);border-left:2px solid var(--amber);border-radius:5px;
+  padding:13px 15px;background:var(--surface-2);margin:0 0 14px}
+</style>
+
+<div class="help">
+  <p class="eyebrow">Nexora Sync</p>
+  <h1>Help</h1>
+
+  <h2>Setting it up</h2>
+  <ol class="step">
+    <li>Install <strong>Nexora Sync</strong> from the Chrome Web Store.</li>
+    <li>Click the Nexora icon in your toolbar, then <strong>Connect to Nexora</strong>.
+        It opens Nexora and links itself to your account. There is no key to copy.</li>
+    <li>Open <strong>your own university's Brightspace</strong> in a tab and sign in as normal.</li>
+    <li>Click the Nexora icon again and press <strong>Import my courses</strong>.
+        Chrome will ask permission for your university's address the first time.</li>
+  </ol>
+
+  <h2>If something is not working</h2>
+
+  <h3>"Open your Brightspace" will not go away</h3>
+  <p>
+    Nexora looks for a tab whose address contains <strong>/d2l/</strong>, which every
+    Brightspace uses. Make sure you are signed in and looking at Brightspace itself
+    rather than a university portal page that merely links to it.
+  </p>
+
+  <h3>Chrome never asked for permission</h3>
+  <p>
+    The request only appears while the Brightspace tab is the one in front. Switch to
+    that tab, then open the Nexora popup and press Import again.
+  </p>
+
+  <h3>"Nexora Sync is not installed here"</h3>
+  <p>
+    The extension is installed in a different Chrome profile from the one you are
+    signed into Nexora with. Use the same profile for both.
+  </p>
+
+  <h3>"Your Brightspace session expired"</h3>
+  <p>
+    Nexora reads Brightspace through your own sign-in, so when your university signs
+    you out it stops too. Open Brightspace, sign in again, then sync.
+  </p>
+
+  <h3>No courses were found</h3>
+  <p>
+    Open your Brightspace <strong>My Courses</strong> page so the course list has
+    loaded, then press Import again. If your term has not started, Brightspace may not
+    be showing the courses yet.
+  </p>
+
+  <h3>A lecture will not summarise</h3>
+  <p>
+    Nexora needs the text of that file. Open the item in Brightspace once so it can be
+    read, then try again. Scanned PDFs with no text layer cannot always be read; you
+    can upload the file to Nexora directly instead.
+  </p>
+
+  <div class="box">
+    Nexora only ever <strong>reads</strong> your LMS. It never submits work, posts, or
+    changes anything, and it never sees your university password.
+  </div>
+
+  <h2>Still stuck</h2>
+  <p>
+    Email <a href="mailto:bassemtamer2016@gmail.com">bassemtamer2016@gmail.com</a> with
+    your university and what happened, and it will get looked at. If you are signed in,
+    the <a href="{{ url_for('feedback') }}">feedback form</a> works too.
+  </p>
+
+  <p><a href="{{ url_for('privacy') }}">What Nexora does with your data &rarr;</a></p>
+</div>
+
+<div class="foot">
+  <span><a href="{{ url_for('landing') }}">Back to Nexora</a></span>
+</div>
+{% endblock %}
