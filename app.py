@@ -165,7 +165,7 @@ SMTP_FROM = os.environ.get("SMTP_FROM", "").strip() or SMTP_USER
 SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").strip().lower() not in ("0", "false", "no")
 # Someone locked out of their account cannot reach the in-app feedback page, so
 # telling them to "contact support" is only useful with an address attached.
-SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "").strip()
+SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "nexora.notify@gmail.com").strip()
 PASSWORD_RESET_TTL = timedelta(hours=1)
 
 
@@ -2759,10 +2759,7 @@ def feedback():
 @app.route("/admin/feedback")
 @login_required
 def admin_feedback():
-    # Change this email to YOUR real admin email
-    admin_email = "bassemtamer2016@gmail.com"
-
-    if current_user.email.lower() != admin_email.lower():
+    if (current_user.email or "").lower() != ADMIN_EMAIL:
         return redirect(url_for("home"))
 
     feedback_messages = Feedback.query.order_by(Feedback.id.desc()).all()
@@ -5569,14 +5566,11 @@ def handle_unexpected(exc):
     )
 
 
-# Shown on the two public pages. Kept out of the templates so a personal address
-# never ends up hardcoded on a page the whole internet can read.
-CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "nexora.notify@gmail.com").strip()
-
-
 @app.context_processor
 def _inject_contact():
-    return {"contact_email": CONTACT_EMAIL}
+    """SUPPORT_EMAIL, everywhere. Kept out of the templates so a personal address
+    can never be hardcoded onto a page the whole internet can read."""
+    return {"contact_email": SUPPORT_EMAIL}
 
 
 # ============================
@@ -5891,6 +5885,117 @@ def _import_canvas_announcements(user, rows):
     return counts
 
 
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "bassemtamer2016@gmail.com").strip().lower()
+
+
+def _config_report():
+    """What is configured, what is not, and what each gap actually costs.
+
+    Ordered worst first. "critical" means students are getting a degraded
+    product right now; "warning" means the operator is flying blind.
+    """
+    findings = []
+
+    def add(level, title, detail, effect):
+        findings.append({"level": level, "title": title, "detail": detail, "effect": effect})
+
+    gemini = (os.environ.get("GEMINI_API_KEY", "").strip()
+              or os.environ.get("GOOGLE_API_KEY", "").strip())
+    if not gemini:
+        add("critical", "Gemini is not configured",
+            "GEMINI_API_KEY is not set.",
+            "Outline analysis, summaries, flashcards, quizzes and the course tutor all fall "
+            "back to the deterministic parser. Students get noticeably worse results and "
+            "nothing tells them why.")
+    else:
+        add("ok", "Gemini is configured", f"Key ending {gemini[-4:]}.",
+            "AI features use the model. Watch quota: a free-tier key returns 429 for "
+            "Pro-tier models and every call lands on flash.")
+
+    if not email_is_configured():
+        add("critical", "Email is not configured",
+            "SMTP_HOST and SMTP_FROM are not both set.",
+            "Password reset cannot send. A student who forgets their password is locked "
+            "out permanently, which is a refund and a lost customer once this is paid for.")
+    else:
+        add("ok", "Email is configured", f"Sending through {SMTP_HOST}.",
+            "Password reset works.")
+
+    if not os.environ.get("SENTRY_DSN", "").strip():
+        add("warning", "Error reporting is off",
+            "SENTRY_DSN is not set.",
+            "A crash in production is only discovered when a student bothers to report it.")
+    else:
+        add("ok", "Error reporting is on", "Sentry is receiving events.",
+            "Crashes surface without waiting for a report. PII is deliberately not sent.")
+
+    limiter_store = (os.environ.get("RATE_LIMIT_STORAGE_URI", "").strip()
+                     or os.environ.get("REDIS_URL", "").strip())
+    if not limiter_store:
+        add("warning", "Rate limits are per worker",
+            "Neither RATE_LIMIT_STORAGE_URI nor REDIS_URL is set.",
+            "Limits are held in each worker's memory, so a limit of N is really N per "
+            "worker. Enough to bound abuse, not enough to be exact.")
+    else:
+        add("ok", "Rate limits are shared", "Backed by the configured store.",
+            "Limits are exact across workers.")
+
+    if IS_PRODUCTION:
+        add("ok", "Running in production mode", "DATABASE_URL is set.",
+            "Secure cookies are on and SECRET_KEY is required.")
+    else:
+        add("warning", "Running in development mode",
+            "DATABASE_URL is not set, so this is the SQLite fallback.",
+            "Fine locally. On a real deployment it would mean data lives on a disk that "
+            "does not survive a restart.")
+
+    if not SUPPORT_EMAIL:
+        add("warning", "No contact address",
+            "SUPPORT_EMAIL is not set.",
+            "The privacy and help pages fall back to the feedback form, which is behind a "
+            "login, so a locked-out student has no way to reach anyone.")
+
+    try:
+        _canvas_fernet()
+        add("ok", "Canvas tokens can be encrypted", "Key derives from SECRET_KEY.",
+            "Rotating SECRET_KEY invalidates stored Canvas tokens and everyone reconnects.")
+    except Exception as exc:
+        add("critical", "Canvas tokens cannot be encrypted", str(exc),
+            "Connecting Canvas will fail outright.")
+
+    order = {"critical": 0, "warning": 1, "ok": 2}
+    findings.sort(key=lambda f: order.get(f["level"], 3))
+    return findings
+
+
+def _log_config_at_startup():
+    """Say it once, loudly, in the logs where a deploy can be seen going wrong."""
+    for finding in _config_report():
+        if finding["level"] == "critical":
+            app.logger.error("CONFIG: %s - %s %s", finding["title"], finding["detail"], finding["effect"])
+        elif finding["level"] == "warning":
+            app.logger.warning("CONFIG: %s - %s", finding["title"], finding["detail"])
+
+
+@app.route("/admin/health")
+@login_required
+def admin_health():
+    """Operator's view of what is and is not configured.
+
+    Same gate as the feedback inbox. It says nothing a student could use, but it
+    does name which keys are missing, so it stays behind the admin check.
+    """
+    if (current_user.email or "").lower() != ADMIN_EMAIL:
+        return redirect(url_for("home"))
+    findings = _config_report()
+    return render_template(
+        "admin_health.html",
+        findings=findings,
+        critical=sum(1 for f in findings if f["level"] == "critical"),
+        warnings=sum(1 for f in findings if f["level"] == "warning"),
+    )
+
+
 @app.route("/connect-canvas")
 @login_required
 def connect_canvas():
@@ -5982,6 +6087,9 @@ def healthz():
     except Exception as exc:
         app.logger.exception("Health check failed: %s", exc)
         return jsonify({"status": "degraded", "database": "unreachable"}), 503
+
+
+_log_config_at_startup()
 
 
 if __name__ == "__main__":
