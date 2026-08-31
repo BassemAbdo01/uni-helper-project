@@ -4826,7 +4826,9 @@ def generate_study_tool(course_code):
     if not row:
         return jsonify({"error":"Choose a synced lecture or resource first."}),404
     if len((row.content_text or '').strip()) < 120:
-        return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":f"Reading {row.title} from Brightspace…"}),409
+        # Canvas can be read here and now. Only Brightspace needs the browser.
+        if not _canvas_fill_content(current_user, row):
+            return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":f"Reading {row.title} from Brightspace…"}),409
     schemas={
       'flashcards':'{"title":"","cards":[{"front":"","back":"","source":"Slide 1"}]}',
       'quiz':'{"title":"","questions":[{"question":"","options":["A","B","C","D"],"answer":0,"explanation":"","source":"Slide 1"}]}',
@@ -5582,6 +5584,8 @@ def _inject_contact():
 
 CANVAS_TIMEOUT = int(os.environ.get("CANVAS_TIMEOUT", "25"))
 CANVAS_MAX_PAGES = 12
+# One request per page body, so this is the ceiling on how long a sync can get.
+CANVAS_MAX_PAGE_BODIES = int(os.environ.get("CANVAS_MAX_PAGE_BODIES", "60"))
 
 
 def _canvas_fernet():
@@ -5729,6 +5733,7 @@ def canvas_sync(user):
 
     course_payload, content_items, task_rows, announcements = [], [], [], []
     grade_rows = []
+    pages_read = 0
     seen_courses = 0
 
     for course in courses:
@@ -5820,13 +5825,28 @@ def canvas_sync(user):
                 kind = str(entry.get("type") or "").lower()
                 if not title or kind in {"subheader", "assignment"}:
                     continue
+
+                # A page's text is what every AI feature actually needs, and it
+                # is one cheap request. Bounded per course so a big module tree
+                # cannot turn one sync into hundreds of calls.
+                body = ""
+                page_url = str(entry.get("page_url") or "")
+                if kind == "page" and page_url and pages_read < CANVAS_MAX_PAGE_BODIES:
+                    pages_read += 1
+                    try:
+                        page, _ = _canvas_request(base, token, f"courses/{cid}/pages/{page_url}")
+                        if isinstance(page, dict):
+                            body = _html_to_text(str(page.get("body") or ""))
+                    except Exception:
+                        body = ""   # a page we cannot read is still worth listing
+
                 content_items.append({
                     "course": code,
                     "title": title,
                     "content_type": "lecture" if kind in {"page", "file"} else "resource",
                     "source_url": str(entry.get("html_url") or ""),
                     "source_uid": f"canvas:{base}:{cid}:item:{entry.get('id')}",
-                    "content_text": "",
+                    "content_text": body,
                     "module_name": module_name,
                     "published_at": "",
                 })
@@ -6094,6 +6114,70 @@ def admin_health():
         critical=sum(1 for f in findings if f["level"] == "critical"),
         warnings=sum(1 for f in findings if f["level"] == "warning"),
     )
+
+
+def _canvas_reference(row):
+    """The Canvas coordinates for a content row, if it came from Canvas."""
+    if not str(row.source_uid or "").startswith("canvas:"):
+        return None
+    try:
+        parts = str(row.source_uid).split(":")
+        # canvas:https://host:<course_id>:item:<id>  -- rebuilt rather than stored,
+        # so rows imported before this existed still resolve.
+        course_id = parts[-3]
+        return {"course_id": course_id}
+    except Exception:
+        return None
+
+
+def _canvas_fill_content(user, row):
+    """Fetch a Canvas item's text on demand and save it.
+
+    Brightspace has to route this through the extension because only the
+    student's browser holds that session. Canvas does not -- the server has a
+    token, so it reads the page directly and the student never learns that a
+    round trip existed.
+
+    Returns True when the row now has usable text.
+    """
+    account = CanvasAccount.query.filter_by(user_id=user.id).first()
+    reference = _canvas_reference(row)
+    if not account or not reference:
+        return False
+
+    try:
+        token = _canvas_decrypt(account.token_encrypted)
+    except Exception:
+        return False
+
+    base = account.base_url
+    course_id = reference["course_id"]
+    text = ""
+
+    # Canvas puts the page's own slug at the end of the URL it gave us, which is
+    # exact. Deriving one from the title would be a guess that silently misses
+    # every page whose title was edited after it was created.
+    match = re.search(r"/pages/([^/?#]+)", str(row.source_url or ""))
+    if match:
+        try:
+            page, _ = _canvas_request(base, token, f"courses/{course_id}/pages/{match.group(1)}")
+            if isinstance(page, dict) and page.get("body"):
+                text = _html_to_text(str(page["body"]))
+        except Exception:
+            text = ""
+
+    if len(text.strip()) < 120:
+        return False
+
+    row.content_text = text
+    row.content_hash = _content_payload_hash({
+        "title": row.title, "content_type": row.content_type, "source_url": row.source_url or "",
+        "content_text": text, "module_name": row.module_name or "",
+        "published_at": row.published_at or "",
+    })
+    row.updated_at = datetime.utcnow()
+    db.session.commit()
+    return True
 
 
 @app.route("/connect-canvas")

@@ -434,3 +434,115 @@ def test_canvas_endpoints_need_a_login(client):
         assert client.get(path).status_code == 302
     for path in ("/api/canvas/sync", "/api/canvas/auto-sync", "/api/canvas/connect"):
         assert client.post(path).status_code == 302
+
+
+# --------------------------------------------------------------------------
+# Lecture text
+#
+# Module items were first imported as a title and a link only, which left the
+# study tools, the tutor and outline analysis dead for Canvas students on
+# anything that was not an assignment description -- and the failure told them
+# to install a browser extension that Canvas does not use.
+# --------------------------------------------------------------------------
+
+PAGE_MODULES = [{"name": "Week 9", "items": [
+    {"id": 41, "title": "Lecture 12 - Polymorphism", "type": "Page",
+     "page_url": "lecture-12-polymorphism",
+     "html_url": "https://canvas.school.edu/courses/101/pages/lecture-12-polymorphism"},
+]}]
+
+PAGE_BODY = ("<h2>Polymorphism</h2><p>A reference of the superclass type may refer to an "
+             "object of any subclass type, and the method that runs is chosen from the "
+             "object's run-time type rather than the reference. This is dynamic dispatch, "
+             "and it is what lets a method written against BankAccount keep working for "
+             "every subclass added later.</p><script>alert('x')</script>")
+
+
+@pytest.fixture()
+def canvas_pages_client(client, monkeypatch):
+    import app as nexora
+    signup(client)
+
+    fixture = dict(CANVAS_FIXTURE)
+    fixture["courses/101/modules"] = PAGE_MODULES
+
+    def fake_request(base, token, path, params=None):
+        if path.startswith("courses/101/pages/"):
+            return {"body": PAGE_BODY}, ""
+        return {"id": 7, "name": "A Student"}, ""
+
+    monkeypatch.setattr(nexora, "_canvas_request", fake_request)
+    monkeypatch.setattr(nexora, "_canvas_list",
+                        lambda base, token, path, params=None: fixture.get(path, []))
+
+    assert client.post("/api/canvas/connect", json={
+        "base_url": "canvas.school.edu", "token": "1234~" + "x" * 40}).status_code == 200
+    return client
+
+
+def test_a_page_arrives_with_its_text_not_just_its_title(canvas_pages_client):
+    import app as nexora
+    canvas_pages_client.post("/api/canvas/sync")
+    with nexora.app.app_context():
+        row = nexora.CourseContent.query.filter_by(title="Lecture 12 - Polymorphism").first()
+        assert row is not None
+        assert "dynamic dispatch" in row.content_text
+        assert "<h2>" not in row.content_text
+        assert "alert(" not in row.content_text
+
+
+def test_study_tools_work_on_a_canvas_lecture(canvas_pages_client, monkeypatch):
+    """The whole point: no 409, and no instruction to install an extension."""
+    import app as nexora
+    canvas_pages_client.post("/api/canvas/sync")
+
+    monkeypatch.setattr(nexora, "_gemini_json",
+                        lambda *a, **k: {"title": "Flashcards", "cards": [
+                            {"front": "What is dynamic dispatch?", "back": "Method chosen at run time.",
+                             "source": "Lecture 12"}]})
+
+    with nexora.app.app_context():
+        uid = nexora.CourseContent.query.filter_by(
+            title="Lecture 12 - Polymorphism").first().source_uid
+
+    res = canvas_pages_client.post("/api/course/SYSC2004/study-tools/generate",
+                                   json={"source_uid": uid, "artifact_type": "flashcards"})
+    assert res.status_code == 200, res.get_data(as_text=True)
+    assert res.get_json()["artifact"]["data"]["cards"]
+
+
+def test_text_is_fetched_on_demand_for_a_row_imported_without_it(canvas_pages_client, monkeypatch):
+    """Rows imported before page bodies were read must still become usable
+    rather than staying permanently empty."""
+    import app as nexora
+    canvas_pages_client.post("/api/canvas/sync")
+
+    with nexora.app.app_context():
+        row = nexora.CourseContent.query.filter_by(title="Lecture 12 - Polymorphism").first()
+        row.content_text = ""          # as an older sync would have left it
+        nexora.db.session.commit()
+        uid, user_id = row.source_uid, row.user_id
+
+    with nexora.app.app_context():
+        user = nexora.User.query.get(user_id)
+        row = nexora.CourseContent.query.filter_by(source_uid=uid).first()
+        assert nexora._canvas_fill_content(user, row) is True
+        assert "dynamic dispatch" in nexora.CourseContent.query.filter_by(
+            source_uid=uid).first().content_text
+
+
+def test_filling_content_declines_for_a_brightspace_row(client):
+    """Brightspace still has to go through the extension; this must not claim
+    to have handled it."""
+    import app as nexora
+    from uuid import uuid4
+    signup(client, email="bs@carleton.ca")
+
+    with nexora.app.app_context():
+        user = nexora.User.query.filter_by(email="bs@carleton.ca").first()
+        row = nexora.CourseContent(id=uuid4().hex, user_id=user.id, course_full="SYSC2004",
+                                   title="A Brightspace lecture", source_uid="d2l:8801:topic:5",
+                                   content_text="")
+        nexora.db.session.add(row)
+        nexora.db.session.commit()
+        assert nexora._canvas_fill_content(user, row) is False
