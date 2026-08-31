@@ -113,6 +113,10 @@ app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # up to 8 outline screensho
 # OCR reads text no better above roughly 2600px on the long edge, and every pixel
 # past that is memory this instance does not have. Below 1100px it starts losing
 # small print, so images are scaled toward the band from whichever side they are on.
+# A guard against an account with an implausible number of enrolments, not a
+# page size: a student's courses should all be on their dashboard.
+DASHBOARD_COURSE_LIMIT = int(os.environ.get("DASHBOARD_COURSE_LIMIT", "60"))
+
 OCR_MAX_EDGE = int(os.environ.get("OCR_MAX_EDGE", "2600"))
 OCR_MIN_EDGE = int(os.environ.get("OCR_MIN_EDGE", "1800"))
 
@@ -2925,9 +2929,15 @@ def home():
         course_map[code]["term"] = synced.term or ""
         course_map[code]["content_count"] = synced.content_count or 0
 
-    all_course_cards = list(course_map.values())
+    # Sorted by code so a course keeps its place. Ordering by updated_at meant
+    # the page rearranged itself after every sync, and combined with the old
+    # cap of eight it looked exactly like courses being dropped at random.
+    all_course_cards = sorted(course_map.values(), key=lambda c: str(c.get("course") or ""))
     show_all_courses = request.args.get("view") == "all"
-    course_cards = all_course_cards if show_all_courses else all_course_cards[:8]
+    # The page groups by term already, so there is nothing to spare a student by
+    # hiding their courses. The cap that remains is a guard against a
+    # pathological account, not a page-size.
+    course_cards = all_course_cards[:DASHBOARD_COURSE_LIMIT]
 
     course_titles = {
         "SYSC2004": "Object-Oriented Programming",

@@ -170,7 +170,7 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
     <section class="card" id="courses">
       <header>
         <div><span class="k">Course intelligence</span><h2>Your courses</h2></div>
-        <a href="{{ url_for('home') }}?view=all#courses">{% if show_all_courses %}Showing all{% else %}View all{% endif %} &rarr;</a>
+        <span class="k" style="margin:0">{{ course_cards|length }} course{{ '' if course_cards|length == 1 else 's' }}</span>
       </header>
       {% if course_groups %}
         {% for group in course_groups %}

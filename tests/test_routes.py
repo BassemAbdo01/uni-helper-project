@@ -417,3 +417,54 @@ def test_dashboard_redesign_survives_an_empty_account(client):
     body = client.get("/dashboard").get_data(as_text=True)
     assert "Connect Brightspace" in body
     assert "Your week is clear" in body
+
+
+def test_the_dashboard_shows_every_course_not_the_first_eight(client):
+    """Courses were ordered by updated_at and cut to eight, so each sync floated
+    a different eight to the top and the rest vanished. It read exactly like the
+    importer dropping courses at random, which is what it was reported as."""
+    import app as nexora
+    from uuid import uuid4
+    signup(client, email="many@carleton.ca")
+
+    with nexora.app.app_context():
+        user = nexora.User.query.filter_by(email="many@carleton.ca").first()
+        for i in range(14):
+            nexora.db.session.add(nexora.SyncedCourse(
+                id=uuid4().hex, user_id=user.id, source_uid=f"uid-{i}",
+                course_code=f"TEST{1000 + i}", course_name=f"Course {i}",
+                term="Winter 2026"))
+        nexora.db.session.commit()
+
+    body = client.get("/dashboard").get_data(as_text=True)
+    for i in range(14):
+        assert f"TEST{1000 + i}" in body, f"TEST{1000 + i} is missing from the dashboard"
+
+
+def test_course_order_does_not_move_between_loads(client):
+    """Ordering by updated_at rearranged the page after every sync."""
+    import app as nexora
+    from datetime import datetime, timedelta
+    from uuid import uuid4
+    signup(client, email="stable@carleton.ca")
+
+    with nexora.app.app_context():
+        user = nexora.User.query.filter_by(email="stable@carleton.ca").first()
+        for i, code in enumerate(["ECOR1033D", "PHYS1004", "MATH1104F"]):
+            nexora.db.session.add(nexora.SyncedCourse(
+                id=uuid4().hex, user_id=user.id, source_uid=f"u{i}",
+                course_code=code, course_name=code, term="Winter 2026"))
+        nexora.db.session.commit()
+
+    def order(body):
+        return [c for c in ["ECOR1033D", "MATH1104F", "PHYS1004"] if c in body]
+
+    first = order(client.get("/dashboard").get_data(as_text=True))
+
+    # touch one course, as a sync would
+    with nexora.app.app_context():
+        row = nexora.SyncedCourse.query.filter_by(course_code="PHYS1004").first()
+        row.updated_at = datetime.utcnow() + timedelta(hours=1)
+        nexora.db.session.commit()
+
+    assert order(client.get("/dashboard").get_data(as_text=True)) == first
