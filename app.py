@@ -5728,6 +5728,7 @@ def canvas_sync(user):
     })
 
     course_payload, content_items, task_rows, announcements = [], [], [], []
+    grade_rows = []
     seen_courses = 0
 
     for course in courses:
@@ -5773,6 +5774,17 @@ def canvas_sync(user):
             due = _canvas_due_date(row.get("due_at"))
             if due:
                 task_rows.append({"course": code, "title": title, "due": due, "uid": uid})
+
+        # Canvas states the weighting outright, so unlike the Brightspace path
+        # there is nothing for a model to infer.
+        try:
+            groups = _canvas_list(base, token, f"courses/{cid}/assignment_groups",
+                                  {"include[]": ["assignments", "submission"]})
+        except Exception:
+            groups = []
+        if groups:
+            grade_rows.extend(_canvas_grade_rows(
+                code, groups, weighted=bool(course.get("apply_assignment_group_weights"))))
 
         try:
             posts = _canvas_list(base, token, f"courses/{cid}/discussion_topics",
@@ -5823,6 +5835,7 @@ def canvas_sync(user):
     content_counts = _import_content(user, {"items": content_items})
     task_counts = _import_canvas_tasks(user, task_rows)
     update_counts = _import_canvas_announcements(user, announcements)
+    grade_counts = _import_canvas_grades(user, grade_rows)
 
     account.last_sync = datetime.utcnow()
     account.last_error = ""
@@ -5834,7 +5847,94 @@ def canvas_sync(user):
         "content": content_counts,
         "tasks": task_counts,
         "announcements": update_counts,
+        "grades": grade_counts,
     }
+
+
+def _canvas_grade_rows(course, groups, weighted):
+    """Flatten Canvas assignment groups into the app's grade components.
+
+    Canvas offers two shapes. Either the course weights its groups -- Assignments
+    20%, Midterm 30% -- in which case each assignment carries a slice of its
+    group's weight proportional to what it is out of. Or it does not, and the
+    final mark is simply total points earned over total points possible, which
+    is the same thing as every point carrying equal weight.
+    """
+    rows = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        assignments = [a for a in (group.get("assignments") or []) if isinstance(a, dict)]
+        if not assignments:
+            continue
+        category = str(group.get("name") or "Assignments")[:80]
+        group_weight = float(group.get("group_weight") or 0) if weighted else 0.0
+
+        # Only graded work carries weight; a zero-point survey should not dilute it.
+        pool = sum(float(a.get("points_possible") or 0) for a in assignments)
+
+        for assignment in assignments:
+            points = float(assignment.get("points_possible") or 0)
+            submission = assignment.get("submission")
+            score = None
+            if isinstance(submission, dict) and submission.get("score") is not None:
+                try:
+                    score = float(submission["score"])
+                except (TypeError, ValueError):
+                    score = None
+
+            if weighted and pool > 0:
+                weight = group_weight * (points / pool)
+            elif weighted:
+                weight = 0.0
+            else:
+                weight = points   # unweighted courses are just points out of points
+
+            rows.append({
+                "course": course,
+                "name": str(assignment.get("name") or "Assessment")[:255],
+                "category": category,
+                "weight": round(weight, 4),
+                "score": score,
+                "max_score": points or 100.0,
+                "uid": f"canvas:{assignment.get('id')}",
+            })
+    return rows
+
+
+def _import_canvas_grades(user, rows):
+    """Upsert grade components, without trampling anything typed by hand.
+
+    A mark the student entered themselves is theirs. Canvas overwrites its own
+    rows -- matched on the note carrying the Canvas assignment id -- and leaves
+    everything else alone.
+    """
+    counts = {"added": 0, "updated": 0, "unchanged": 0}
+    for row in rows[:400]:
+        existing = GradeEntry.query.filter_by(
+            user_id=user.id, course_full=row["course"], notes=row["uid"]).first()
+        if existing:
+            unchanged = (existing.weight == row["weight"] and existing.score == row["score"]
+                         and existing.max_score == row["max_score"] and existing.name == row["name"])
+            if unchanged:
+                counts["unchanged"] += 1
+                continue
+            existing.name = row["name"]
+            existing.weight = row["weight"]
+            existing.score = row["score"]
+            existing.max_score = row["max_score"]
+            existing.category = row["category"]
+            existing.updated_at = datetime.utcnow()
+            counts["updated"] += 1
+            continue
+        db.session.add(GradeEntry(
+            id=uuid4().hex, user_id=user.id, course_full=row["course"],
+            name=row["name"], weight=row["weight"], score=row["score"],
+            max_score=row["max_score"], category=row["category"], notes=row["uid"],
+        ))
+        counts["added"] += 1
+    db.session.commit()
+    return counts
 
 
 def _import_canvas_tasks(user, rows):

@@ -247,3 +247,115 @@ def test_one_student_cannot_see_another_students_canvas(client, monkeypatch):
     page = client.get("/connect-canvas").get_data(as_text=True)
     assert "canvas.school.edu" not in page, "a second student must not see the first's Canvas"
     assert client.post("/api/canvas/sync").status_code == 400
+
+
+# --------------------------------------------------------------------------
+# Grades
+#
+# This is the part Canvas does better than the Brightspace path can: the
+# weighting is published rather than inferred from an outline by a model, so it
+# has to be arithmetically exact.
+# --------------------------------------------------------------------------
+
+WEIGHTED_GROUPS = [
+    {"name": "Assignments", "group_weight": 20, "assignments": [
+        {"id": 1, "name": "A1", "points_possible": 10,
+         "submission": {"score": 9}},
+        {"id": 2, "name": "A2", "points_possible": 30,
+         "submission": {"score": 24}},
+    ]},
+    {"name": "Final Exam", "group_weight": 80, "assignments": [
+        {"id": 3, "name": "Final", "points_possible": 100, "submission": {"score": None}},
+    ]},
+]
+
+
+def test_group_weight_is_split_by_what_each_piece_is_out_of():
+    """A1 out of 10 and A2 out of 30 share the group's 20%: 5 and 15."""
+    from app import _canvas_grade_rows
+    rows = {r["name"]: r for r in _canvas_grade_rows("SYSC2004", WEIGHTED_GROUPS, weighted=True)}
+    assert rows["A1"]["weight"] == pytest.approx(5.0)
+    assert rows["A2"]["weight"] == pytest.approx(15.0)
+    assert rows["Final"]["weight"] == pytest.approx(80.0)
+    assert sum(r["weight"] for r in rows.values()) == pytest.approx(100.0)
+
+
+def test_scores_and_totals_come_across_verbatim():
+    from app import _canvas_grade_rows
+    rows = {r["name"]: r for r in _canvas_grade_rows("SYSC2004", WEIGHTED_GROUPS, weighted=True)}
+    assert rows["A1"]["score"] == 9 and rows["A1"]["max_score"] == 10
+    assert rows["A2"]["score"] == 24 and rows["A2"]["max_score"] == 30
+
+
+def test_unmarked_work_has_no_score_rather_than_a_zero():
+    """A zero and 'not marked yet' are different facts; conflating them would
+    tell a student they are failing a final they have not sat."""
+    from app import _canvas_grade_rows
+    rows = {r["name"]: r for r in _canvas_grade_rows("SYSC2004", WEIGHTED_GROUPS, weighted=True)}
+    assert rows["Final"]["score"] is None
+
+
+def test_an_unweighted_course_falls_back_to_points():
+    """Without group weights Canvas marks on total points, which is the same as
+    every point carrying equal weight."""
+    from app import _canvas_grade_rows
+    rows = {r["name"]: r for r in _canvas_grade_rows("SYSC2004", WEIGHTED_GROUPS, weighted=False)}
+    assert rows["A1"]["weight"] == pytest.approx(10)
+    assert rows["A2"]["weight"] == pytest.approx(30)
+    assert rows["Final"]["weight"] == pytest.approx(100)
+
+
+def test_a_group_of_zero_point_work_cannot_divide_by_zero():
+    from app import _canvas_grade_rows
+    groups = [{"name": "Surveys", "group_weight": 10, "assignments": [
+        {"id": 9, "name": "Survey", "points_possible": 0, "submission": None}]}]
+    rows = _canvas_grade_rows("SYSC2004", groups, weighted=True)
+    assert rows[0]["weight"] == 0.0
+
+
+def test_grades_reach_the_database_and_survive_a_resync(canvas_client, monkeypatch):
+    import app as nexora
+
+    fixture = dict(CANVAS_FIXTURE)
+    fixture["courses/101/assignment_groups"] = WEIGHTED_GROUPS
+    monkeypatch.setattr(nexora, "_canvas_list",
+                        lambda base, token, path, params=None: fixture.get(path, []))
+    monkeypatch.setattr(nexora, "_canvas_request",
+                        lambda base, token, path, params=None: ({"id": 7, "name": "A Student"}, ""))
+
+    canvas_client.post("/api/canvas/sync")
+    with nexora.app.app_context():
+        rows = nexora.GradeEntry.query.filter_by(course_full="SYSC2004").all()
+        assert len(rows) == 3
+        by_name = {r.name: r for r in rows}
+        assert by_name["A1"].score == 9
+        assert by_name["Final"].score is None
+
+    canvas_client.post("/api/canvas/sync")
+    with nexora.app.app_context():
+        assert nexora.GradeEntry.query.filter_by(course_full="SYSC2004").count() == 3
+
+
+def test_a_mark_the_student_typed_is_never_overwritten(canvas_client, monkeypatch):
+    """Canvas owns the rows it created. Anything entered by hand is the
+    student's own record and stays untouched."""
+    import app as nexora
+    from uuid import uuid4
+
+    with nexora.app.app_context():
+        user = nexora.User.query.first()
+        nexora.db.session.add(nexora.GradeEntry(
+            id=uuid4().hex, user_id=user.id, course_full="SYSC2004",
+            name="Participation (mine)", weight=5, score=100, max_score=100,
+            category="Manual", notes=""))
+        nexora.db.session.commit()
+
+    fixture = dict(CANVAS_FIXTURE)
+    fixture["courses/101/assignment_groups"] = WEIGHTED_GROUPS
+    monkeypatch.setattr(nexora, "_canvas_list",
+                        lambda base, token, path, params=None: fixture.get(path, []))
+    canvas_client.post("/api/canvas/sync")
+
+    with nexora.app.app_context():
+        mine = nexora.GradeEntry.query.filter_by(name="Participation (mine)").first()
+        assert mine is not None and mine.score == 100
