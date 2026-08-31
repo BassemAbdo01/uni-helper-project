@@ -359,3 +359,78 @@ def test_a_mark_the_student_typed_is_never_overwritten(canvas_client, monkeypatc
     with nexora.app.app_context():
         mine = nexora.GradeEntry.query.filter_by(name="Participation (mine)").first()
         assert mine is not None and mine.score == 100
+
+
+# --------------------------------------------------------------------------
+# Automatic refresh
+#
+# Brightspace refreshes on a Chrome alarm inside the extension. Canvas has no
+# scheduler behind it, so the refresh rides on the student opening a page --
+# which makes "does not fire when it should not" the property that matters.
+# --------------------------------------------------------------------------
+
+def test_status_reports_no_connection_for_a_student_without_canvas(client):
+    signup(client, email="nocanvas@carleton.ca")
+    assert client.get("/api/canvas/status").get_json() == {"connected": False}
+
+
+def test_a_never_synced_connection_counts_as_stale(canvas_client):
+    body = canvas_client.get("/api/canvas/status").get_json()
+    assert body["connected"] is True
+    assert body["stale"] is True
+    assert body["last_sync"] is None
+
+
+def test_a_fresh_connection_is_not_stale_and_auto_sync_declines(canvas_client):
+    """Ten page loads must not mean ten syncs."""
+    canvas_client.post("/api/canvas/sync")
+
+    status = canvas_client.get("/api/canvas/status").get_json()
+    assert status["stale"] is False
+
+    result = canvas_client.post("/api/canvas/auto-sync").get_json()
+    assert result == {"skipped": "fresh"}
+
+
+def test_auto_sync_runs_once_the_data_has_aged(canvas_client):
+    import app as nexora
+    from datetime import datetime, timedelta
+
+    canvas_client.post("/api/canvas/sync")
+    with nexora.app.app_context():
+        account = nexora.CanvasAccount.query.first()
+        account.last_sync = datetime.utcnow() - timedelta(hours=48)
+        nexora.db.session.commit()
+
+    assert canvas_client.get("/api/canvas/status").get_json()["stale"] is True
+    assert canvas_client.post("/api/canvas/auto-sync").get_json().get("ok") is True
+
+
+def test_a_background_failure_stays_in_the_background(canvas_client, monkeypatch):
+    """Nobody asked for this sync, so its failure must not become an error
+    message in front of a student who was doing something else."""
+    import app as nexora
+
+    def explode(user):
+        raise RuntimeError("Canvas is down")
+
+    monkeypatch.setattr(nexora, "canvas_sync", explode)
+    res = canvas_client.post("/api/canvas/auto-sync")
+    assert res.status_code == 200
+    assert res.get_json() == {"skipped": "failed"}
+
+    # but it is recorded, so the Canvas page can explain itself
+    with nexora.app.app_context():
+        assert nexora.CanvasAccount.query.first().last_error
+
+
+def test_auto_sync_does_nothing_without_a_connection(client):
+    signup(client, email="nocanvas2@carleton.ca")
+    assert client.post("/api/canvas/auto-sync").get_json() == {"skipped": "not-connected"}
+
+
+def test_canvas_endpoints_need_a_login(client):
+    for path in ("/api/canvas/status",):
+        assert client.get(path).status_code == 302
+    for path in ("/api/canvas/sync", "/api/canvas/auto-sync", "/api/canvas/connect"):
+        assert client.post(path).status_code == 302

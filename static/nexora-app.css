@@ -188,3 +188,15 @@ tr:last-child td{border-bottom:0}
 .flashes li.success{border-left-color:var(--green)}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* ============================ background notice ============================ */
+/* Used only to report something that happened without being asked, so it is
+   quiet by default and never covers anything that can be clicked. */
+#nexToast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,14px);z-index:60;
+  padding:11px 16px;border-radius:7px;border:1px solid var(--line-2);background:var(--surface);
+  color:var(--fg-2);font-size:13.5px;box-shadow:0 22px 50px -20px rgba(0,0,0,.9);
+  opacity:0;pointer-events:none;transition:opacity .3s var(--ease),transform .3s var(--ease)}
+#nexToast.on{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+#nexToast a{color:var(--amber);text-decoration:none;margin-left:4px}
+@media (max-width:560px){#nexToast{left:12px;right:12px;transform:translateY(14px);text-align:center}
+  #nexToast.on{transform:translateY(0)}}

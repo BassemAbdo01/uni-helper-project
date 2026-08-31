@@ -6153,6 +6153,47 @@ def canvas_sync_now():
     return jsonify({"ok": True, **summary})
 
 
+CANVAS_STALE_AFTER = timedelta(hours=int(os.environ.get("CANVAS_STALE_HOURS", "6")))
+
+
+@app.route("/api/canvas/status", methods=["GET"])
+@login_required
+def canvas_status():
+    """Cheap enough to call on every page load; it only reads one row."""
+    account = CanvasAccount.query.filter_by(user_id=current_user.id).first()
+    if not account:
+        return jsonify({"connected": False})
+    stale = account.last_sync is None or (datetime.utcnow() - account.last_sync) > CANVAS_STALE_AFTER
+    return jsonify({
+        "connected": True,
+        "stale": stale,
+        "last_sync": account.last_sync.isoformat() if account.last_sync else None,
+    })
+
+
+@app.route("/api/canvas/auto-sync", methods=["POST"])
+@limiter.limit("12 per hour")
+@login_required
+def canvas_auto_sync():
+    """The background refresh. Refuses when the data is still fresh, so a
+    student opening ten pages does not cause ten syncs."""
+    account = CanvasAccount.query.filter_by(user_id=current_user.id).first()
+    if not account:
+        return jsonify({"skipped": "not-connected"})
+    if account.last_sync and (datetime.utcnow() - account.last_sync) <= CANVAS_STALE_AFTER:
+        return jsonify({"skipped": "fresh"})
+    try:
+        summary = canvas_sync(current_user)
+    except Exception as exc:
+        # An automatic refresh failing must not put an error in front of someone
+        # who never asked for it; record it for the Canvas page to show.
+        app.logger.warning("Canvas auto-sync failed: %s", exc)
+        account.last_error = _canvas_error_message(exc)
+        db.session.commit()
+        return jsonify({"skipped": "failed"})
+    return jsonify({"ok": True, **summary})
+
+
 @app.route("/api/canvas/disconnect", methods=["POST"])
 @login_required
 def canvas_disconnect():

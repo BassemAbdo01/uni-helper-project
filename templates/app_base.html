@@ -65,5 +65,51 @@
 </div>
 
 {% block scripts %}{% endblock %}
+
+{% if current_user.is_authenticated %}
+<div id="nexToast" role="status" aria-live="polite"></div>
+<script>
+/* Canvas has no scheduler behind it, so the refresh rides on the student
+   opening a page. It never blocks the render and never reloads underneath
+   them: it says what arrived and lets them choose when to look. */
+(() => {
+  "use strict";
+  const ONCE = 'nexora-canvas-checked';
+  if (sessionStorage.getItem(ONCE)) return;
+
+  const toast = message => {
+    const box = document.getElementById('nexToast');
+    box.textContent = message + ' ';
+    const link = document.createElement('a');
+    link.href = location.href;
+    link.textContent = 'Refresh';
+    box.append(link);
+    box.classList.add('on');
+    setTimeout(() => box.classList.remove('on'), 12000);
+  };
+
+  (async () => {
+    try {
+      const status = await (await fetch('/api/canvas/status')).json();
+      if (!status.connected) { sessionStorage.setItem(ONCE, '1'); return; }
+      if (!status.stale) { sessionStorage.setItem(ONCE, '1'); return; }
+
+      const result = await (await fetch('/api/canvas/auto-sync', { method: 'POST' })).json();
+      sessionStorage.setItem(ONCE, '1');
+      if (!result.ok) return;
+
+      const deadlines = (result.tasks && result.tasks.added) || 0;
+      const marks = (result.grades && (result.grades.added + result.grades.updated)) || 0;
+      const bits = [];
+      if (deadlines) bits.push(deadlines + (deadlines === 1 ? ' new deadline' : ' new deadlines'));
+      if (marks) bits.push(marks + (marks === 1 ? ' mark updated' : ' marks updated'));
+      if (bits.length) toast('Canvas updated — ' + bits.join(', ') + '.');
+    } catch (_) {
+      sessionStorage.setItem(ONCE, '1');   // never nag about a background job
+    }
+  })();
+})();
+</script>
+{% endif %}
 </body>
 </html>
