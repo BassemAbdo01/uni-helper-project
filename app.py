@@ -110,6 +110,12 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 }
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # up to 8 outline screenshots/pages
 
+# OCR reads text no better above roughly 2600px on the long edge, and every pixel
+# past that is memory this instance does not have. Below 1100px it starts losing
+# small print, so images are scaled toward the band from whichever side they are on.
+OCR_MAX_EDGE = int(os.environ.get("OCR_MAX_EDGE", "2600"))
+OCR_MIN_EDGE = int(os.environ.get("OCR_MIN_EDGE", "1800"))
+
 db = SQLAlchemy(app)
 
 
@@ -2111,16 +2117,47 @@ def _extract_uploaded_course_file(upload):
     elif suffix in {'.png', '.jpg', '.jpeg', '.webp'}:
         ocr=''
         local_error=None
-        if Image is not None and pytesseract is not None:
+        vision_bytes, vision_mime = raw, {'.png':'image/png','.jpg':'image/jpeg',
+                                          '.jpeg':'image/jpeg','.webp':'image/webp'}[suffix]
+
+        # Prepare the image once, whatever reads it afterwards. This used to sit
+        # behind "pytesseract is importable", so a deployment without the
+        # Tesseract binary did the work and threw it away, and one without the
+        # package skipped scaling altogether.
+        if Image is not None:
             try:
-                image=Image.open(io.BytesIO(raw)).convert('RGB')
+                image=Image.open(io.BytesIO(raw))
                 image=ImageOps.exif_transpose(image)
-                if max(image.size) < 1800:
-                    scale=1800/max(image.size)
+                if image.mode not in ('RGB', 'L'):   # palette and RGBA resample badly
+                    image=image.convert('RGB')
+                longest=max(image.size)
+                if longest > OCR_MAX_EDGE:
+                    scale=OCR_MAX_EDGE/longest
+                    image=image.resize((max(1,int(image.width*scale)),
+                                        max(1,int(image.height*scale))), Image.LANCZOS)
+                elif longest < OCR_MIN_EDGE:
+                    scale=OCR_MIN_EDGE/longest
                     image=image.resize((int(image.width*scale),int(image.height*scale)))
+
+                # Vision gets this, not the original. The raw file can be many
+                # megabytes, and base64 adds a third on top of that for one POST.
+                shrunk=io.BytesIO()
+                image.convert('RGB').save(shrunk,'JPEG',quality=82,optimize=True)
+                if shrunk.tell() < len(raw):
+                    vision_bytes, vision_mime = shrunk.getvalue(), 'image/jpeg'
+
                 gray=ImageOps.grayscale(image)
+                image=None
                 gray=ImageEnhance.Contrast(gray).enhance(1.7)
                 gray=gray.filter(ImageFilter.SHARPEN)
+            except Exception as exc:
+                gray=None
+                local_error=exc
+        else:
+            gray=None
+
+        if gray is not None and pytesseract is not None:
+            try:
                 ocr=pytesseract.image_to_string(gray, config='--oem 3 --psm 3')
                 if len(ocr.strip()) < 80 or len(re.findall(r'\d{1,3}(?:\.\d+)?\s*%',ocr)) < 2:
                     alternate=pytesseract.image_to_string(gray, config='--oem 3 --psm 11')
@@ -2128,12 +2165,13 @@ def _extract_uploaded_course_file(upload):
                         ocr=alternate
             except Exception as exc:
                 local_error=exc
+        gray=None
         # Render deployments may not include the Tesseract system binary. Gemini Vision is
         # therefore a real fallback, not a fake success path.
         if len(ocr.strip()) < 80 or len(re.findall(r'\d{1,3}(?:\.\d+)?\s*%',ocr)) < 2:
-            mime={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'}[suffix]
+            mime=vision_mime
             try:
-                ocr=_gemini_image_to_outline_text(raw,mime)
+                ocr=_gemini_image_to_outline_text(vision_bytes,mime)
             except Exception as gemini_exc:
                 detail=f' Local OCR: {local_error}.' if local_error else ''
                 raise ValueError('Nexora could not read this screenshot. Use a clearer image or upload the PDF/DOCX.'+detail+f' Gemini Vision: {gemini_exc}')
@@ -4347,12 +4385,15 @@ OUTLINE:
 @login_required
 def analyze_course_outline(course_code):
     course = _normalize_course_code(course_code)
-    scale_profile = _get_user_grading_scale(current_user.id)
+    # Bound once, here: the login proxy is only valid for the life of a request,
+    # and this work is about to be handed to a thread that outlives it.
+    user_id = current_user.id
+    scale_profile = _get_user_grading_scale(user_id)
     if not scale_profile.get("configured"):
         return jsonify({"error":"Set up and confirm your university grading scale in Settings before analyzing a course outline. Nexora needs it to interpret rules such as C- correctly.","setup_required":"grading_scale"}),428
     data = request.get_json(silent=True) or {}
     source_uid = str(data.get('source_uid') or '')
-    query = CourseContent.query.filter_by(user_id=current_user.id, course_full=course)
+    query = CourseContent.query.filter_by(user_id=user_id, course_full=course)
     row = query.filter_by(source_uid=source_uid).first() if source_uid else None
     if not row:
         row = query.filter(CourseContent.content_type=='outline').order_by(CourseContent.updated_at.desc()).first()
@@ -4454,9 +4495,9 @@ def analyze_course_outline(course_code):
     if not parsed.get('input_components'): parsed['input_components']=clean
     parsed['components']=clean; parsed['total_weight']=round(float(parsed.get('total_weight') or total or 100),2)
     parsed['confirmed']=False
-    profile = CourseOutlineProfile.query.filter_by(user_id=current_user.id, course_full=course).first()
+    profile = CourseOutlineProfile.query.filter_by(user_id=user_id, course_full=course).first()
     if not profile:
-        profile=CourseOutlineProfile(id=uuid4().hex,user_id=current_user.id,course_full=course)
+        profile=CourseOutlineProfile(id=uuid4().hex,user_id=user_id,course_full=course)
         db.session.add(profile)
     profile.source_uid=row.source_uid; profile.outline_title=row.title; profile.grading_json=json.dumps(parsed,ensure_ascii=False)
     try: profile.pass_mark=float(parsed.get('pass_mark') or 50)
@@ -4466,7 +4507,7 @@ def analyze_course_outline(course_code):
     profile.analysis_notes='; '.join(str(x) for x in (parsed.get('rules') or []))[:4000]
     profile.updated_at=datetime.utcnow()
     # A confirmed new outline fully replaces the previous calculator. Never mix two courses/outlines.
-    GradeEntry.query.filter_by(user_id=current_user.id,course_full=course).delete(synchronize_session=False)
+    GradeEntry.query.filter_by(user_id=user_id,course_full=course).delete(synchronize_session=False)
     sync_components=list(parsed.get('input_components') or clean)
     existing_keys={re.sub(r'[^a-z0-9]+',' ',str(c.get('name') or '').lower()).strip() for c in sync_components}
 
@@ -4526,7 +4567,7 @@ def analyze_course_outline(course_code):
 
     for comp in sync_components:
         row_entry=GradeEntry(
-            id=uuid4().hex,user_id=current_user.id,course_full=course,
+            id=uuid4().hex,user_id=user_id,course_full=course,
             name=str(comp.get('name') or 'Assessment')[:255],
             weight=float(comp.get('weight') or 0),score=None,
             max_score=float(comp.get('default_max') or 100),
@@ -4536,7 +4577,7 @@ def analyze_course_outline(course_code):
         db.session.add(row_entry)
     # Keep only the outline that produced the active profile when this was a manual upload.
     if str(row.source_uid or '').startswith('manual-outline:'):
-        stale=CourseContent.query.filter_by(user_id=current_user.id,course_full=course,content_type='outline').filter(CourseContent.id!=row.id).all()
+        stale=CourseContent.query.filter_by(user_id=user_id,course_full=course,content_type='outline').filter(CourseContent.id!=row.id).all()
         for old_outline in stale: db.session.delete(old_outline)
     db.session.commit()
     return jsonify({"ok":True,"fallback":used_fallback,"analysis":parsed,"pass_mark":profile.pass_mark,"final_minimum":profile.final_minimum})

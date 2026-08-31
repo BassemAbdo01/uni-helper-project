@@ -23,7 +23,7 @@
     <nav class="railnav" aria-label="Sections">
       <a {% if nav == 'home' %}class="on" aria-current="page"{% endif %} href="{{ url_for('home') }}"><b></b>Dashboard</a>
       <a {% if nav == 'calendar_page' %}class="on" aria-current="page"{% endif %} href="{{ url_for('calendar_page') }}"><b></b>Calendar</a>
-      <a {% if nav == 'grade_calculator' %}class="on" aria-current="page"{% endif %} href="{{ url_for('grade_calculator') }}"><b></b>Grades</a>
+      <a {% if nav == 'grade_calculator' %}class="on" aria-current="page"{% endif %} href="{{ url_for('grade_calculator') }}"><b></b>Grade calculator</a>
       <a {% if nav == 'study_room' %}class="on" aria-current="page"{% endif %} href="{{ url_for('study_room') }}"><b></b>Study room</a>
       <a {% if nav == 'connect_brightspace' %}class="on" aria-current="page"{% endif %} href="{{ url_for('connect_brightspace') }}"><b></b>Brightspace</a>
       <a {% if nav == 'connect_canvas' %}class="on" aria-current="page"{% endif %} href="{{ url_for('connect_canvas') }}"><b></b>Canvas</a>
