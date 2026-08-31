@@ -161,16 +161,36 @@
 
   async function discoverCoursesFromApi() {
     const versions = await detectApiVersions();
-    const paged = await firstWorkingPaged([
-      v => `/d2l/api/lp/${v}/enrollments/myenrollments/?orgUnitTypeId=${COURSE_OFFERING_TYPE}`,
-      v => `/d2l/api/lp/${v}/enrollments/myenrollments/`
-    ], versions);
+
+    // myenrollments returns active enrolments unless asked otherwise, and a
+    // finished course is exactly where last term's grades and lecture notes
+    // are. Which parameter a given tenant honours cannot be established from
+    // here, so ask several ways and take the union.
+    const queries = [
+      `?orgUnitTypeId=${COURSE_OFFERING_TYPE}`,
+      `?orgUnitTypeId=${COURSE_OFFERING_TYPE}&isActive=false`,
+      `?orgUnitTypeId=${COURSE_OFFERING_TYPE}&isActive=true`,
+      ''
+    ];
 
     const map = new Map();
-    for (const row of paged.items || []) {
-      const course = courseFromEnrollment(row);
-      if (course) map.set(course.source_uid, course);
+    let answered = false;
+
+    for (const query of queries) {
+      try {
+        const paged = await firstWorkingPaged(
+          [v => `/d2l/api/lp/${v}/enrollments/myenrollments/${query}`], versions);
+        answered = true;
+        for (const row of paged.items || []) {
+          const course = courseFromEnrollment(row);
+          if (course && !map.has(course.source_uid)) map.set(course.source_uid, course);
+        }
+      } catch (_) {
+        // a tenant rejecting one variant says nothing about the others
+      }
     }
+
+    if (!answered) throw new Error('No enrolments endpoint answered.');
     return [...map.values()];
   }
 
@@ -603,7 +623,7 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.0.2' }); return false; }
+    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.0.3' }); return false; }
     if (message?.type === 'NEXORA_SESSION_CHECK') { sessionCheck().then(sendResponse); return true; }
     if (message?.type === 'NEXORA_DISCOVER_COURSES') {
       // Every frame gets asked. A frame that finds nothing stays quiet so the
@@ -620,14 +640,19 @@
         }
 
         if (fromApi.length) {
-          // The one thing the API does not carry is the course image, so take
-          // those from whatever cards this frame can see.
-          const images = new Map();
+          // Cards on the page are real enrolments too. The API may have been
+          // filtered, and it carries no images, so the page is merged in rather
+          // than mined for pictures and discarded.
+          const merged = new Map(fromApi.map(c => [c.source_uid, c]));
           for (const card of discoverCoursesFromDom()) {
-            if (card.image_url) images.set(card.source_uid, card.image_url);
+            const existing = merged.get(card.source_uid);
+            if (existing) {
+              if (!existing.image_url && card.image_url) existing.image_url = card.image_url;
+            } else {
+              merged.set(card.source_uid, card);
+            }
           }
-          const courses = fromApi.map(c => ({ ...c, image_url: images.get(c.source_uid) || '' }));
-          return { ok: true, courses, method: 'enrollments-api' };
+          return { ok: true, courses: [...merged.values()], method: 'enrollments-api+dom' };
         }
 
         // No API on this tenant: fall back to reading the page, which sees one

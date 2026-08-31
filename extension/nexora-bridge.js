@@ -14,7 +14,7 @@
     const data = event.data;
     if (event.source !== window || data?.channel !== CHANNEL) return;
     if (data.type === 'PING_EXTENSION') {
-      window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '3.0.2' }, window.location.origin);
+      window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '3.0.3' }, window.location.origin);
       return;
     }
     // Pairing: the page has the student's session, fetches their own key and
@@ -46,7 +46,7 @@
     }
   });
 
-  window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '3.0.2' }, window.location.origin);
+  window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '3.0.3' }, window.location.origin);
 })();
 
 // Deliver a course outline captured from an LMS tab to the standalone Grade Intelligence page.
