@@ -11,10 +11,11 @@ no folder called `nexora`.
 | Path | What |
 |---|---|
 | `app.py` | Everything — ~5,040 lines, 45 routes, models, AI calls. Single file by design. |
-| `templates/` | 13 Jinja pages (landing, dashboard, course_workspace, grade_calculator, study_room, calendar, connect_brightspace, settings, profile, feedback, auth) |
+| `templates/` | Jinja pages. Nine extend `app_base.html`; `study_room` and `course_workspace` deliberately do not (see UI). |
+| `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css`, `landing-v6.css`, `nexora-target.css` |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 67 tests. `test_routes.py` covers requests; `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 176 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -65,8 +66,8 @@ tighter limits. Storage is in-memory, so a limit of N is really N per worker --
 good enough to bound abuse, not a substitute for Redis.
 
 Passwords need 8+ characters (`_password_problem`). Emails are shape-checked
-with `_EMAIL_RE`. There is still **no password reset flow**, so a student who
-forgets their password cannot recover their account.
+with `_EMAIL_RE`. Password reset exists but **SMTP is unconfigured in production**, so a student
+who forgets their password is locked out permanently until it is set up.
 
 Anything rendered through `innerHTML` in the templates must go through `esc()`.
 Model output, uploaded filenames and text pulled from course documents all
@@ -238,6 +239,96 @@ outline, flash got all four weights right but dropped a `max of 11.5%` cap the
 prompt never asked for, and flattened a "qualifies for second marking scheme"
 threshold into a hard `component_minimum`. Fix prompts before spending money on
 Pro-tier models.
+
+## UI
+
+`static/nexora-app.css` + `templates/app_base.html` are the shared shell. A page
+extends `app_base.html` and sets `{% set nav_active = '<endpoint>' %}`.
+Page-specific CSS belongs in that page's `{% block head %}`, never in the shared
+sheet.
+
+Two pages deliberately do not extend it. `study_room.html` is a full-bleed WebGL
+stage with no scroll, so it links the shared sheet for tokens and rebuilds only
+the floating chrome. `course_workspace.html` has ~230 class names and 400 lines
+of JavaScript reaching into them; its palette was remapped in place rather than
+rewritten, because re-deriving every grid template there risks grade
+intelligence for a purely visual change.
+
+Selectors in the shared sheet use `:where()` so page rules can override them. A
+chain of `:not()` raises specificity and silently out-ranks the page — that is
+why the grade calculator's readonly field once rendered as a white browser box.
+
+The palette is a single neutral ramp. Cards must be visibly lighter than the page
+behind them; the first pass sat everything within nine points of black and had to
+be lifted wholesale.
+
+## The two LMS integrations
+
+**Brightspace has no student-facing API.** That is the only reason the Chrome
+extension exists. The scraper is generic — `location.origin` plus D2L's own
+`/d2l/api/le/` — so it works at any university; what once limited it to one was
+Chrome's permission gate, not the code.
+
+**Canvas has a real API**, reachable two ways:
+
+- *Access token*, stored encrypted (Fernet, key derived from `SECRET_KEY` via
+  HKDF) because it must be replayed on every sync. Rotating `SECRET_KEY`
+  invalidates every stored token. This path syncs with the browser closed.
+- *Browser session*, when a university forbids students from issuing tokens —
+  which some do, and the Canvas error tells students to go and ask an
+  administrator. Canvas honours the session cookie for same-origin requests, so
+  the extension fetches and posts to `/api/canvas/ingest`.
+
+`canvas_sync(user, fetch_list=None)` takes its fetcher as a parameter: an HTTP
+call with a token by default, a dictionary lookup when the extension supplied the
+payloads. **Do not reimplement the parsing in JavaScript.** The extension is
+transport only; every line that interprets a Canvas payload lives on the server,
+once.
+
+Both LMSs write through `_import_courses` and `_import_content`, so the
+dashboard, calendar, grade calculator and study tools never learn which one a
+student uses. Adding a third should extend those, not parallel them.
+
+## Extension
+
+Injection is programmatic (`chrome.scripting.executeScript`), not a static
+`content_scripts` entry, so it works on any university's domain with a permission
+the student grants for their own origin.
+
+- **`allFrames: true` is required.** Brightspace renders My Courses in a widget
+  iframe; injecting only into the top document finds nothing and reports "no
+  course cards found" on a page full of course cards.
+- Several frames answer a discovery request, so **a frame that finds nothing
+  stays silent** and only the top document reports failure, after waiting longer
+  than a subframe needs to succeed.
+- **Course discovery uses the enrolments API, not the DOM.** The My Courses
+  widget renders one term tab at a time, so scraping returns whichever term
+  happens to be mounted. The DOM is merged in for images and as a fallback.
+- **A Manifest V3 worker is collected after ~30s without an event**, and a sync
+  runs for minutes. `holdWorkerAwake()` / `releaseWorker()` bracket long work;
+  without them, clicking away kills the sync mid-run.
+- `extension/*-check.html` are browser-run checks for the parser, the term-tab
+  detection and the popup state machine. They are excluded from the package.
+
+## Operating it
+
+`/healthz` reports the running commit from `RENDER_GIT_COMMIT`. Use it to confirm
+a deploy — guessing at some string that changed on a public page fails entirely
+when a release only touches pages behind a login.
+
+`/admin/health` (gated on `ADMIN_EMAIL`) lists what is configured and what each
+gap costs a student, and the same findings are logged at startup. Nexora degrades
+quietly by design — no Gemini key means a deterministic fallback, no SMTP means a
+polite message — which is right for the student and invisible to whoever runs it.
+
+`SUPPORT_EMAIL` is the one public contact address. It is injected into every
+template as `contact_email`; never hardcode an address into a page, because
+`/privacy` and `/support` are public and were once carrying a personal Gmail.
+
+Course codes are capped at `COURSE_CODE_MAX` (40) to match every column that
+stores one. SQLite keeps an over-long value quietly; Postgres raises
+`StringDataRightTruncation` and takes the whole import down — a 500 that exists
+only in production.
 
 ## Conventions
 
