@@ -546,3 +546,119 @@ def test_filling_content_declines_for_a_brightspace_row(client):
         nexora.db.session.add(row)
         nexora.db.session.commit()
         assert nexora._canvas_fill_content(user, row) is False
+
+
+# --------------------------------------------------------------------------
+# Session-fetched Canvas
+#
+# Some universities forbid students from generating access tokens: "Your Canvas
+# administrators have chosen to limit your ability to generate your own access
+# token." For those students the server cannot reach Canvas at all, so the
+# extension fetches through the browser session and posts the payloads here.
+# The point of these tests is that the *interpretation* is the same code --
+# a course imported this way is indistinguishable from one imported with a token.
+# --------------------------------------------------------------------------
+
+def extension_token(client):
+    return client.post("/api/sync/extension-key").get_json()["token"]
+
+
+def ingest_body():
+    """Exactly the paths the extension fetches, keyed the way the server asks."""
+    # The course declares weighted assignment groups, so this exercises the
+    # weighting arithmetic rather than the points fallback.
+    weighted_course = [dict(CANVAS_FIXTURE["courses"][0], apply_assignment_group_weights=True)]
+    return {
+        "base_url": "https://canvas.school.edu",
+        "pages": {
+            "courses": weighted_course,
+            "courses/101/assignments": CANVAS_FIXTURE["courses/101/assignments"],
+            "courses/101/discussion_topics": CANVAS_FIXTURE["courses/101/discussion_topics"],
+            "courses/101/modules": CANVAS_FIXTURE["courses/101/modules"],
+            "courses/101/assignment_groups": WEIGHTED_GROUPS,
+        },
+    }
+
+
+def test_ingest_needs_the_extension_key(client):
+    signup(client, email="ingest.anon@carleton.ca")
+    assert client.post("/api/canvas/ingest", json=ingest_body()).status_code == 401
+
+
+def test_ingest_rejects_a_bad_address(client):
+    signup(client, email="ingest.bad@carleton.ca")
+    token = extension_token(client)
+    body = dict(ingest_body(), base_url="not-a-host")
+    res = client.post("/api/canvas/ingest", json=body,
+                      headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 400
+
+
+def test_ingest_rejects_a_payload_that_is_not_paths(client):
+    signup(client, email="ingest.shape@carleton.ca")
+    token = extension_token(client)
+    res = client.post("/api/canvas/ingest",
+                      json={"base_url": "canvas.school.edu", "pages": []},
+                      headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 400
+
+
+def test_a_session_import_lands_exactly_like_a_token_import(client):
+    """The whole design: the browser is transport, the server is the parser, so
+    a student whose university blocks tokens gets the same result."""
+    import app as nexora
+    signup(client, email="session@carleton.ca")
+    token = extension_token(client)
+
+    res = client.post("/api/canvas/ingest", json=ingest_body(),
+                      headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200, res.get_data(as_text=True)
+
+    with nexora.app.app_context():
+        course = nexora.SyncedCourse.query.filter_by(course_code="SYSC2004").first()
+        assert course is not None and course.term == "Winter 2026"
+
+        task = nexora.Task.query.filter_by(course_full="SYSC2004").first()
+        assert task is not None and task.due_raw == "2026-09-14"
+        assert task.source == "canvas"
+
+        titles = {c.title for c in nexora.CourseContent.query.all()}
+        assert "Lab 6 - Inheritance" in titles
+        assert "Skip me" not in titles
+
+        assert nexora.AcademicUpdate.query.filter_by(update_type="announcement").count() == 1
+
+        # the grade weighting is the same arithmetic, not a second copy
+        grades = {g.name: g for g in nexora.GradeEntry.query.all()}
+        assert grades["A1"].weight == pytest.approx(5.0)
+        assert grades["Final"].score is None
+
+
+def test_a_session_import_needs_no_stored_token(client):
+    """There is no CanvasAccount here, and there must not need to be."""
+    import app as nexora
+    signup(client, email="notoken@carleton.ca")
+    token = extension_token(client)
+
+    client.post("/api/canvas/ingest", json=ingest_body(),
+                headers={"Authorization": f"Bearer {token}"})
+
+    with nexora.app.app_context():
+        assert nexora.CanvasAccount.query.count() == 0
+        assert nexora.SyncedCourse.query.count() == 1
+
+
+def test_one_students_key_cannot_import_into_another_account(client):
+    import app as nexora
+    signup(client, email="first.canvas@carleton.ca")
+    first = extension_token(client)
+    client.get("/logout")
+    signup(client, email="second.canvas@carleton.ca")
+    client.get("/logout")
+
+    client.post("/api/canvas/ingest", json=ingest_body(),
+                headers={"Authorization": f"Bearer {first}"})
+    with nexora.app.app_context():
+        rows = nexora.SyncedCourse.query.all()
+        assert len(rows) == 1
+        assert nexora.User.query.get(rows[0].user_id).email == "first.canvas@carleton.ca"

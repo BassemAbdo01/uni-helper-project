@@ -188,6 +188,31 @@ async function brightspaceJsonAllPages(path, origin, { maxPages = 40 } = {}) {
   return { items: merged, pages, truncated: pages >= maxPages };
 }
 
+// Canvas, for students whose university forbids them a token. The browser can
+// read what the server cannot, so the extension fetches and the server parses.
+async function syncCanvasThroughSession(tab) {
+  holdWorkerAwake();
+  try {
+    if (!tab?.id) throw new Error('Open Canvas in a tab first.');
+    await ensureBrightspaceContentScript(tab);   // same injection, any LMS page
+
+    const collected = await chrome.tabs.sendMessage(tab.id, { type: 'NEXORA_CANVAS_COLLECT' });
+    if (!collected?.ok) throw new Error(collected?.error || 'Could not read Canvas from this page.');
+
+    const result = await api('/api/canvas/ingest', {
+      method: 'POST',
+      body: { base_url: collected.base_url, pages: collected.pages }
+    });
+    await chrome.storage.local.set({ lastFullSync: Date.now() });
+    await notify('Nexora is up to date',
+      `${result.courses ?? collected.courses} Canvas course(s) imported.`);
+    return result;
+  } finally {
+    releaseWorker();
+  }
+}
+
+
 async function findBrightspaceTab() {
   // Look at every open tab and pick the one that is actually Brightspace,
   // whatever domain the university runs it on. A tab sitting on /d2l/home or
@@ -872,8 +897,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // "Detect courses" then "scan every course" was never two decisions a
       // student needed to make; it is one button now.
+      if (message?.type === 'NEXORA_CANVAS_SESSION_SYNC') {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        sendResponse({ ok: true, result: await syncCanvasThroughSession(tab) });
+        return;
+      }
+
       if (message?.type === 'NEXORA_SYNC_EVERYTHING') {
         await setStatus({ running: true, phase: 'finding-courses', error: '' });
+        // One button, either LMS. Brightspace needs a /d2l/ tab; if there is not
+        // one, the active tab may be Canvas, which a student whose university
+        // forbids access tokens can only reach this way.
+        if (!(await findBrightspaceTab())) {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          const result = await syncCanvasThroughSession(tab);
+          sendResponse({ ok: true, canvas: true, discovery: { courseDiscovery: { stored: result.courses } }, summary: {} });
+          return;
+        }
         const discovery = await discoverCourses();
         const summary = await syncAllCourses('manual');
         sendResponse({ ok: true, discovery, summary });

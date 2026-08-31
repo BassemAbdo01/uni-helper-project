@@ -5803,15 +5803,30 @@ def _canvas_due_date(value):
     return text if re.match(r"^\d{4}-\d{2}-\d{2}$", text) else ""
 
 
-def canvas_sync(user):
-    """Pull the student's Canvas into the same tables Brightspace writes to."""
-    account = CanvasAccount.query.filter_by(user_id=user.id).first()
-    if not account:
-        raise ValueError("No Canvas account is connected.")
-    token = _canvas_decrypt(account.token_encrypted)
-    base = account.base_url
+def canvas_sync(user, fetch_list=None, base_url=None):
+    """Pull the student's Canvas into the same tables Brightspace writes to.
 
-    courses = _canvas_list(base, token, "courses", {
+    `fetch_list(path, params)` is how the data arrives. By default it is an HTTP
+    call carrying the student's access token. Where a university forbids students
+    from issuing tokens, the extension fetches the same paths through the browser
+    session and hands them over, and everything below this line is unchanged --
+    the interpretation of a Canvas payload exists once, here.
+    """
+    account = CanvasAccount.query.filter_by(user_id=user.id).first()
+
+    if fetch_list is None:
+        if not account:
+            raise ValueError("No Canvas account is connected.")
+        token = _canvas_decrypt(account.token_encrypted)
+        base = account.base_url
+        fetch_list = lambda path, params=None: _canvas_list(base, token, path, params)
+    else:
+        base = _canvas_base_url(base_url) or (account.base_url if account else "")
+        if not base:
+            raise ValueError("Canvas address is missing.")
+        token = None
+
+    courses = fetch_list("courses", {
         "enrollment_state": "active",
         "include[]": ["term", "course_image"],
         "state[]": ["available"],
@@ -5841,8 +5856,8 @@ def canvas_sync(user):
         })
 
         try:
-            assignments = _canvas_list(base, token, f"courses/{cid}/assignments",
-                                       {"order_by": "due_at"})
+            assignments = fetch_list(f"courses/{cid}/assignments",
+                                     {"order_by": "due_at"})
         except Exception:
             assignments = []
         for row in assignments:
@@ -5869,8 +5884,8 @@ def canvas_sync(user):
         # Canvas states the weighting outright, so unlike the Brightspace path
         # there is nothing for a model to infer.
         try:
-            groups = _canvas_list(base, token, f"courses/{cid}/assignment_groups",
-                                  {"include[]": ["assignments", "submission"]})
+            groups = fetch_list(f"courses/{cid}/assignment_groups",
+                                {"include[]": ["assignments", "submission"]})
         except Exception:
             groups = []
         if groups:
@@ -5878,8 +5893,8 @@ def canvas_sync(user):
                 code, groups, weighted=bool(course.get("apply_assignment_group_weights"))))
 
         try:
-            posts = _canvas_list(base, token, f"courses/{cid}/discussion_topics",
-                                 {"only_announcements": "true"})
+            posts = fetch_list(f"courses/{cid}/discussion_topics",
+                             {"only_announcements": "true"})
         except Exception:
             posts = []
         for row in posts[:25]:
@@ -5896,8 +5911,8 @@ def canvas_sync(user):
             })
 
         try:
-            pages = _canvas_list(base, token, f"courses/{cid}/modules",
-                                 {"include[]": ["items"]})
+            pages = fetch_list(f"courses/{cid}/modules",
+                             {"include[]": ["items"]})
         except Exception:
             pages = []
         for module in pages:
@@ -5917,7 +5932,7 @@ def canvas_sync(user):
                 # cannot turn one sync into hundreds of calls.
                 body = ""
                 page_url = str(entry.get("page_url") or "")
-                if kind == "page" and page_url and pages_read < CANVAS_MAX_PAGE_BODIES:
+                if token and kind == "page" and page_url and pages_read < CANVAS_MAX_PAGE_BODIES:
                     pages_read += 1
                     try:
                         page, _ = _canvas_request(base, token, f"courses/{cid}/pages/{page_url}")
@@ -5943,8 +5958,9 @@ def canvas_sync(user):
     update_counts = _import_canvas_announcements(user, announcements)
     grade_counts = _import_canvas_grades(user, grade_rows)
 
-    account.last_sync = datetime.utcnow()
-    account.last_error = ""
+    if account:
+        account.last_sync = datetime.utcnow()
+        account.last_error = ""
     db.session.commit()
 
     return {
@@ -6361,6 +6377,42 @@ def canvas_auto_sync():
         account.last_error = _canvas_error_message(exc)
         db.session.commit()
         return jsonify({"skipped": "failed"})
+    return jsonify({"ok": True, **summary})
+
+
+@app.route("/api/canvas/ingest", methods=["POST"])
+def canvas_ingest():
+    """Take Canvas payloads the extension fetched through the browser session.
+
+    Authenticated with the extension key, like the Brightspace sync routes,
+    because this arrives from the extension rather than from a logged-in page.
+    The extension is transport only: it fetched these paths and is handing over
+    what came back. Nothing here trusts it to have interpreted anything.
+    """
+    user = _extension_user_from_request()
+    if not user:
+        return jsonify({"error": "Invalid or missing extension token."}), 401
+
+    payload = request.get_json(silent=True) or {}
+    pages = payload.get("pages")
+    if not isinstance(pages, dict):
+        return jsonify({"error": "pages must be an object of path -> list."}), 400
+
+    base = _canvas_base_url(payload.get("base_url"))
+    if not base:
+        return jsonify({"error": "A Canvas web address is required."}), 400
+
+    # Paths are keys into what the browser already fetched; params are ignored
+    # because the extension asked for them when it made the request.
+    def from_payload(path, params=None):
+        rows = pages.get(path)
+        return rows if isinstance(rows, list) else []
+
+    try:
+        summary = canvas_sync(user, fetch_list=from_payload, base_url=base)
+    except Exception as exc:
+        app.logger.exception("Canvas ingest failed")
+        return jsonify({"error": str(exc)}), 500
     return jsonify({"ok": True, **summary})
 
 

@@ -129,6 +129,16 @@
     want it revoked, delete it in Canvas under Approved Integrations — Nexora loses access
     immediately.
   </div>
+
+  <div class="note">
+    <strong style="color:var(--fg)">Canvas will not let you create a token?</strong>
+    Some universities turn that off for students, and the message says to ask an
+    administrator. You do not need to. Install
+    <a href="{{ url_for('connect_brightspace') }}" style="color:var(--amber)">Nexora Sync</a>,
+    open Canvas, and press Import in the extension: it reads through the session you are
+    already signed into, exactly as it does for Brightspace, and no token is involved.
+    Background syncing while your browser is closed is the only thing you give up.
+  </div>
 </div>
 {% endblock %}
 

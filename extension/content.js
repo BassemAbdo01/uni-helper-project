@@ -648,8 +648,102 @@
     }
   }
 
+  // ---------------------------------------------------------------- Canvas --
+  // Same idea as the Brightspace reader: use the session the student already
+  // has. Canvas answers /api/v1 for same-origin requests carrying the session
+  // cookie, which is what makes this work where a token is forbidden.
+
+  async function canvasJson(path) {
+    const url = path.startsWith('/') ? path : `/api/v1/${path}`;
+    const response = await fetch(url, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const type = response.headers.get('content-type') || '';
+    if (!type.includes('json')) throw new Error('Canvas did not return JSON.');
+    return { data: await response.json(), link: response.headers.get('Link') || '' };
+  }
+
+  function canvasNextLink(header) {
+    for (const part of String(header || '').split(',')) {
+      const chunk = part.trim();
+      if (!chunk.startsWith('<')) continue;
+      const close = chunk.indexOf('>');
+      if (close > 0 && /rel="next"/.test(chunk.slice(close))) return chunk.slice(1, close);
+    }
+    return '';
+  }
+
+  async function canvasList(path, params) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params || {})) {
+      if (Array.isArray(value)) value.forEach(v => query.append(key, v));
+      else query.append(key, value);
+    }
+    if (!query.has('per_page')) query.set('per_page', '100');
+
+    let url = `/api/v1/${path}?${query.toString()}`;
+    const merged = [];
+    for (let page = 0; page < 12 && url; page++) {
+      const { data, link } = await canvasJson(url);
+      const rows = Array.isArray(data) ? data : [data];
+      merged.push(...rows);
+      url = canvasNextLink(link);
+    }
+    return merged;
+  }
+
+  async function isCanvas() {
+    try {
+      const { data } = await canvasJson('users/self');
+      return !!(data && data.id);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // The same paths the server asks for with a token. Keys match exactly, because
+  // the server looks them up by path when the extension supplies the data.
+  async function collectCanvas() {
+    if (!(await isCanvas())) return { ok: false, error: 'This page is not Canvas.' };
+
+    const pages = {};
+    pages['courses'] = await canvasList('courses', {
+      enrollment_state: 'active',
+      'include[]': ['term', 'course_image'],
+      'state[]': ['available']
+    });
+
+    for (const course of pages['courses']) {
+      const id = course && course.id;
+      if (!id) continue;
+      const per = [
+        [`courses/${id}/assignments`, { order_by: 'due_at' }],
+        [`courses/${id}/assignment_groups`, { 'include[]': ['assignments', 'submission'] }],
+        [`courses/${id}/discussion_topics`, { only_announcements: 'true' }],
+        [`courses/${id}/modules`, { 'include[]': ['items'] }]
+      ];
+      for (const [path, params] of per) {
+        try {
+          pages[path] = await canvasList(path, params);
+        } catch (_) {
+          pages[path] = [];   // one unreadable course must not stop the rest
+        }
+      }
+    }
+
+    return { ok: true, base_url: location.origin, pages, courses: pages['courses'].length };
+  }
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.2.0' }); return false; }
+    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.3.0' }); return false; }
+    if (message?.type === 'NEXORA_CANVAS_COLLECT') {
+      collectCanvas().then(sendResponse).catch(error =>
+        sendResponse({ ok: false, error: error?.message || 'Could not read Canvas.' }));
+      return true;
+    }
     if (message?.type === 'NEXORA_SESSION_CHECK') { sessionCheck().then(sendResponse); return true; }
     if (message?.type === 'NEXORA_DISCOVER_COURSES') {
       // Every frame gets asked. A frame that finds nothing stays quiet so the
