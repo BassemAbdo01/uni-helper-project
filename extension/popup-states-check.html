@@ -1,0 +1,57 @@
+<meta charset="utf-8"><title>popup states</title>
+<style>body{background:#151310;color:#B8B1A5;font:13px ui-monospace,Menlo,monospace;padding:20px}
+pre{white-space:pre-wrap;line-height:1.7}</style>
+<pre id="out">running…</pre>
+<script>
+(async () => {
+  const out = document.getElementById('out');
+  try {
+    const src = await (await fetch('popup.js?' + Date.now())).text();
+
+    // the popup drives real DOM ids; give it somewhere to write
+    const ids = ['step','headline','detail','go','result','bar','apiBase','token',
+                 'autoSync','includeFinished','interval','outline','save'];
+    for (const id of ids) {
+      const el = document.createElement(id === 'interval' ? 'select' :
+                 (['apiBase','token','autoSync','includeFinished'].includes(id) ? 'input' : 'div'));
+      el.id = id; el.style.display = 'none'; document.body.append(el);
+    }
+
+    const scenarios = [
+      ['Brightspace tab',        'https://brightspace.carleton.ca/d2l/home',        true,  ''],
+      ['Canvas, campus domain',  'https://canvas.school.edu/courses',               true,  ''],
+      ['Canvas, instructure',    'https://school.instructure.com/?login_success=1', true,  ''],
+      ['Canvas-ish /courses',    'https://learn.uni.edu/courses/4021',              true,  ''],
+      ['not an LMS, none known', 'https://www.google.com/search?q=hi',              true,  ''],
+      ['not an LMS, BS known',   'https://www.google.com/search?q=hi',              true,  'https://brightspace.carleton.ca'],
+      ['not paired yet',         'https://canvas.school.edu/courses',               false, '']
+    ];
+
+    const lines = [];
+    for (const [label, url, configured, bsOrigin] of scenarios) {
+      window.chrome = {
+        runtime: { sendMessage: async m => m.type === 'NEXORA_STATUS' ? {
+          ok: true, configured, originGranted: false,
+          config: { apiBase: 'https://x', token: configured ? 't' : '',
+                    autoSyncEnabled: true, intervalMinutes: 30,
+                    brightspaceOrigin: bsOrigin, includeFinished: false }
+        } : { ok: true } },
+        tabs: { query: async () => [{ id: 1, url }], create: async () => {} },
+        storage: { sync: { get: async () => ({}), set: async () => {} }, local: { set: async () => {} } },
+        permissions: { request: async () => true, contains: async () => false }
+      };
+
+      // re-evaluate with a fresh copy of the script each time
+      const run = new Function(src + '\n;return evaluate();');
+      await run();
+      lines.push(`${label.padEnd(24)} -> ${document.getElementById('headline').textContent}`
+               + `  [${document.getElementById('go').textContent}]`
+               + (document.getElementById('go').disabled ? ' (disabled)' : ''));
+    }
+
+    out.textContent = lines.join('\n');
+  } catch (e) {
+    out.textContent = 'ERROR ' + e.name + ': ' + e.message + '\n\n' + (e.stack || '');
+  }
+})();
+</script>

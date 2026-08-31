@@ -3,6 +3,27 @@
 
 const $ = id => document.getElementById(id);
 const D2L_PATH = /\/d2l\//i;
+// Canvas has no single address: canvas.school.edu, school.instructure.com, or a
+// campus domain serving /courses. This only decides whether to offer the button;
+// the page itself is asked before anything is read, and says no if it is not Canvas.
+const CANVAS_HINT = /(^|\.)instructure\.com$|canvas/i;
+const COURSES_PATH = /\/courses(\/|$)/i;
+
+function looksLikeCanvas(url) {
+  try {
+    const parsed = new URL(String(url || ''));
+    if (parsed.protocol !== 'https:') return false;
+    return CANVAS_HINT.test(parsed.hostname) || COURSES_PATH.test(parsed.pathname);
+  } catch (_) {
+    return false;
+  }
+}
+
+async function originGranted(origin) {
+  if (!origin) return false;
+  try { return await chrome.permissions.contains({ origins: [`${origin}/*`] }); }
+  catch (_) { return false; }
+}
 const DEFAULT_API_BASE = 'https://uni-helper-project.onrender.com';
 
 let state = null;   // {kind, origin, apiBase}
@@ -63,14 +84,33 @@ async function evaluate() {
     return;
   }
 
-  // 2. Linked, but we have never seen their university's Brightspace.
+  // 2. Sitting on Canvas. Worth offering even when a Brightspace is already
+  //    known, because a student can be enrolled in both.
+  if (!onBrightspace && looksLikeCanvas(tab?.url)) {
+    state = {
+      kind: 'canvas',
+      origin: tabOrigin,
+      needsPermission: !(await originGranted(tabOrigin))
+    };
+    show({
+      step: '',
+      headline: 'Import from Canvas',
+      detail: state.needsPermission
+        ? `Chrome will ask permission for ${tabOrigin.replace(/^https?:\/\//, '')} first. No access token needed.`
+        : 'Reads your courses through the Canvas session you are already signed into.',
+      action: 'Import my courses'
+    });
+    return;
+  }
+
+  // 3. Linked, but no LMS has been seen yet.
   if (!onBrightspace && !status.config?.brightspaceOrigin) {
-    state = { kind: 'needs-brightspace' };
+    state = { kind: 'needs-lms' };
     show({
       step: 'Step 2 of 2',
-      headline: 'Open your Brightspace',
-      detail: "Sign in to your university's Brightspace in a tab, then come back here. Any university works.",
-      action: 'Waiting for Brightspace…',
+      headline: 'Open your LMS',
+      detail: "Sign in to Brightspace or Canvas in a tab, then come back here. Any university works.",
+      action: 'Waiting for Brightspace or Canvas…',
       disabled: true
     });
     return;
@@ -117,6 +157,38 @@ $('go').onclick = async () => {
     // The website hands the key straight to the extension over the bridge.
     await chrome.tabs.create({ url: `${state.apiBase}/connect-brightspace?pair=1` });
     window.close();
+    return;
+  }
+
+  if (state?.kind === 'canvas') {
+    // Chrome only grants an optional permission from a user gesture, which is
+    // this click.
+    if (state.needsPermission && state.origin) {
+      let granted = false;
+      try { granted = await chrome.permissions.request({ origins: [`${state.origin}/*`] }); }
+      catch (error) {
+        say(`Chrome refused the permission request: ${error?.message || error}`, 'bad');
+        return;
+      }
+      if (!granted) {
+        say('Without permission for that page Nexora cannot read your Canvas.', 'bad');
+        return;
+      }
+    }
+
+    busy(true);
+    say('Reading your Canvas courses…');
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'NEXORA_CANVAS_SESSION_SYNC' });
+      if (!response?.ok) throw new Error(response?.error || 'Could not read Canvas.');
+      const n = response.result?.courses ?? 0;
+      say(`Done. ${n} course${n === 1 ? '' : 's'} imported from Canvas.`, 'good');
+    } catch (error) {
+      say(error?.message || 'Could not read Canvas.', 'bad');
+    } finally {
+      busy(false);
+      await evaluate();
+    }
     return;
   }
 

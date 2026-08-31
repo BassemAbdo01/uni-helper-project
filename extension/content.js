@@ -738,7 +738,7 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.3.0' }); return false; }
+    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.3.1' }); return false; }
     if (message?.type === 'NEXORA_CANVAS_COLLECT') {
       collectCanvas().then(sendResponse).catch(error =>
         sendResponse({ ok: false, error: error?.message || 'Could not read Canvas.' }));

@@ -14,7 +14,7 @@
     const data = event.data;
     if (event.source !== window || data?.channel !== CHANNEL) return;
     if (data.type === 'PING_EXTENSION') {
-      window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '3.3.0' }, window.location.origin);
+      window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '3.3.1' }, window.location.origin);
       return;
     }
     // Pairing: the page has the student's session, fetches their own key and
@@ -46,7 +46,7 @@
     }
   });
 
-  window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '3.3.0' }, window.location.origin);
+  window.postMessage({ channel: CHANNEL, type: 'EXTENSION_READY', version: '3.3.1' }, window.location.origin);
 
   // Freshness matters when the student is actually looking at Nexora, and
   // almost never in between. The worker decides whether anything is stale
