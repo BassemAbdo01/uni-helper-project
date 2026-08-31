@@ -63,7 +63,7 @@ input:focus,select:focus{outline:none;border-color:var(--amber)}
 </style>
 </head>
 <body>
-  <h1><i></i>Nexora Sync<b id="ver">3.0.3</b></h1>
+  <h1><i></i>Nexora Sync<b id="ver">3.1.0</b></h1>
 
   <p class="step" id="step">Step 1 of 2</p>
   <p class="headline" id="headline">Connect to Nexora</p>
@@ -80,6 +80,10 @@ input:focus,select:focus{outline:none;border-color:var(--amber)}
 
     <label class="toggle" style="margin-top:14px">
       <input id="autoSync" type="checkbox"> Keep courses up to date automatically
+    </label>
+
+    <label class="toggle">
+      <input id="includeFinished" type="checkbox"> Also import finished terms
     </label>
 
     <label for="interval">Check every</label>

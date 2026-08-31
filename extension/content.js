@@ -159,19 +159,20 @@
     };
   }
 
-  async function discoverCoursesFromApi() {
+  async function discoverCoursesFromApi(includeFinished) {
     const versions = await detectApiVersions();
 
-    // myenrollments returns active enrolments unless asked otherwise, and a
-    // finished course is exactly where last term's grades and lecture notes
-    // are. Which parameter a given tenant honours cannot be established from
-    // here, so ask several ways and take the union.
-    const queries = [
-      `?orgUnitTypeId=${COURSE_OFFERING_TYPE}`,
-      `?orgUnitTypeId=${COURSE_OFFERING_TYPE}&isActive=false`,
-      `?orgUnitTypeId=${COURSE_OFFERING_TYPE}&isActive=true`,
-      ''
-    ];
+    // The term a student is in is what they want on their dashboard. A finished
+    // course drags its whole content tree along, fills the page with work that
+    // is over and the calendar with dates that have passed -- so past terms are
+    // asked for only when the student says so.
+    const queries = includeFinished
+      ? [`?orgUnitTypeId=${COURSE_OFFERING_TYPE}`,
+         `?orgUnitTypeId=${COURSE_OFFERING_TYPE}&isActive=false`,
+         `?orgUnitTypeId=${COURSE_OFFERING_TYPE}&isActive=true`,
+         '']
+      : [`?orgUnitTypeId=${COURSE_OFFERING_TYPE}&isActive=true`,
+         `?orgUnitTypeId=${COURSE_OFFERING_TYPE}`];
 
     const map = new Map();
     let answered = false;
@@ -623,7 +624,7 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.0.3' }); return false; }
+    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.1.0' }); return false; }
     if (message?.type === 'NEXORA_SESSION_CHECK') { sessionCheck().then(sendResponse); return true; }
     if (message?.type === 'NEXORA_DISCOVER_COURSES') {
       // Every frame gets asked. A frame that finds nothing stays quiet so the
@@ -634,7 +635,7 @@
         // The API knows every enrolment. The page only knows the tab it is on.
         let fromApi = [];
         try {
-          fromApi = await discoverCoursesFromApi();
+          fromApi = await discoverCoursesFromApi(message.includeFinished === true);
         } catch (_) {
           fromApi = [];
         }

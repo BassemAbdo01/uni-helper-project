@@ -15,14 +15,15 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function getConfig() {
   const v = await chrome.storage.sync.get([
-    'apiBase', 'token', 'autoSyncEnabled', 'intervalMinutes', 'brightspaceOrigin'
+    'apiBase', 'token', 'autoSyncEnabled', 'intervalMinutes', 'brightspaceOrigin', 'includeFinished'
   ]);
   return {
     apiBase: String(v.apiBase || DEFAULT_API_BASE).replace(/\/$/, ''),
     token: String(v.token || ''),
     autoSyncEnabled: v.autoSyncEnabled !== false,
     intervalMinutes: Math.max(15, Number(v.intervalMinutes) || 30),
-    brightspaceOrigin: normalizeOrigin(v.brightspaceOrigin || DEFAULT_ORIGIN)
+    brightspaceOrigin: normalizeOrigin(v.brightspaceOrigin || DEFAULT_ORIGIN),
+    includeFinished: v.includeFinished === true
   };
 }
 
@@ -220,7 +221,10 @@ async function discoverCourses() {
   const origin = normalizeOrigin(tab.url);
   await chrome.storage.sync.set({ brightspaceOrigin: origin });
 
-  const result = await sendToBrightspace({ type: 'NEXORA_DISCOVER_COURSES' });
+  const result = await sendToBrightspace({
+    type: 'NEXORA_DISCOVER_COURSES',
+    includeFinished: (await getConfig()).includeFinished
+  });
   if (!result?.ok) throw new Error(result?.error || 'Brightspace course discovery failed.');
   const courses = result.courses || [];
   const imported = await api('/api/sync/courses', { method: 'POST', body: { courses } });
@@ -600,6 +604,10 @@ async function syncAllCourses(trigger = 'manual') {
     contentSummary: summary,
     error: summary.failed === courses.length ? 'Every course failed. Open Brightspace once to verify your session.' : ''
   });
+  // Stamped only on a completed pass. Without it the staleness check reads
+  // undefined, treats the data as infinitely old, and syncs on every single
+  // page view -- the hammering the check exists to prevent.
+  await chrome.storage.local.set({ lastFullSync: Date.now() });
   return summary;
 }
 
@@ -800,6 +808,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const discovery = await discoverCourses();
         const summary = await syncAllCourses('manual');
         sendResponse({ ok: true, discovery, summary });
+        return;
+      }
+
+      // The bridge reports that the student is looking at Nexora. Freshness
+      // matters at that moment and almost never in between, which is why this
+      // exists instead of a faster alarm: a minute-by-minute poll would walk
+      // every course's content tree thousands of times an hour against the
+      // university's servers, and Chrome throttles short alarms regardless.
+      if (message?.type === 'NEXORA_VIEWING') {
+        const cfg = await getConfig();
+        const local = await chrome.storage.local.get(['lastFullSync']);
+        const age = Date.now() - Number(local.lastFullSync || 0);
+        if (cfg.autoSyncEnabled && age > cfg.intervalMinutes * 60 * 1000) {
+          syncAllCourses('viewing').catch(() => {});   // never block the page
+          sendResponse({ ok: true, started: true });
+          return;
+        }
+        sendResponse({ ok: true, started: false });
         return;
       }
 

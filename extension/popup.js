@@ -43,6 +43,7 @@ async function evaluate() {
   $('apiBase').value = status.config?.apiBase || '';
   $('token').value = status.config?.token || '';
   $('autoSync').checked = status.config?.autoSyncEnabled !== false;
+  $('includeFinished').checked = status.config?.includeFinished === true;
   $('interval').value = String(status.config?.intervalMinutes || 30);
 
   const apiBase = status.config?.apiBase || DEFAULT_API_BASE;
@@ -195,6 +196,7 @@ $('save').onclick = async () => {
     apiBase: $('apiBase').value.trim() || DEFAULT_API_BASE,
     token: $('token').value.trim(),
     autoSyncEnabled: $('autoSync').checked,
+    includeFinished: $('includeFinished').checked,
     intervalMinutes: Number($('interval').value)
   });
   await chrome.runtime.sendMessage({ type: 'NEXORA_CONFIG_CHANGED' });
@@ -202,5 +204,6 @@ $('save').onclick = async () => {
   await evaluate();
 };
 $('autoSync').onchange = () => $('save').click();
+$('includeFinished').onchange = () => $('save').click();
 
 evaluate();
