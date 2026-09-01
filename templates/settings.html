@@ -23,9 +23,6 @@ input[type=file]{width:100%;padding:11px 13px;border-radius:5px;border:1px dashe
 input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border-radius:4px;
   border:1px solid var(--line-2);background:var(--surface-3);color:var(--fg);font:inherit;
   font-size:12.5px;cursor:pointer}
-@keyframes saveGlow{0%,100%{box-shadow:0 0 0 0 rgba(232,169,74,0)}
-  50%{box-shadow:0 0 0 5px rgba(232,169,74,.3)}}
-.save-highlight{animation:saveGlow 1.4s ease-in-out 2;border-radius:5px}
 </style>
 {% endblock %}
 
@@ -44,7 +41,8 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 <div class="narrow">
   <div class="note">
     <strong style="color:var(--fg)">Set this up before outline analysis.</strong>
-    AI extraction is not always exact — confirm every threshold before saving.
+    Uploading your university's grading-scale page saves it straight away.
+    AI extraction is not always exact, so check every threshold afterwards.
   </div>
 
   <section class="card">
@@ -65,11 +63,6 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   <section class="card">
     <header><div><span class="k">The scale itself</span><h2>Letter bands</h2></div></header>
     <div class="body pad">
-      <div class="field">
-        <label for="universityName">University name</label>
-        <input id="universityName" value="{{ grading_scale.university_name }}" placeholder="e.g. Carleton University">
-      </div>
-
       <div class="bandhead"><span>Letter grade</span><span>Minimum %</span><span></span></div>
       <div id="scaleRows"></div>
 
@@ -95,6 +88,9 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   // Bands are built with DOM calls rather than innerHTML: a letter can arrive
   // from a model reading an uploaded PDF, so it is never trusted markup.
   let scale = {{ grading_scale.scale|tojson }};
+  // Kept, but no longer asked for: it labels the scale in the grade panel, and
+  // the analyzer reads it off the university's own page when there is one.
+  let universityName = {{ grading_scale.university_name|tojson }};
   const $ = id => document.getElementById(id);
   const rows = $('scaleRows');
 
@@ -160,33 +156,48 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     }
 
     scale = data.scale;
-    if (data.university_name) $('universityName').value = data.university_name;
+    if (data.university_name) universityName = data.university_name;
     render();
-    setStatus(status, `Detected ${scale.length} bands (${data.confidence || 'medium'} confidence). Confirm every threshold, then save — analyzing does not save by itself.`, 'success');
-    const save = $('saveScale');
-    save.classList.add('save-highlight');
-    setTimeout(() => save.classList.remove('save-highlight'), 2900);
+
+    // Analysing used to leave the bands on screen unsaved behind a highlighted
+    // Save button, so a student who read the scale off their university's page
+    // and closed the tab had saved nothing and was still blocked from outline
+    // analysis. Uploading the official page IS the answer; save it.
+    const saved = await saveScale();
+    setStatus(status, saved
+      ? `Detected ${scale.length} bands (${data.confidence || 'medium'} confidence) and saved. Check them below and correct anything wrong.`
+      : `Detected ${scale.length} bands (${data.confidence || 'medium'} confidence), but they could not be saved. Check them below and press Save grading scale.`,
+      saved ? 'success' : 'error');
   };
 
   $('addBand').onclick = () => { scale.push({ letter: '', minimum: 0 }); render(); };
 
-  $('saveScale').onclick = async () => {
+  async function saveScale() {
     const status = $('scaleStatus');
     setStatus(status, 'Saving…');
-    const res = await fetch('/api/grading-scale', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ university_name: $('universityName').value, scale })
-    });
-    const data = await res.json();
+    let res, data;
+    try {
+      res = await fetch('/api/grading-scale', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ university_name: universityName, scale })
+      });
+      data = await res.json();
+    } catch {
+      setStatus(status, 'Could not reach Nexora. Check your connection and press Save again.', 'error');
+      return false;
+    }
     if (!res.ok) {
       setStatus(status, data.error || 'Could not save grading scale.', 'error');
-      return;
+      return false;
     }
     scale = data.scale;
     render();
     setStatus(status, 'Saved. Nexora will use this scale for every course.', 'success');
-  };
+    return true;
+  }
+
+  $('saveScale').onclick = saveScale;
 
   render();
 })();

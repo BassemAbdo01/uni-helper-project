@@ -249,8 +249,6 @@ async function syncCanvasThroughSession(tab) {
       body: { base_url: collected.base_url, pages: collected.pages }
     });
     await chrome.storage.local.set({ lastFullSync: Date.now() });
-    await notify('Nexora is up to date',
-      `${result.courses ?? collected.courses} Canvas course(s) imported.`);
     return result;
   } finally {
     releaseWorker();
@@ -755,12 +753,14 @@ async function runSyncAllCourses(trigger = 'manual') {
   // undefined, treats the data as infinitely old, and syncs on every single
   // page view -- the hammering the check exists to prevent.
   await chrome.storage.local.set({ lastFullSync: Date.now() });
-  await notify(
-    summary.failed === courses.length ? 'Nexora Sync could not finish' : 'Nexora is up to date',
-    summary.failed === courses.length
-      ? 'Open Brightspace and sign in again, then sync.'
-      : `${summary.scanned} of ${courses.length} courses · ${summary.itemsFound} items imported.`
-  );
+  // Only failure earns an OS notification. Auto-sync runs on a timer, so
+  // announcing every success meant a desktop notification every half hour
+  // saying nothing had changed. The popup already carries the result, which
+  // is where someone looks when they want it.
+  if (summary.failed === courses.length) {
+    await notify('Nexora Sync could not finish',
+                 'Open Brightspace and sign in again, then sync.');
+  }
   return summary;
 }
 
