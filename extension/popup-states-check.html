@@ -9,36 +9,60 @@ pre{white-space:pre-wrap;line-height:1.7}</style>
     const src = await (await fetch('popup.js?' + Date.now())).text();
 
     // the popup drives real DOM ids; give it somewhere to write
-    const ids = ['step','headline','detail','go','result','bar','apiBase','token',
-                 'autoSync','includeFinished','interval','outline','save'];
+    const selects = ['interval', 'scopeTerm', 'scopeSetting', 'termSetting'];
+    const inputs = ['apiBase', 'token', 'autoSync'];
+    const ids = ['step','headline','detail','go','result','bar','outline','save',
+                 'scope','scopeTermHint', ...selects, ...inputs];
     for (const id of ids) {
-      const el = document.createElement(id === 'interval' ? 'select' :
-                 (['apiBase','token','autoSync','includeFinished'].includes(id) ? 'input' : 'div'));
+      const el = document.createElement(selects.includes(id) ? 'select'
+                                      : inputs.includes(id) ? 'input' : 'div');
       el.id = id; el.style.display = 'none'; document.body.append(el);
     }
+    const advanced = document.createElement('details');
+    advanced.id = 'advanced'; advanced.style.display = 'none'; document.body.append(advanced);
+    // the two answers to "what should Nexora import?"
+    for (const value of ['term', 'all']) {
+      const radio = document.createElement('input');
+      radio.type = 'radio'; radio.name = 'scope'; radio.value = value;
+      radio.checked = value === 'term'; radio.style.display = 'none';
+      document.body.append(radio);
+    }
 
+    // label, url, configured, brightspaceOrigin, originGranted, importScope, importTerm, syncStatus
     const scenarios = [
-      ['Brightspace tab',        'https://brightspace.carleton.ca/d2l/home',        true,  ''],
-      ['Canvas, campus domain',  'https://canvas.school.edu/courses',               true,  ''],
-      ['Canvas, instructure',    'https://school.instructure.com/?login_success=1', true,  ''],
-      ['Canvas-ish /courses',    'https://learn.uni.edu/courses/4021',              true,  ''],
-      ['not an LMS, none known', 'https://www.google.com/search?q=hi',              true,  ''],
-      ['not an LMS, BS known',   'https://www.google.com/search?q=hi',              true,  'https://brightspace.carleton.ca'],
-      ['not paired yet',         'https://canvas.school.edu/courses',               false, '']
+      ['Brightspace tab',        'https://brightspace.carleton.ca/d2l/home',        true,  '', false, '', ''],
+      ['Canvas, campus domain',  'https://canvas.school.edu/courses',               true,  '', false, '', ''],
+      ['Canvas, instructure',    'https://school.instructure.com/?login_success=1', true,  '', false, '', ''],
+      ['Canvas-ish /courses',    'https://learn.uni.edu/courses/4021',              true,  '', false, '', ''],
+      ['not an LMS, none known', 'https://www.google.com/search?q=hi',              true,  '', false, '', ''],
+      ['not an LMS, BS known',   'https://www.google.com/search?q=hi',              true,  'https://brightspace.carleton.ca', false, '', ''],
+      ['not paired yet',         'https://canvas.school.edu/courses',               false, '', false, '', ''],
+      // Permission is granted but the student has never said how much to import.
+      ['scope never chosen',     'https://brightspace.carleton.ca/d2l/home',        true,  'https://brightspace.carleton.ca', true, '', ''],
+      ['scope: every term',      'https://brightspace.carleton.ca/d2l/home',        true,  'https://brightspace.carleton.ca', true, 'all', ''],
+      ['scope: one term',        'https://brightspace.carleton.ca/d2l/home',        true,  'https://brightspace.carleton.ca', true, 'term', 'Fall 2026'],
+      // A sync in flight outranks everything: the popup closing does not stop
+      // it, so this screen must never imply that it did.
+      ['sync running',           'https://brightspace.carleton.ca/d2l/home',        true,  'https://brightspace.carleton.ca', true, 'term', 'Fall 2026',
+       { running: true, phase: 'smart-sync', currentCourse: 'BIOL1103', progress: '3/12' }],
+      ['sync running, off-LMS',  'https://www.google.com/search?q=hi',               true,  'https://brightspace.carleton.ca', true, 'all', '',
+       { running: true, phase: 'finding-courses' }]
     ];
 
     const lines = [];
-    for (const [label, url, configured, bsOrigin] of scenarios) {
+    for (const [label, url, configured, bsOrigin, granted, importScope, importTerm, syncStatus] of scenarios) {
       window.chrome = {
         runtime: { sendMessage: async m => m.type === 'NEXORA_STATUS' ? {
-          ok: true, configured, originGranted: false,
+          ok: true, configured, originGranted: granted,
+          syncStatus: syncStatus || {},
           config: { apiBase: 'https://x', token: configured ? 't' : '',
                     autoSyncEnabled: true, intervalMinutes: 30,
-                    brightspaceOrigin: bsOrigin, includeFinished: false }
+                    brightspaceOrigin: bsOrigin, importScope, importTerm,
+                    includeFinished: importScope === 'all' }
         } : { ok: true } },
         tabs: { query: async () => [{ id: 1, url }], create: async () => {} },
         storage: { sync: { get: async () => ({}), set: async () => {} }, local: { set: async () => {} } },
-        permissions: { request: async () => true, contains: async () => false }
+        permissions: { request: async () => true, contains: async () => granted }
       };
 
       // re-evaluate with a fresh copy of the script each time
@@ -46,7 +70,9 @@ pre{white-space:pre-wrap;line-height:1.7}</style>
       await run();
       lines.push(`${label.padEnd(24)} -> ${document.getElementById('headline').textContent}`
                + `  [${document.getElementById('go').textContent}]`
-               + (document.getElementById('go').disabled ? ' (disabled)' : ''));
+               + (document.getElementById('go').disabled ? ' (disabled)' : '')
+               + (document.getElementById('scope').hidden === false ? '  +choices' : '')
+               + `\n${''.padEnd(28)}${document.getElementById('detail').textContent}`);
     }
 
     out.textContent = lines.join('\n');

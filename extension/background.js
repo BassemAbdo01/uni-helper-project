@@ -1,4 +1,5 @@
 const ALARM_NAME = 'nexora-auto-sync';
+const KEEPALIVE_ALARM = 'nexora-keepalive';
 
 // Every Brightspace instance, whoever hosts it, serves its app under /d2l/ and
 // exposes the same /d2l/api/le/ REST API. That path is the reliable signal --
@@ -15,15 +16,24 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function getConfig() {
   const v = await chrome.storage.sync.get([
-    'apiBase', 'token', 'autoSyncEnabled', 'intervalMinutes', 'brightspaceOrigin', 'includeFinished'
+    'apiBase', 'token', 'autoSyncEnabled', 'intervalMinutes', 'brightspaceOrigin',
+    'includeFinished', 'importScope', 'importTerm'
   ]);
+  // importScope is the student's answer to "everything, or just one term?".
+  // includeFinished was the 3.3 spelling of the same choice as a buried
+  // checkbox; anyone who ticked it keeps meaning 'all' after they update.
+  const scope = v.importScope === 'all' || v.importScope === 'term'
+    ? v.importScope
+    : (v.includeFinished === true ? 'all' : '');
   return {
     apiBase: String(v.apiBase || DEFAULT_API_BASE).replace(/\/$/, ''),
     token: String(v.token || ''),
     autoSyncEnabled: v.autoSyncEnabled !== false,
     intervalMinutes: Math.max(15, Number(v.intervalMinutes) || 30),
     brightspaceOrigin: normalizeOrigin(v.brightspaceOrigin || DEFAULT_ORIGIN),
-    includeFinished: v.includeFinished === true
+    includeFinished: scope === 'all',
+    importScope: scope,
+    importTerm: String(v.importTerm || '')
   };
 }
 
@@ -59,6 +69,11 @@ function holdWorkerAwake() {
     keepAliveTimer = setInterval(() => {
       chrome.runtime.getPlatformInfo().catch(() => {});
     }, 20000);
+    // setInterval lives inside the worker, so it dies with the very worker it
+    // was supposed to keep alive -- which is why a sync still stopped when the
+    // popup was closed. An alarm is held by Chrome, not by the worker: it
+    // fires whether or not the worker is running, and starts one if it is not.
+    chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
   }
 }
 
@@ -67,7 +82,37 @@ function releaseWorker() {
   if (keepAliveDepth === 0 && keepAliveTimer) {
     clearInterval(keepAliveTimer);
     keepAliveTimer = null;
+    chrome.alarms.clear(KEEPALIVE_ALARM).catch(() => {});
   }
+}
+
+/* ---- resuming a sync the worker did not live to finish ----
+   Closing the popup does not stop the work, but a collected worker does, and
+   nothing then restarted it: the student saw "Ready to sync" on reopening and
+   reasonably concluded it had given up. The marker below outlives the worker,
+   and the keepalive alarm is what notices and picks the sync back up. */
+const SYNC_GIVE_UP_MS = 20 * 60 * 1000;
+
+async function markSyncInFlight(trigger) {
+  await chrome.storage.local.set({ syncInFlight: { trigger, startedAt: Date.now() } });
+}
+async function clearSyncInFlight() {
+  await chrome.storage.local.remove('syncInFlight');
+}
+async function resumeSyncIfDropped() {
+  if (keepAliveDepth > 0) return;            // this worker is already on it
+  const { syncInFlight } = await chrome.storage.local.get('syncInFlight');
+  if (!syncInFlight) return;
+  if (Date.now() - Number(syncInFlight.startedAt || 0) > SYNC_GIVE_UP_MS) {
+    await clearSyncInFlight();
+    await setStatus({ running: false, phase: 'error', error: 'The sync was interrupted and did not finish. Open Brightspace and sync again.' });
+    return;
+  }
+  // Already-scanned courses are cheap the second time -- scanCourseDirect
+  // compares against what the server holds -- so restarting the whole run is
+  // simpler and safer than trying to resume from a saved index.
+  try { await syncAllCourses(syncInFlight.trigger || 'resumed'); }
+  catch (_) { /* setStatus in runSyncAllCourses has already recorded why */ }
 }
 
 async function notify(title, message) {
@@ -294,13 +339,25 @@ async function runDiscoverCourses() {
   const origin = normalizeOrigin(tab.url);
   await chrome.storage.sync.set({ brightspaceOrigin: origin });
 
+  const config = await getConfig();
   const result = await sendToBrightspace({
     type: 'NEXORA_DISCOVER_COURSES',
-    includeFinished: (await getConfig()).includeFinished
+    // An unanswered scope keeps the 3.3 behaviour: the term on screen.
+    scope: config.importScope || 'term',
+    term: config.importScope === 'term' ? config.importTerm : '',
+    includeFinished: config.includeFinished
   });
   if (!result?.ok) throw new Error(result?.error || 'Brightspace course discovery failed.');
   const courses = result.courses || [];
-  const imported = await api('/api/sync/courses', { method: 'POST', body: { courses } });
+  // replace lets the server drop courses an earlier sync stored that the
+  // student's current choice does not include -- otherwise picking one term
+  // only ever adds to the pile. `complete` is false when discovery fell back
+  // to reading the page, which sees a single term tab and must never be
+  // treated as the whole picture.
+  const imported = await api('/api/sync/courses', {
+    method: 'POST',
+    body: { courses, replace: true, complete: result.complete === true, origin }
+  });
   await chrome.storage.local.set({ detectedCourses: courses });
   // found is what the page offered, stored is what Nexora now holds. They differ
   // when two sections share a course code or a course carries a removal
@@ -603,9 +660,11 @@ async function verifySession(origin) {
 
 async function syncAllCourses(trigger = 'manual') {
   holdWorkerAwake();
+  await markSyncInFlight(trigger);
   try {
     return await runSyncAllCourses(trigger);
   } finally {
+    await clearSyncInFlight();
     releaseWorker();
   }
 }
@@ -837,6 +896,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onStartup.addListener(configureAlarm);
 
 chrome.alarms.onAlarm.addListener(async alarm => {
+  if (alarm.name === KEEPALIVE_ALARM) { await resumeSyncIfDropped(); return; }
   if (alarm.name !== ALARM_NAME) return;
   const { autoSyncEnabled } = await getConfig();
   if (!autoSyncEnabled) return;
@@ -852,6 +912,12 @@ chrome.alarms.onAlarm.addListener(async alarm => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     try {
+      // The popup cannot reach a Brightspace tab itself, so the terms a student
+      // can choose between come back through here.
+      if (message?.type === 'NEXORA_LIST_TERMS') {
+        sendResponse(await sendToBrightspace({ type: 'NEXORA_LIST_TERMS' }));
+        return;
+      }
       if (message?.type === 'NEXORA_SCAN_OPEN_TABS') {
         sendResponse({ ok: true, ...(await discoverCourses()) });
         return;

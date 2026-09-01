@@ -184,6 +184,35 @@
     return '';
   }
 
+  // September starts a Fall term, January a Winter one. Which tab happens to be
+  // mounted is a different question, and answering it with selectedTermLabel()
+  // is how "import this term" could come back with Winter 2025.
+  function currentTermLabel(now) {
+    const date = now || new Date();
+    const month = date.getMonth() + 1;
+    const season = month <= 4 ? 'Winter' : month <= 8 ? 'Summer' : 'Fall';
+    return `${season} ${date.getFullYear()}`;
+  }
+
+  function termOrder(label) {
+    const parts = String(label || '').match(/(Winter|Spring|Summer|Fall|Autumn)\s+(20\d{2})/i);
+    if (!parts) return { year: 0, rank: 0 };
+    const rank = { winter: 1, spring: 2, summer: 2, fall: 3, autumn: 3 }[parts[1].toLowerCase()] || 0;
+    return { year: Number(parts[2]), rank };
+  }
+
+  // Newest first, because that is the one a student is almost always after.
+  function termsFrom(courses) {
+    const counts = new Map();
+    for (const course of courses || []) {
+      const label = course?.term || '';
+      if (label) counts.set(label, (counts.get(label) || 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([label, count]) => ({ label, courses: count, ...termOrder(label) }))
+      .sort((a, b) => (b.year - a.year) || (b.rank - a.rank) || a.label.localeCompare(b.label));
+  }
+
   async function discoverCoursesFromApi(includeFinished) {
     const versions = await detectApiVersions();
 
@@ -738,29 +767,60 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.3.1' }); return false; }
+    if (message?.type === 'NEXORA_CONTENT_PING') { sendResponse({ ok: true, version: '3.4.1' }); return false; }
     if (message?.type === 'NEXORA_CANVAS_COLLECT') {
       collectCanvas().then(sendResponse).catch(error =>
         sendResponse({ ok: false, error: error?.message || 'Could not read Canvas.' }));
       return true;
     }
     if (message?.type === 'NEXORA_SESSION_CHECK') { sessionCheck().then(sendResponse); return true; }
+    if (message?.type === 'NEXORA_LIST_TERMS') {
+      // Same silence rule as discovery: only a frame that found something
+      // answers, and the top document reports the failure.
+      const isTop = window === window.top;
+      (async () => {
+        let courses = [];
+        try { courses = await discoverCoursesFromApi(true); } catch (_) { courses = []; }
+        if (!courses.length) courses = discoverCoursesFromDom();
+        if (!courses.length) return null;
+        return {
+          ok: true, terms: termsFrom(courses), total: courses.length,
+          current: currentTermLabel(), onScreen: selectedTermLabel()
+        };
+      })().then(result => {
+        if (result) { sendResponse(result); return; }
+        if (isTop) {
+          sendResponse({ ok: false, terms: [], current: currentTermLabel(),
+                         error: 'No enrolments were found. Open your Brightspace My Courses page.' });
+        }
+      });
+      return true;
+    }
     if (message?.type === 'NEXORA_DISCOVER_COURSES') {
       // Every frame gets asked. A frame that finds nothing stays quiet so the
       // one holding the My Courses widget wins the reply; the top document
       // answers for failure, and waits longer than a subframe needs to succeed.
       const isTop = window === window.top;
       (async () => {
+        // 'all' means every term the student has ever been enrolled in; 'term'
+        // means one, named by the student in the popup. includeFinished is the
+        // pre-3.4 spelling of 'all', still honoured for anyone who set it.
+        const scope = String(message.scope || (message.includeFinished === true ? 'all' : 'term'));
+        const chosen = scope === 'term' ? String(message.term || '') : '';
+
         // The API knows every enrolment. The page only knows the tab it is on.
         let fromApi = [];
         try {
-          fromApi = await discoverCoursesFromApi(message.includeFinished === true);
+          // Ask for finished terms too whenever a term has been named: the
+          // active-only query cannot return a term that is over, and a student
+          // choosing "Winter 2025" is asking for exactly one of those.
+          fromApi = await discoverCoursesFromApi(scope === 'all' || Boolean(chosen));
         } catch (_) {
           fromApi = [];
         }
 
-        // Only the term on screen, when the page says which one that is.
-        const term = selectedTermLabel();
+        // The named term, or -- with nothing named -- the tab on screen.
+        const term = scope === 'all' ? '' : (chosen || selectedTermLabel());
         if (term && fromApi.length) {
           const onlyThisTerm = fromApi.filter(c => c.term === term);
           if (onlyThisTerm.length) fromApi = onlyThisTerm;
@@ -781,7 +841,7 @@
               merged.set(card.source_uid, card);
             }
           }
-          return { ok: true, courses: [...merged.values()], term,
+          return { ok: true, courses: [...merged.values()], term, complete: true,
                    method: term ? `enrollments-api+dom (${term})` : 'enrollments-api+dom' };
         }
 
@@ -789,7 +849,9 @@
         // term at a time but is better than nothing.
         for (let i = 0; i < (isTop ? 14 : 8); i++) {
           const courses = discoverCoursesFromDom();
-          if (courses.length) return { ok: true, courses, method: 'course-card-dom' };
+          // The page shows one term tab at a time, so this is never the
+          // whole enrolment list and must not be allowed to prune anything.
+          if (courses.length) return { ok: true, courses, complete: false, method: 'course-card-dom' };
           await sleep(600);
         }
         return null;

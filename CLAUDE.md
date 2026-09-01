@@ -13,9 +13,9 @@ no folder called `nexora`.
 | `app.py` | Everything — ~5,040 lines, 45 routes, models, AI calls. Single file by design. |
 | `templates/` | Jinja pages. Nine extend `app_base.html`; `study_room` and `course_workspace` deliberately do not (see UI). |
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
-| `static/` | `style.css`, `landing-v6.css`, `nexora-target.css` |
+| `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 176 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 188 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -171,6 +171,40 @@ the app start discarding earned marks. Record any bonus whose amount the outline
 states, wherever it is stated; only a bonus with no stated amount belongs in
 `rules` instead.
 
+## A rule Nexora cannot check must never fail a student
+
+`_evaluate_pass_rules` is tri-state: `passed` is True, False, or **None** for a
+requirement that could not be answered. Only False fails the course. It used to
+score `actual is not None and actual>=required`, so "cannot be evaluated" and
+"the student fell short" were the same answer, and both produced FAIL, the
+numeric grade, and `_fail_letter` -- an F. A BIOL 1103 student with all seven
+components entered at full marks was shown **FAIL 100% · F**.
+
+What could not be evaluated was a group. BIOL 1103 is 60 lecture / 40 lab and
+requires a pass in the combined mark and also in the lecture, so the model
+emitted three derived components and described the combined one in terms of the
+other two. Those two are not grade rows, `_group_percent` returned None for any
+member it could not find, and both group rules failed.
+
+Three defences, and all three are needed:
+
+- `_expand_group_members` flattens a group written in terms of other derived
+  components down to real ones, with a cycle guard.
+- `_compile_pass_rules` binds every rule to the component list that will
+  actually be shown, **after** that list is settled -- the pipeline's components
+  and the deterministic parser's differ. A group covering ≥95% of the scheme
+  weight, or whose message says combined/overall, becomes an `overall_minimum`,
+  which is a number the calculator already holds. Anything still unmatched is
+  marked `unbound`, surfaced in `ambiguities`, and never enforced.
+- `_group_state` returns `ok` / `pending` / `unbound` instead of a bare
+  percentage, so an unentered mark reads as pending rather than zero.
+
+The UI has three states to match: `ruleHtml` renders pending as a neutral
+bullet with the reason, not a red cross.
+
+Do not "simplify" any of these back into a boolean. The failure mode is silent
+and it is the worst thing this app can do to someone.
+
 ## Outline analysis
 
 `_outline_schema()` returns the extraction schema; `_outline_analysis_prompt()`
@@ -184,12 +218,14 @@ over `app.py` to catch that class of bug; install it in the venv
 (`pip install pyflakes`), it is not in requirements.txt, and the test skips
 without it.
 
-Known and unfixed: the route builds `prompt` and never sends it. The fourteen
-numbered rules therefore never reach the model on the course-workspace path --
-only the schema dict is passed to the three-stage pipeline. This predates the
-refactor. One visible consequence is that bonus components are excluded on the
-standalone path (rule 3) but survive in the pipeline's output, so a Scheme with
-a 4% bonus totals 104%.
+The sixteen numbered extraction rules live in `_outline_extraction_rules()`,
+not inside the prompt builder, because the pipeline needs them too. For as long
+as the pipeline existed the analyze route built a prompt and discarded it, so
+only the bare schema dict reached the three stages and every rule was dead text
+on the path a course workspace actually runs. Both stage one and the auditor
+now receive them. Keep it that way: a rule written into
+`_outline_analysis_prompt()` alone reaches only the standalone analyzer, and
+the two paths will silently disagree about the same outline again.
 
 `_outline_analysis_prompt()` is the single prompt builder. Both the course
 workspace and the standalone grade-calculator analyzer call it. They used to
@@ -233,6 +269,14 @@ The eval itself can overfit too: the weight-transfer case originally demanded
 instead, and the multi-option case first failed because its expected component
 list was short, not because the model was wrong. Check the mechanism is
 represented, not that it took the shape you imagined.
+
+**A long rule crowds out a short one.** Rule 17 was first written as a
+paragraph explaining derived components, whole-course requirements and what it
+did *not* restrict. `multi_option_eligibility` then failed on flash-lite with
+"selection_rules empty" -- rule 10 was still there and still correct, and the
+model stopped obeying it. Two shorter rewrites still failed; three sentences
+passed. On a small model, prompt length is a variable in its own right. Run the
+corpus after adding a rule even when the rule looks obviously safe.
 
 Prompts are the weak point, not the model. On a real Carleton
 outline, flash got all four weights right but dropped a `max of 11.5%` cap the
@@ -289,6 +333,29 @@ Both LMSs write through `_import_courses` and `_import_content`, so the
 dashboard, calendar, grade calculator and study tools never learn which one a
 student uses. Adding a third should extend those, not parallel them.
 
+## What gets imported, and what the dashboard opens on
+
+The extension asks once, before the first import: **every term** or **one
+term**, chosen from a list Brightspace itself supplies (`NEXORA_LIST_TERMS` ->
+`discoverCoursesFromApi(true)` -> `termsFrom`). The answer is
+`importScope: 'all' | 'term'` plus `importTerm`; `includeFinished` is the 3.3
+spelling of the same choice and is still read, so an upgrade keeps its meaning.
+
+`currentTermLabel()` decides the default from the date -- Jan-Apr Winter,
+May-Aug Summer, Sep-Dec Fall. It is deliberately **not** `selectedTermLabel()`,
+which reads the tab on screen: that answers a different question, and answering
+with it imported Winter 2025 for a student sitting in September. Naming a term
+also forces `includeFinished` on the enrolments query, because the active-only
+variant cannot return a term that is over.
+
+The dashboard has to hold up its end: `home()` computes `current_term_label`
+from the same date rule and renders every term group, showing only that one,
+with `#termPick` to switch and the choice kept in `localStorage`. If the
+calendar's term is not one the student is enrolled in, it falls back to the
+newest group -- otherwise a student between terms gets an empty page with their
+courses hidden behind it. "Import everything" is only a usable answer because
+of this.
+
 ## Extension
 
 Injection is programmatic (`chrome.scripting.executeScript`), not a static
@@ -307,8 +374,16 @@ the student grants for their own origin.
 - **A Manifest V3 worker is collected after ~30s without an event**, and a sync
   runs for minutes. `holdWorkerAwake()` / `releaseWorker()` bracket long work;
   without them, clicking away kills the sync mid-run.
-- `extension/*-check.html` are browser-run checks for the parser, the term-tab
-  detection and the popup state machine. They are excluded from the package.
+- `extension/*-check.html` are browser-run checks for the parser, the term
+  helpers and the popup state machine. They are excluded from the package.
+  `fetch()` needs an origin, so serve the folder first --
+  `venv/Scripts/python.exe -m http.server 8777 --directory extension` -- and
+  open `http://localhost:8777/term-check.html`. There is no node on this
+  machine; `new Function(src)` in the browser is how a whole file gets a syntax
+  check.
+- The store package is rebuilt from six files plus `icons/`; rebuild
+  `store/nexora-sync.zip` whenever the version changes, and never include the
+  check pages.
 
 ## Operating it
 

@@ -60,14 +60,41 @@ input:focus,select:focus{outline:none;border-color:var(--amber)}
 .toggle{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-2);margin-top:12px}
 .toggle input{width:auto}
 .foot{font-size:11px;color:var(--fg-3);margin-top:14px;line-height:1.5}
+
+/* The import-scope question. Two answers, both visible at once: a student
+   choosing between "everything" and "this term" should not have to open a
+   dropdown to discover the second option exists. */
+.choices{display:grid;gap:8px;margin-top:12px}
+.choices[hidden]{display:none}
+.choice{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border-radius:8px;
+  border:1px solid var(--line);background:var(--surface);cursor:pointer}
+.choice:hover{border-color:var(--line-2)}
+.choice:has(input:checked){border-color:var(--amber);background:var(--surface-2)}
+.choice input{width:auto;margin:2px 0 0;accent-color:var(--amber);flex:none}
+.choice b{display:block;font-size:13.5px;font-weight:600}
+.choice small{display:block;color:var(--fg-2);font-size:11.5px;line-height:1.45;margin-top:2px}
+#scopeTerm{margin:-2px 0 2px 28px;width:calc(100% - 28px)}
+#scopeTerm:disabled{opacity:.5}
 </style>
 </head>
 <body>
-  <h1><i></i>Nexora Sync<b id="ver">3.3.1</b></h1>
+  <h1><i></i>Nexora Sync<b id="ver">3.4.1</b></h1>
 
   <p class="step" id="step">Step 1 of 2</p>
   <p class="headline" id="headline">Connect to Nexora</p>
   <p class="detail" id="detail">Checking…</p>
+
+  <div class="choices" id="scope" hidden>
+    <label class="choice">
+      <input type="radio" name="scope" value="term" checked>
+      <span><b>Only this term</b><small id="scopeTermHint">The term you are enrolled in now.</small></span>
+    </label>
+    <select id="scopeTerm" aria-label="Which term to import"></select>
+    <label class="choice">
+      <input type="radio" name="scope" value="all">
+      <span><b>Everything</b><small>Every term you have ever been enrolled in. Your dashboard still opens on the current one, with the rest a click away.</small></span>
+    </label>
+  </div>
 
   <button id="go" disabled>…</button>
   <div class="bar" id="bar"><i></i></div>
@@ -82,9 +109,14 @@ input:focus,select:focus{outline:none;border-color:var(--amber)}
       <input id="autoSync" type="checkbox"> Keep courses up to date automatically
     </label>
 
-    <label class="toggle">
-      <input id="includeFinished" type="checkbox"> Also import finished terms
-    </label>
+    <label for="scopeSetting">What to import</label>
+    <select id="scopeSetting">
+      <option value="term">Only one term</option>
+      <option value="all">Every term</option>
+    </select>
+
+    <label for="termSetting">Which term</label>
+    <select id="termSetting"></select>
 
     <label for="interval">Check every</label>
     <select id="interval">

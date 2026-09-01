@@ -48,6 +48,46 @@ pre{white-space:pre-wrap;line-height:1.7}</style>
       if (!ok) bad++;
       lines.push(`${ok ? 'ok  ' : 'FAIL'}  ${label.padEnd(26)} -> ${JSON.stringify(got)}${ok ? '' : '   expected ' + JSON.stringify(expected)}`);
     }
+    // The term a student is *in*, which is the default the popup offers. This
+    // is deliberately not selectedTermLabel(): the tab on screen answers a
+    // different question, and answering with it imported Winter 2025 for a
+    // student sitting in September.
+    const currentTermLabel = eval('(' + grab('currentTermLabel') + ')');
+    const dateCases = [
+      ['1 January is Winter',   new Date(2026, 0, 1),  'Winter 2026'],
+      ['30 April is Winter',    new Date(2026, 3, 30), 'Winter 2026'],
+      ['1 May is Summer',       new Date(2026, 4, 1),  'Summer 2026'],
+      ['31 August is Summer',   new Date(2026, 7, 31), 'Summer 2026'],
+      ['1 September is Fall',   new Date(2026, 8, 1),  'Fall 2026'],
+      ['31 December is Fall',   new Date(2026, 11, 31),'Fall 2026']
+    ];
+    for (const [label, when, expected] of dateCases) {
+      const got = currentTermLabel(when);
+      const ok = got === expected;
+      if (!ok) bad++;
+      lines.push(`${ok ? 'ok  ' : 'FAIL'}  ${label.padEnd(26)} -> ${JSON.stringify(got)}${ok ? '' : '   expected ' + JSON.stringify(expected)}`);
+    }
+
+    // The list the popup offers, newest first.
+    const termOrder = eval('(' + grab('termOrder') + ')');
+    const termsFrom = eval('(' + grab('termsFrom') + ')');
+    const listed = termsFrom([
+      { term: 'Winter 2025' }, { term: 'Fall 2026' }, { term: 'Fall 2026' },
+      { term: 'Summer 2025' }, { term: '' }
+    ]);
+    const listCases = [
+      ['newest term first',     listed[0]?.label, 'Fall 2026'],
+      ['duplicates counted',    listed[0]?.courses, 2],
+      ['Summer 2025 before Winter', listed[1]?.label, 'Summer 2025'],
+      ['Winter 2025 is oldest', listed[2]?.label, 'Winter 2025'],
+      ['blank term dropped',    listed.length, 3]
+    ];
+    for (const [label, got, expected] of listCases) {
+      const ok = got === expected;
+      if (!ok) bad++;
+      lines.push(`${ok ? 'ok  ' : 'FAIL'}  ${label.padEnd(26)} -> ${JSON.stringify(got)}${ok ? '' : '   expected ' + JSON.stringify(expected)}`);
+    }
+
     lines.push('');
     lines.push(bad ? `${bad} failing` : 'all cases pass');
     out.textContent = lines.join('\n');

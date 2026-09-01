@@ -3048,6 +3048,15 @@ def home():
         group=grouped_courses.setdefault(label,{"label":label,"season":season,"year":year,"courses":[]})
         group["courses"].append(card)
     course_groups=sorted(grouped_courses.values(),key=lambda g:(g["year"],term_rank.get(g["season"].lower(),4)),reverse=True)
+    # Which term the page opens on. A student who imports every term they have
+    # ever taken should still land on this one; the rest are a click away in
+    # the picker. September is Fall, January is Winter -- the date decides, not
+    # whichever group happens to sort first, because a future term (an early
+    # Winter enrolment made in November) would otherwise take the page over.
+    current_season="Winter" if today.month<=4 else "Summer" if today.month<=8 else "Fall"
+    current_term_label=f"{current_season} {today.year}"
+    if not any(g["label"]==current_term_label for g in course_groups):
+        current_term_label=course_groups[0]["label"] if course_groups else ""
 
     return render_template(
         "index.html",
@@ -3063,6 +3072,7 @@ def home():
         user=current_user,
         course_cards=course_cards,
         course_groups=course_groups,
+        current_term_label=current_term_label,
         task_preview=task_preview,
         upcoming_cards=upcoming_cards,
         month_title=month_title,
@@ -3403,29 +3413,95 @@ def _component_weight_lookup(analysis):
     return weights
 
 
-def _group_percent(analysis,row_map,components,final_override=None):
-    weights=_component_weight_lookup(analysis)
-    values=[]
+def _grade_key(name):
+    return re.sub(r"[^a-z0-9]+"," ",str(name or "").lower()).strip()
+
+
+def _scheme_component_names(analysis):
+    out=[]
+    for comp in (analysis.get("input_components") or analysis.get("components") or []):
+        if isinstance(comp,dict) and (comp.get("name") or comp.get("source")):
+            out.append(str(comp.get("name") or comp.get("source")))
+    return out
+
+
+def _expand_group_members(analysis,components,_seen=None):
+    """Flatten a rule's component list down to names the scheme actually holds.
+
+    An outline that splits a course in two -- "lecture 60, lab 40, you must
+    pass the combined mark and also the lecture" -- invites the model to
+    describe the combined requirement in terms of the two halves, which are
+    themselves derived components and match no grade row. Left unexpanded the
+    group resolved to nothing, which the evaluator scored as a failure, and a
+    student with every mark at full marks was shown FAIL and an F.
+    """
+    _seen=set() if _seen is None else _seen
+    derived={_grade_key(g.get("name")):g for g in (analysis.get("derived_components") or [])
+             if isinstance(g,dict) and g.get("name")}
+    out=[]
     for name in components or []:
+        key=_grade_key(name)
+        if not key or key in _seen: continue
+        group=derived.get(key)
+        if group:
+            _seen.add(key)
+            out.extend(_expand_group_members(analysis,group.get("components") or group.get("includes") or [],_seen))
+            continue
+        out.append(str(name))
+    # Order-preserving dedupe: two halves of a course can name the same shared
+    # component, and counting it twice would skew the weighted average.
+    seen=set(); unique=[]
+    for name in out:
+        key=_grade_key(name)
+        if key in seen: continue
+        seen.add(key); unique.append(name)
+    return unique
+
+
+def _group_state(analysis,row_map,components,final_override=None):
+    """Weighted percent for a group of components, and how far it can be trusted.
+
+    State is 'ok' when every member carries a mark, 'pending' when at least one
+    does not, and 'unbound' when no member names anything in the scheme. Only
+    'ok' may fail a student: a requirement that cannot be evaluated yet is not
+    a requirement they have broken.
+    """
+    weights=_component_weight_lookup(analysis)
+    known=[_grade_key(n) for n in _scheme_component_names(analysis)]
+    values=[]; pending=False; bound=False
+    for name in _expand_group_members(analysis,components):
+        key=_grade_key(name)
         row=_find_grade_row(row_map,name)
+        if row is None and not any(k and key and (key in k or k in key) for k in known):
+            continue
+        bound=True
         override=final_override if "final" in str(name).lower() else None
         pct=_row_percent(row,override)
         if pct is None:
-            return None
-        key=re.sub(r"[^a-z0-9]+"," ",str(name or "").lower()).strip()
+            pending=True
+            continue
         weight=weights.get(key,0.0)
         if not weight:
             for wk,wv in weights.items():
                 if key and (key in wk or wk in key):
                     weight=wv; break
         values.append((pct,weight))
+    if not bound:
+        return None,'unbound'
     if not values:
-        return None
+        return None,'pending'
     weighted=[x for x in values if x[1]>0]
     if weighted:
         total=sum(w for _,w in weighted)
-        return sum(pct*w for pct,w in weighted)/total if total else None
-    return sum(pct for pct,_ in values)/len(values)
+        percent=sum(pct*w for pct,w in weighted)/total if total else None
+    else:
+        percent=sum(pct for pct,_ in values)/len(values)
+    return percent,('pending' if pending else 'ok')
+
+
+def _group_percent(analysis,row_map,components,final_override=None):
+    percent,state=_group_state(analysis,row_map,components,final_override)
+    return percent if state=='ok' else None
 
 
 def _apply_selection_rules(analysis,row_map):
@@ -3480,6 +3556,27 @@ def _normalize_advanced_grading_model(parsed):
                 pass
         return json.dumps(rule, sort_keys=True, default=str)
     seen_signatures={_rule_signature(r) for r in parsed["pass_rules"]}
+    # A derived component carrying a minimum IS a pass rule. Only the
+    # course-workspace route used to convert them, so every aggregate
+    # requirement the standalone analyzer found was silently dropped.
+    # from_derived keeps this idempotent: _compile_pass_rules rewrites the
+    # member list afterwards, so a second pass would not recognise the rewritten
+    # rule as the same one and would append a duplicate.
+    already_derived={str(r.get("from_derived")) for r in parsed["pass_rules"] if isinstance(r,dict) and r.get("from_derived")}
+    for group in parsed.get("derived_components") or []:
+        if not isinstance(group,dict) or group.get("minimum_percent") is None:
+            continue
+        tag=_grade_key(group.get("name")) or _grade_key(json.dumps(group,sort_keys=True,default=str))
+        if tag in already_derived:
+            continue
+        already_derived.add(tag)
+        parsed["pass_rules"].append({
+            "type":"aggregate_minimum","from_derived":tag,
+            "components":group.get("components") or group.get("includes") or [],
+            "minimum_percent":group.get("minimum_percent"),
+            "message":group.get("message") or f"{group.get('name','Derived component')} must meet the minimum.",
+        })
+    seen_signatures={_rule_signature(r) for r in parsed["pass_rules"]}
     for item in parsed.get("component_minimums") or []:
         if not isinstance(item,dict):
             continue
@@ -3504,6 +3601,87 @@ def _normalize_advanced_grading_model(parsed):
         final_signatures.add(sig)
         deduped.append(rule)
     parsed["pass_rules"]=deduped
+    return _compile_pass_rules(parsed)
+
+
+def _compile_pass_rules(parsed):
+    """Bind every pass rule to components the scheme actually contains.
+
+    This is the deterministic check between what the model read in an outline
+    and the arithmetic the calculator is about to run on it. Three repairs, in
+    order: expand a group written in terms of other derived components; treat a
+    group that covers the whole scheme as the overall minimum, which is a
+    number the calculator already holds; and mark whatever is still unmatched
+    so it is shown to the student rather than enforced against them.
+
+    Without this, an outline saying "you must pass the course overall and also
+    pass the lecture half" produced two aggregate rules naming groups that
+    matched no component, and a student with every mark at full marks was told
+    FAIL, 100%, F.
+    """
+    names=_scheme_component_names(parsed)
+    if not names:
+        return parsed
+    known={}
+    for name in names:
+        key=_grade_key(name)
+        if key: known.setdefault(key,name)
+    weights=_component_weight_lookup(parsed)
+    scheme_total=sum(w for w in weights.values() if w>0)
+    whole_course=re.compile(r"combined|overall|whole course|course total|total course|final grade|course as a whole",re.I)
+
+    def _match(name):
+        key=_grade_key(name)
+        if not key: return None
+        if key in known: return known[key]
+        return next((v for k,v in known.items() if key in k or k in key),None)
+
+    def _unenforceable(rule):
+        rule["unbound"]=True
+        parsed.setdefault("ambiguities",[]).append(
+            f"\u201c{rule.get('message') or 'A pass requirement'}\u201d could not be matched to any component "
+            "above, so Nexora is not enforcing it. Name the components it applies to if it matters.")
+
+    compiled=[]
+    for rule in parsed.get("pass_rules") or []:
+        if not isinstance(rule,dict):
+            continue
+        rule=dict(rule); rule.pop("unbound",None)
+        typ=str(rule.get("type") or "")
+        if typ in {"aggregate_minimum","derived_component_minimum","group_minimum"}:
+            bound=[]
+            for member in _expand_group_members(parsed,rule.get("components") or rule.get("includes") or []):
+                match=_match(member)
+                if match and match not in bound: bound.append(match)
+            covered=sum(max(0.0,weights.get(_grade_key(b),0.0)) for b in bound)
+            if whole_course.search(str(rule.get("message") or "")) or (scheme_total and covered>=scheme_total*0.95):
+                minimum=rule.get("minimum_percent") if rule.get("minimum_percent") is not None else rule.get("minimum")
+                compiled.append({"type":"overall_minimum","minimum_percent":minimum,
+                                 "message":rule.get("message") or "Overall course minimum"})
+                continue
+            if bound:
+                rule["components"]=bound; rule.pop("includes",None)
+            else:
+                _unenforceable(rule)
+        elif typ=="component_minimum":
+            match=_match(rule.get("component"))
+            if match: rule["component"]=match
+            else: _unenforceable(rule)
+        compiled.append(rule)
+
+    seen=set(); unique=[]
+    for rule in compiled:
+        sig=json.dumps(rule,sort_keys=True,default=str)
+        if sig in seen: continue
+        seen.add(sig); unique.append(rule)
+    parsed["pass_rules"]=unique
+    # Two runs over the same model would otherwise repeat the same warning.
+    notes=[]; seen_notes=set()
+    for note in parsed.get("ambiguities") or []:
+        key=str(note)
+        if key in seen_notes: continue
+        seen_notes.add(key); notes.append(note)
+    parsed["ambiguities"]=notes
     return parsed
 
 
@@ -3582,25 +3760,51 @@ def _evaluate_option(option,row_map,final_override=None,analysis=None):
 
 
 def _evaluate_pass_rules(analysis,row_map,course_grade,final_override=None):
-    results=[]; passed=True
+    """Score every mandatory rule as passed, failed, or not yet answerable.
+
+    `ok` is deliberately tri-state. Scoring "cannot be evaluated" as False --
+    which is what `actual is not None and actual>=required` did for every rule
+    type here -- turns a rule Nexora failed to bind, or one whose marks are not
+    in yet, into a course failure. A student who had entered every component at
+    full marks was shown FAIL, 100% and an F, because two aggregate rules named
+    groups that resolved to no components at all. A requirement nobody can
+    check is not a requirement the student has broken.
+    """
+    results=[]; failed=False
     rules=analysis.get('pass_rules') or []
     if not rules:
         for name,minimum in _outline_rule_minimums(analysis).items():
             rules.append({'type':'component_minimum','component':name,'minimum_percent':minimum,'message':f'{name} minimum'})
         rules.append({'type':'overall_minimum','minimum_percent':float(analysis.get('pass_mark') or 50),'message':'Overall course minimum'})
+    known=[_grade_key(n) for n in _scheme_component_names(analysis)]
+    def _in_scheme(name):
+        key=_grade_key(name)
+        return bool(key) and any(k and (key in k or k in key) for k in known)
+    unmatched='Not matched to a component in this scheme, so it is not being enforced.'
     for rule in rules:
-        typ=rule.get('type'); ok=False; actual=None; required=None
+        typ=rule.get('type'); ok=None; actual=None; required=None; note=''
+        if rule.get('unbound'):
+            # _compile_pass_rules could not match this requirement to anything
+            # in the scheme. It stays visible so the student can correct it,
+            # and stays unenforced, because enforcing it can only fail them.
+            results.append({'message':rule.get('message') or typ,'passed':None,'state':'pending',
+                            'actual':None,'required':rule.get('minimum_percent'),'note':unmatched})
+            continue
         if typ=='component_minimum':
             name=rule.get('component'); row=_find_grade_row(row_map,name)
             actual=_row_percent(row, final_override if 'final' in str(name).lower() else None)
-            required=float(rule.get('minimum_percent') or 0); ok=actual is not None and actual>=required
+            required=float(rule.get('minimum_percent') or 0)
+            if actual is not None: ok=actual>=required
+            elif row is None and not _in_scheme(name): note=unmatched
         elif typ=='any_component_minimum':
             vals=[_row_percent(_find_grade_row(row_map,n)) for n in rule.get('components') or []]
             vals=[v for v in vals if v is not None]; actual=max(vals) if vals else None
-            required=float(rule.get('minimum_percent') or 0); ok=actual is not None and actual>=required
+            required=float(rule.get('minimum_percent') or 0)
+            if actual is not None: ok=actual>=required
         elif typ=='raw_minimum':
             row=_find_grade_row(row_map,rule.get('component')); actual=None if not row or row.score is None else float(row.score)
-            required=float(rule.get('minimum_raw') or 0); ok=actual is not None and actual>=required
+            required=float(rule.get('minimum_raw') or 0)
+            if actual is not None: ok=actual>=required
         elif typ in {'category_minimum','non_category_minimum'}:
             category=str(rule.get('category') or '').lower()
             values=[]; weighted=0.0; total_weight=0.0
@@ -3614,18 +3818,25 @@ def _evaluate_pass_rules(analysis,row_map,course_grade,final_override=None):
                     if w>0: weighted+=pct*w; total_weight+=w
                     else: values.append(pct)
             actual=(weighted/total_weight) if total_weight>0 else (sum(values)/len(values) if values else None)
-            required=float(rule.get('minimum_percent') or 0); ok=actual is not None and actual>=required
+            required=float(rule.get('minimum_percent') or 0)
+            if actual is not None: ok=actual>=required
         elif typ in {'aggregate_minimum','derived_component_minimum','group_minimum'}:
-            actual=_group_percent(analysis,row_map,rule.get('components') or rule.get('includes') or [],final_override)
+            actual,group_state=_group_state(analysis,row_map,rule.get('components') or rule.get('includes') or [],final_override)
             required=float(rule.get('minimum_percent') or rule.get('minimum') or 0)
-            ok=actual is not None and actual>=required
+            if group_state=='ok' and actual is not None: ok=actual>=required
+            elif group_state=='unbound': note=unmatched
         elif typ=='overall_minimum':
-            actual=course_grade; required=float(rule.get('minimum_percent') or 0); ok=course_grade>=required
+            actual=None if course_grade is None else float(course_grade)
+            required=float(rule.get('minimum_percent') or 0)
+            if actual is not None: ok=actual>=required
         else:
             continue
-        passed &= ok
-        results.append({'message':rule.get('message') or typ,'passed':bool(ok),'actual':None if actual is None else round(actual,2),'required':required})
-    return passed,results
+        if ok is False: failed=True
+        results.append({'message':rule.get('message') or typ,'passed':ok,
+                        'state':'pass' if ok is True else 'fail' if ok is False else 'pending',
+                        'actual':None if actual is None else round(actual,2),'required':required,
+                        'note':note or ('' if ok is not None else 'Waiting on a mark that has not been entered yet.')})
+    return (not failed),results
 
 
 def _decorate_grade_result(user_id, analysis, grade):
@@ -3693,7 +3904,9 @@ def _compute_official_result(user_id, course, target=50.0, assumed_other_average
         complete=[x for x in evaluated if x['complete'] and x['eligible']]
         best=max(complete,key=lambda x:x['grade']) if complete else None
         official_grade=best['grade'] if best else None
-        pass_ok,rule_results=_evaluate_pass_rules(analysis,row_map,official_grade or 0)
+        # None, not 0: with nothing entered yet the overall minimum is unanswered,
+        # and passing 0 made it read as a failed requirement on a blank calculator.
+        pass_ok,rule_results=_evaluate_pass_rules(analysis,row_map,official_grade)
         official_status='INCOMPLETE' if official_grade is None else ('PASS' if pass_ok else 'FAIL')
         # Solve required final for every option by binary search, respecting all pass rules.
         required=[]
@@ -3744,7 +3957,7 @@ def _compute_official_result(user_id, course, target=50.0, assumed_other_average
     needed_average=None if remaining<=0 else (normalized_target-earned)/remaining*100
     current_on_completed=earned/completed_weight*100 if completed_weight else 0
     official_grade=earned/scheme_total*100 if remaining<=0 and scheme_total else None
-    pass_ok,rule_results=_evaluate_pass_rules(analysis,row_map,official_grade or earned/scheme_total*100 if scheme_total else 0)
+    pass_ok,rule_results=_evaluate_pass_rules(analysis,row_map,official_grade)
     required_final=None
     if final_row and final_row.weight>0:
         other_unfinished=max(0.0, scheme_total - nonfinal_completed_weight - float(final_row.weight))
@@ -4332,7 +4545,8 @@ def _outline_extraction_rules():
 13. Interpret every letter threshold using the student's saved university grading scale, never a hardcoded university scale.
 14. If wording is ambiguous or pages appear missing, list the uncertainty in ambiguities and lower confidence. Never invent missing rules. AI interpretation is not guaranteed to be 100% accurate and the student must confirm the result.
 15. Some outlines move weight between components according to how the student performs, e.g. "if your final exam percentage is higher than your midterm, the midterm weight transfers to the final". Arithmetically that is the same as two alternative schemes with the better result applied, and it must always be expressed that way: put the stated weighting and the transferred weighting in grading_options, keep the top-level components as the stated weighting, and record the triggering condition in rules. Do not invent a separate rule type for it, and never merge the transferred weight into components as though it always applies.
-16. An alternative scheme is sometimes open only to students who actually sat some number of a group of assessments, e.g. "options 3 and 4 require that you have written at least two and three of the written tests respectively". Record that on the option itself as eligibility, naming the group in from_components using the same component names you used elsewhere, the count in requires_completed, and a plain-language message. Leave eligibility off an option that every student can use. This is about whether an option is available at all, which is not the same as a minimum mark inside it -- a mark floor belongs in component_minimums."""
+16. An alternative scheme is sometimes open only to students who actually sat some number of a group of assessments, e.g. "options 3 and 4 require that you have written at least two and three of the written tests respectively". Record that on the option itself as eligibility, naming the group in from_components using the same component names you used elsewhere, the count in requires_completed, and a plain-language message. Leave eligibility off an option that every student can use. This is about whether an option is available at all, which is not the same as a minimum mark inside it -- a mark floor belongs in component_minimums.
+17. Every name inside a derived_components entry must be one of the components you listed above, spelled the same way. Never name one derived component inside another, and never create a derived component for the course as a whole -- a requirement to pass the course overall is pass_mark, not a group."""
 
 
 def _outline_schema():
@@ -4493,9 +4707,6 @@ def analyze_course_outline(course_code):
             parsed['confidence_score']=35
             used_fallback=True
     parsed=_normalize_advanced_grading_model(parsed)
-    for group in parsed.get('derived_components') or []:
-        if isinstance(group,dict) and group.get('minimum_percent') is not None:
-            parsed['pass_rules'].append({'type':'aggregate_minimum','components':group.get('components') or group.get('includes') or [],'minimum_percent':group.get('minimum_percent'),'message':group.get('message') or f"{group.get('name','Derived component')} must meet the minimum."})
     if local_fast_path:
         clean = local_components; total = local_total
     else:
@@ -4529,6 +4740,10 @@ def analyze_course_outline(course_code):
     parsed['letter_requirements']=letter_requirements
     if not parsed.get('input_components'): parsed['input_components']=clean
     parsed['components']=clean; parsed['total_weight']=round(float(parsed.get('total_weight') or total or 100),2)
+    # Bind after the component list is settled: the pipeline's list and the
+    # deterministic parser's differ, and a rule can only be matched against the
+    # one that will actually be shown.
+    parsed=_compile_pass_rules(parsed)
     parsed['confirmed']=False
     profile = CourseOutlineProfile.query.filter_by(user_id=user_id, course_full=course).first()
     if not profile:
@@ -5001,7 +5216,58 @@ def sync_courses():
         return jsonify({"error": "courses must be a list."}), 400
 
     result = _import_courses(user, courses)
+    # A discovery run reports everything the student asked Nexora to hold, so
+    # it is authoritative -- but only for the LMS it came from, and only when
+    # the extension could read the enrolments API. See _prune_courses.
+    if payload.get("replace") and payload.get("complete") and courses:
+        result.update(_prune_courses(user, courses, payload.get("origin")))
     return jsonify({"ok": True, **result})
+
+
+def _prune_courses(user, courses, origin):
+    """Make an import authoritative for the LMS it came from.
+
+    Importing only added and updated, so choosing "only Fall 2026" left every
+    course a previous sync had stored -- a student who asked for one term kept
+    four years of courses and could not tell the choice had been honoured at
+    all. Worse, the content sync then walked all of them, because it reads the
+    course list back from the server rather than from what was just discovered.
+
+    Scoped by origin so a Brightspace sync never deletes a Canvas course, and
+    gated on `complete` by the caller so the DOM fallback -- which can only see
+    one term -- can never delete the rest.
+
+    GradeEntry and CourseOutlineProfile are deliberately left alone. Those are
+    the student's own marks and the policy they confirmed; re-importing the
+    term reattaches them. Only LMS-derived rows go.
+    """
+    origin = str(origin or "").rstrip("/")
+    if not origin:
+        return {"removed": 0}
+    keep = {str(c.get("source_uid") or "") for c in courses if isinstance(c, dict)}
+    doomed = []
+    for row in SyncedCourse.query.filter_by(user_id=user.id).all():
+        url = str(row.brightspace_url or "")
+        if url != origin and not url.startswith(origin + "/"):
+            continue
+        if str(row.source_uid or "") in keep:
+            continue
+        doomed.append(row)
+    if not doomed:
+        return {"removed": 0}
+    codes = {row.course_code for row in doomed}
+    for row in doomed:
+        db.session.delete(row)
+    db.session.flush()
+    # A code can be shared by two org units (a merged section); only clear the
+    # material once nothing still holds that code.
+    for code in codes:
+        if SyncedCourse.query.filter_by(user_id=user.id, course_code=code).first():
+            continue
+        CourseContent.query.filter_by(user_id=user.id, course_full=code).delete(synchronize_session=False)
+        AcademicUpdate.query.filter_by(user_id=user.id, course_full=code).delete(synchronize_session=False)
+    db.session.commit()
+    return {"removed": len(doomed)}
 
 
 def _import_courses(user, courses):
