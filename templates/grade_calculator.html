@@ -98,6 +98,34 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .alert.show{display:block}
 .meta{display:none;margin-top:16px}
 .meta.show{display:block}
+
+/* ---- course mode ---- */
+#coursePick{width:100%;background:var(--surface-2);border:1px solid var(--line-2);color:var(--fg);
+  padding:10px 12px;border-radius:6px;font:inherit;font-size:14px}
+#coursePick:focus{outline:none;border-color:var(--amber)}
+.card header a{font-size:13px;color:var(--fg-2);text-decoration:none}
+.card header a:hover{color:var(--amber)}
+.official{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding:14px 16px;
+  border-radius:10px;border:1px solid var(--line-2);background:var(--surface-2)}
+.official .tag{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  padding:4px 9px;border-radius:999px;border:1px solid var(--line-2);color:var(--fg-2)}
+.official.pass .tag{border-color:rgba(127,176,138,.5);color:#7FB08A}
+.official.fail .tag{border-color:rgba(201,112,92,.5);color:#C9705C}
+.official .num{font-family:var(--serif);font-size:1.7rem}
+.official .why{color:var(--fg-2);font-size:13px;flex-basis:100%;line-height:1.55;margin:0}
+.rules{display:grid;gap:8px;margin-top:12px}
+.rule{display:flex;gap:11px;align-items:flex-start;padding:10px 12px;border-radius:8px;
+  background:var(--surface-2);border:1px solid var(--line)}
+.rule .mark{font-weight:700;flex:none;width:1em;text-align:center}
+.rule.ok .mark{color:#7FB08A}
+.rule.bad{border-color:rgba(201,112,92,.4)}
+.rule.bad .mark{color:#C9705C}
+.rule.wait .mark{color:var(--fg-3)}
+.rule strong{display:block;font-size:13.5px;font-weight:500}
+.rule small{display:block;color:var(--fg-3);font-size:12px;margin-top:3px;line-height:1.5}
+.saved{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:#7FB08A;opacity:0;transition:opacity .2s var(--ease)}
+.saved.on{opacity:1}
 </style>
 {% endblock %}
 
@@ -107,16 +135,45 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     <p class="eyebrow">Course outline intelligence</p>
     <h1>Turn an outline into an <em>exact</em> grade plan.</h1>
     <p class="lede">
-      Upload or paste any syllabus and Nexora reads the official weighting, then tells
-      you where you stand. Nothing here is saved &mdash; for a course you are enrolled
-      in, open it from <a href="{{ url_for('home') }}#courses" style="color:var(--amber)">your
-      courses</a> and use its Grade Intelligence tab, which keeps your marks.
+      Pick one of your courses and Nexora shows its official weighting, its pass
+      rules and every mark you have entered &mdash; saved as you type. Or leave it
+      on <strong>Any outline</strong> to work one out for a course Nexora does not
+      know, without saving anything.
     </p>
   </div>
 </div>
 
+<section class="card" id="picker">
+  <header>
+    <div><span class="k">Step one</span><h2>Which course?</h2></div>
+    <a id="openWorkspace" href="#" hidden>Open workspace &rarr;</a>
+  </header>
+  <div class="body pad">
+    <div class="field">
+      <label for="coursePick">Your courses</label>
+      <select id="coursePick">
+        <option value="">Any outline — nothing saved</option>
+        {% for c in courses %}
+          <option value="{{ c.code }}"{% if c.code == requested_course %} selected{% endif %}>
+            {{ c.code }}{% if c.name and c.name != c.code %} — {{ c.name|truncate(48) }}{% endif %}{% if c.term %} ({{ c.term }}){% endif %}{% if not c.analyzed %} · outline not read yet{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <p class="note meta show" id="courseState" hidden></p>
+  </div>
+</section>
+
+<section class="card" id="policyPanel" hidden>
+  <header><div><span class="k">Official result</span><h2 id="policyCourse">Grading policy</h2></div></header>
+  <div class="body pad">
+    <div class="official" id="official"></div>
+    <div class="rules" id="passRules"></div>
+  </div>
+</section>
+
 <section class="card" id="inputPanel">
-  <header><div><span class="k">Step one</span><h2>Add the course outline</h2></div></header>
+  <header><div><span class="k">Step two</span><h2 id="intakeTitle">Add the course outline</h2></div></header>
   <div class="body pad">
     <div class="intake">
       <div>
@@ -143,7 +200,8 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 
 <section class="card">
     <header>
-      <div><span class="k">Step two</span><h2>Enter your actual results</h2></div>
+      <div><span class="k">Step three</span><h2>Enter your actual results</h2></div>
+      <span class="saved" id="savedBadge">Saved &check;</span>
       <button class="btn quiet sm" id="addBtn" type="button">+ Add item</button>
     </header>
     <div class="body pad">
@@ -206,6 +264,184 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   let components = [];
   const $ = id => document.getElementById(id);
 
+  /* ---------------- course mode ----------------
+     With a course selected this page is the course's grade sheet: the marks
+     come from the server, save back as they are typed, and the official
+     result comes from _compute_official_result rather than being worked out
+     again here -- a second implementation of the pass rules is exactly how
+     two screens end up disagreeing about whether someone passed. */
+  const COURSES = {{ courses|tojson }};
+  let course = {{ (requested_course or '')|tojson }};
+
+  const esc = value => String(value ?? '');
+
+  function setCourseState(text) {
+    const el = $('courseState');
+    el.textContent = text || '';
+    el.hidden = !text;
+  }
+
+  async function readResponse(res) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
+  }
+
+  // Typing "18" in a mark box should not be four writes to the database.
+  const pending = new Map();
+  function saveMark(index) {
+    if (!course) return;
+    const c = components[index];
+    if (!c || !c.name) return;
+    clearTimeout(pending.get(index));
+    pending.set(index, setTimeout(async () => {
+      try {
+        // Sent as "4/20", not as 4 with a separate maximum. The endpoint reads
+        // a bare number as a percentage -- which is right for the single-field
+        // entry it was built for, and wrong for the two boxes here, where 4 out
+        // of 20 was being stored as 4%.
+        const outOf = c.outOf === '' || c.outOf == null ? 100 : Number(c.outOf);
+        const mark = c.earned === '' || c.earned == null
+          ? null
+          : `${Number(c.earned)}/${outOf > 0 ? outOf : 100}`;
+        const data = await readResponse(await fetch(
+          `/api/course/${encodeURIComponent(course)}/grades`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: c.id || '', name: c.name, weight: Number(c.weight) || 0,
+              score: mark, max_score: outOf > 0 ? outOf : 100,
+              category: c.category || 'assessment',
+            }),
+          }));
+        c.id = data.id || c.id;
+        flashSaved();
+        refreshOfficial();
+      } catch (err) {
+        showAlert(`That mark was not saved: ${err.message}`, 'bad');
+      }
+    }, 500));
+  }
+
+  let savedTimer = null;
+  function flashSaved() {
+    const badge = $('savedBadge');
+    if (!badge) return;
+    badge.classList.add('on');
+    clearTimeout(savedTimer);
+    savedTimer = setTimeout(() => badge.classList.remove('on'), 1600);
+  }
+
+  function ruleRow(rule) {
+    const pending = rule.passed === null || rule.passed === undefined;
+    const row = document.createElement('div');
+    row.className = 'rule ' + (pending ? 'wait' : rule.passed ? 'ok' : 'bad');
+    const mark = document.createElement('span');
+    mark.className = 'mark';
+    mark.textContent = pending ? '\u2022' : rule.passed ? '\u2713' : '\u2715';
+    const body = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = esc(rule.message);
+    const detail = document.createElement('small');
+    detail.textContent = pending
+      ? (rule.note || 'Not calculated yet.')
+      : `Actual: ${rule.actual == null ? 'not entered' : rule.actual} · Required: ${rule.required}`;
+    body.append(title, detail);
+    row.append(mark, body);
+    return row;
+  }
+
+  async function refreshOfficial() {
+    if (!course) { $('policyPanel').hidden = true; return; }
+    let data;
+    try {
+      data = await readResponse(await fetch(
+        `/api/course/${encodeURIComponent(course)}/grade-outcomes`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target: Number($('targetGrade').value) || 50 }),
+        }));
+    } catch (err) {
+      // 409 means the policy is waiting to be confirmed; that is a state, not
+      // a failure, and the workspace is where confirming happens.
+      $('policyPanel').hidden = false;
+      $('official').className = 'official';
+      $('official').replaceChildren(Object.assign(document.createElement('p'),
+        { className: 'why', textContent: err.message }));
+      $('passRules').replaceChildren();
+      return;
+    }
+
+    $('policyPanel').hidden = false;
+    $('policyCourse').textContent = `${course} — official result`;
+    const status = data.official_status || 'INCOMPLETE';
+    const box = $('official');
+    box.className = 'official ' + status.toLowerCase();
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = status;
+    const num = document.createElement('span');
+    num.className = 'num';
+    num.textContent = (data.official_grade == null ? '—' : `${Number(data.official_grade).toFixed(2)}%`)
+      + (data.letter_grade ? ` · ${data.letter_grade}` : '');
+    const why = document.createElement('p');
+    why.className = 'why';
+    why.textContent = status === 'FAIL'
+      ? 'A mandatory rule in this outline is not satisfied, even though the numeric grade may be above the pass mark.'
+      : status === 'PASS'
+        ? 'Every mandatory rule in this outline is satisfied.'
+        : 'Enter the remaining marks to get an official result.';
+    box.replaceChildren(tag, num, why);
+
+    const rules = document.createDocumentFragment();
+    (data.pass_rules || []).forEach(rule => rules.append(ruleRow(rule)));
+    $('passRules').replaceChildren(rules);
+  }
+
+  async function loadCourse(code) {
+    course = code || '';
+    components = [];
+    setCourseState('');
+    $('policyPanel').hidden = true;
+
+    const link = $('openWorkspace');
+    link.hidden = !course;
+    if (course) link.href = `/course/${encodeURIComponent(course)}?tab=grades`;
+
+    const url = new URL(location.href);
+    if (course) url.searchParams.set('course', course); else url.searchParams.delete('course');
+    history.replaceState(null, '', url);
+
+    if (!course) {
+      $('intakeTitle').textContent = 'Add the course outline';
+      render();
+      return;
+    }
+
+    const known = COURSES.find(c => c.code === course) || {};
+    $('intakeTitle').textContent = `Add ${course}'s course outline`;
+
+    try {
+      const data = await readResponse(await fetch(`/api/course/${encodeURIComponent(course)}/grades`));
+      components = (data.grades || []).map(row => ({
+        id: row.id, name: row.name ?? 'Assessment', weight: Number(row.weight) || 0,
+        earned: row.score == null ? '' : row.score,
+        outOf: row.max_score == null ? DEFAULT_OUT_OF : row.max_score,
+        category: row.category || 'assessment',
+      }));
+    } catch (err) {
+      showAlert(err.message, 'bad');
+    }
+    render();
+
+    if (!components.length) {
+      setCourseState(known.analyzed
+        ? 'This course has an outline on file but no assessments yet. Add them below.'
+        : 'Nexora has not read this course\u2019s outline yet. Upload it below and the marks you enter will be saved to this course.');
+    } else {
+      setCourseState('Your marks for this course. Changes save as you type.');
+    }
+    refreshOfficial();
+  }
+
   const num = v => (v === '' || v == null ? null : Number(v));
   const pctOf = c => {
     const e = num(c.earned), o = num(c.outOf);
@@ -247,6 +483,12 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       }));
       render();
 
+      if (course) {
+        // The course route saved its own components; re-read them rather than
+        // keeping the copy this page just drew, so ids line up for saving.
+        await loadCourse(course);
+      }
+
       const meta = [];
       if (data.pass_mark != null) meta.push(`Course pass mark: ${data.pass_mark}%`);
       if (data.final_minimum != null) meta.push(`Final-exam minimum: ${data.final_minimum}%`);
@@ -269,7 +511,13 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     if (!files.length) return showAlert('Choose one or more outline pages first.', 'bad');
     const form = new FormData();
     files.forEach(f => form.append('files', f));
-    return analyzeRequest(fetch('/api/analyze-outline', { method: 'POST', body: form }));
+    // With a course selected this is that course's outline, so it goes to the
+    // route that stores the analysis and builds its grade sheet. The generic
+    // endpoint returns components and keeps nothing.
+    const url = course
+      ? `/api/course/${encodeURIComponent(course)}/outline/upload`
+      : '/api/analyze-outline';
+    return analyzeRequest(fetch(url, { method: 'POST', body: form }));
   };
 
   const parseText = () => {
@@ -342,13 +590,28 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     name.className = 'comp-name';
     name.value = c.name ?? '';
     name.setAttribute('aria-label', 'Assessment name');
-    name.oninput = e => { components[i].name = e.target.value; };
+    name.oninput = e => { components[i].name = e.target.value; saveMark(i); };
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'comp-x';
     remove.setAttribute('aria-label', 'Remove this assessment');
     remove.textContent = '×';
-    remove.onclick = () => { components.splice(i, 1); render(); };
+    remove.onclick = async () => {
+      const gone = components[i];
+      components.splice(i, 1);
+      render();
+      if (course && gone?.id) {
+        try {
+          await fetch(`/api/course/${encodeURIComponent(course)}/grades`, {
+            method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: gone.id }),
+          });
+          refreshOfficial();
+        } catch (_) {
+          showAlert('That assessment was removed here but not on the server. Reload to check.', 'bad');
+        }
+      }
+    };
     top.append(name, remove);
 
     const mid = document.createElement('div');
@@ -363,9 +626,9 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     const slash = document.createElement('span');
     slash.textContent = '/';
     row.append(
-      markInput(c.earned, 'Mark earned', '', v => { components[i].earned = v; }),
+      markInput(c.earned, 'Mark earned', '', v => { components[i].earned = v; saveMark(i); }),
       slash,
-      markInput(c.outOf, 'Out of', 'of', v => { components[i].outOf = v; })
+      markInput(c.outOf, 'Out of', 'of', v => { components[i].outOf = v; saveMark(i); })
     );
     marks.append(marksLabel, row);
     const dial = ring();
@@ -382,7 +645,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     weightInput.step = 'any';
     weightInput.value = Number(c.weight) || 0;
     weightInput.setAttribute('aria-label', 'Weight of this assessment, percent');
-    weightInput.oninput = e => { components[i].weight = Number(e.target.value) || 0; calculate(); };
+    weightInput.oninput = e => { components[i].weight = Number(e.target.value) || 0; calculate(); saveMark(i); };
     const weightTag = document.createElement('span');
     weightTag.textContent = 'weight';
     weight.append(weightInput, weightTag);
@@ -556,6 +819,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   $('addBtn').onclick = () => {
     components.push({ name: 'New assessment', weight: 10, earned: '', outOf: DEFAULT_OUT_OF });
     render();
+    if (course) saveMark(components.length - 1);
   };
 
   // The Chrome extension pushes an outline it scraped from Brightspace.
@@ -565,7 +829,11 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     parseText();
   });
 
-  render();
+  $('coursePick').onchange = e => loadCourse(e.target.value);
+
+  // ?course=BIOL1103 makes the page linkable, which is what lets the course
+  // workspace hand over to it.
+  if (course) loadCourse(course); else render();
 })();
 </script>
 {% endblock %}

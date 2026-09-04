@@ -19,7 +19,7 @@ import calendar as calendar_module
 from uuid import uuid4
 from pathlib import Path
 
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask import Flask, render_template, request, redirect, url_for, jsonify, Response
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_sqlalchemy import SQLAlchemy
@@ -234,6 +234,10 @@ class User(db.Model, UserMixin):
     sync_status = db.Column(db.String(30), default="never")
     sync_message = db.Column(db.Text, default="Not synchronized yet.")
     extension_token = db.Column(db.String(128), default="")
+    # The feed URL is handed to Google, which cannot log in, so the token in
+    # the path is the whole of the authentication. It is issued on demand and
+    # can be rotated, which is the only way to un-share a link once shared.
+    calendar_token = db.Column(db.String(64), default="")
 
     tasks = db.relationship("Task", backref="user", lazy=True, cascade="all, delete-orphan")
 
@@ -264,6 +268,13 @@ class Task(db.Model):
     sync_state = db.Column(db.String(30), default="active")
     last_seen_sync = db.Column(db.String(40), default="")
     completed = db.Column(db.Boolean, default=False)
+    # A midterm is a deadline that also has a clock time and a room. Rather than
+    # a second table that the dashboard, calendar, feed and completion logic
+    # would all have to learn about separately, an exam is a Task with `kind`
+    # set and these three filled in -- so everything downstream already works.
+    due_time = db.Column(db.String(5), default="")
+    location = db.Column(db.String(255), default="")
+    notes = db.Column(db.Text, default="")
 
 
 class CourseContent(db.Model):
@@ -433,6 +444,7 @@ def ensure_schema_columns():
     """Add synchronization columns to existing SQLite/Postgres databases safely."""
     migrations = {
         "user": {
+            "calendar_token": "VARCHAR(64) DEFAULT ''",
             "sync_status": "VARCHAR(30) DEFAULT 'never'",
             "sync_message": "TEXT DEFAULT 'Not synchronized yet.'",
             "extension_token": "VARCHAR(128) DEFAULT ''",
@@ -445,6 +457,9 @@ def ensure_schema_columns():
             "last_sync_at": "TIMESTAMP NULL",
         },
         "task": {
+            "due_time": "VARCHAR(5) DEFAULT ''",
+            "location": "VARCHAR(255) DEFAULT ''",
+            "notes": "TEXT DEFAULT ''",
             "source_uid": "VARCHAR(255) DEFAULT ''",
             "source_hash": "VARCHAR(64) DEFAULT ''",
             "source_updated": "VARCHAR(80) DEFAULT ''",
@@ -495,6 +510,9 @@ def task_to_dict(t):
         "sync_state": t.sync_state or "active",
         "last_seen_sync": t.last_seen_sync or "",
         "completed": bool(t.completed),
+        "due_time": t.due_time or "",
+        "location": t.location or "",
+        "notes": t.notes or "",
     }
 
 
@@ -502,7 +520,11 @@ def load_tasks():
     if not current_user.is_authenticated:
         return []
 
-    tasks = Task.query.filter_by(user_id=current_user.id).all()
+    # 'dismissed' is a student deleting something the LMS gave them. It is a
+    # state rather than a row deletion because the next sync would otherwise
+    # import it again and it would look like the delete had not worked.
+    tasks = Task.query.filter_by(user_id=current_user.id).filter(
+        (Task.sync_state.is_(None)) | (Task.sync_state != "dismissed")).all()
     return [task_to_dict(t) for t in tasks]
 
 
@@ -795,21 +817,36 @@ def build_grouped_cards(raw_tasks):
                 "main_due_raw": "",
                 "is_deadline": True,
                 "source": t.get("source", "ics"),
+                # What a calendar entry needs to be editable: which rows it is
+                # made of, and the detail a student typed onto it.
+                "task_ids": [],
+                "kind": t.get("kind", "due"),
+                "due_time": "",
+                "location": "",
+                "notes": "",
             }
 
         g = grouped[gid]
         k = t.get("kind", "general")
         d = t.get("due_raw", "")
+        g["task_ids"].append(t.get("id", ""))
+        if t.get("due_time") and not g["due_time"]: g["due_time"] = t["due_time"]
+        if t.get("location") and not g["location"]: g["location"] = t["location"]
+        if t.get("notes") and not g["notes"]: g["notes"] = t["notes"]
 
         if k == "opens" and d:
             if (not g["opens_raw"]) or (d < g["opens_raw"]):
                 g["opens_raw"] = d
-        elif k == "due" and d:
-            if (not g["due_raw"]) or (d < g["due_raw"]):
-                g["due_raw"] = d
         elif k == "closes" and d:
             if (not g["closes_raw"]) or (d < g["closes_raw"]):
                 g["closes_raw"] = d
+        elif d:
+            # 'due' and anything the student created ('exam', 'event'). A kind
+            # that fell through here used to leave main_due_raw empty, so a
+            # midterm someone added by hand never landed on a day at all.
+            g["kind"] = k
+            if (not g["due_raw"]) or (d < g["due_raw"]):
+                g["due_raw"] = d
 
     for g in grouped.values():
         if g["due_raw"]:
@@ -1024,6 +1061,11 @@ def import_calendar_string(ics_text, mark_missing=True):
         seen_uids.add(source_uid)
 
         task = existing_by_uid.get(source_uid)
+        if task and task.sync_state == "dismissed":
+            # Deleted on purpose. Re-importing it would undo the student's
+            # decision every time the feed refreshed.
+            counts["unchanged"] += 1
+            continue
         if task:
             changed = task.source_hash != source_hash or task.sync_state != "active"
             task.group_id = gid
@@ -2722,7 +2764,11 @@ def _letter_requirement_result(user_id, grade, requirement):
 @login_required
 def settings():
     grading_scale=_get_user_grading_scale(current_user.id)
-    return render_template("settings.html", user=current_user, grading_scale=grading_scale)
+    # Shown only if one has already been issued: the page should not mint a
+    # secret URL for a student who never asked for one.
+    token=(current_user.calendar_token or "").strip()
+    return render_template("settings.html", user=current_user, grading_scale=grading_scale,
+                           calendar_feed_url=url_for("calendar_feed", token=token, _external=True) if token else "")
 
 @app.route("/api/grading-scale", methods=["GET","POST"])
 @login_required
@@ -3131,6 +3177,428 @@ def complete_task_group(group_id):
         task.completed = completed
     db.session.commit()
     return jsonify({"ok": True, "completed": completed, "group_id": group_id})
+
+
+# ============================
+# Calendar events the student owns
+# ============================
+# An event is a Task. It deliberately is not its own table: the dashboard, the
+# calendar, the completion toggle and the .ics feed already understand Tasks,
+# and a parallel model would have to be taught to every one of them.
+
+EVENT_KINDS = {"due", "exam", "event"}
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _event_fields(data, partial=False):
+    """Validate one event payload. Returns (fields, error)."""
+    fields = {}
+
+    if not partial or "title" in data:
+        title = str(data.get("title") or "").strip()
+        if not title:
+            return None, "Give the event a name."
+        fields["title"] = title[:500]
+
+    if not partial or "date" in data:
+        raw = str(data.get("date") or "").strip()
+        if not raw:
+            return None, "Choose a date."
+        if not parse_iso_date(raw):
+            return None, "That date could not be read. Use the date picker."
+        fields["due_raw"] = raw
+
+    if "time" in data:
+        raw = str(data.get("time") or "").strip()
+        if raw and not _TIME_RE.match(raw):
+            return None, "Use a 24-hour time such as 14:30, or leave it blank."
+        fields["due_time"] = raw
+
+    if "course" in data:
+        course = _normalize_course_code(str(data.get("course") or "")) or "OTHER"
+        fields["course_full"] = course
+        fields["course_prefix"] = "OTHER" if course == "OTHER" else course_prefix(course)
+
+    if "kind" in data:
+        kind = str(data.get("kind") or "event").strip().lower()
+        fields["kind"] = kind if kind in EVENT_KINDS else "event"
+
+    if "location" in data:
+        fields["location"] = str(data.get("location") or "").strip()[:255]
+
+    if "notes" in data:
+        fields["notes"] = str(data.get("notes") or "").strip()[:2000]
+
+    return fields, None
+
+
+def _event_json(task):
+    return {
+        "id": task.id, "group_id": task.group_id, "title": task.title,
+        "course": task.course_full or "OTHER", "date": task.due_raw or "",
+        "time": task.due_time or "", "kind": task.kind or "event",
+        "location": task.location or "", "notes": task.notes or "",
+        "completed": bool(task.completed),
+        # An imported deadline can be deleted, but the delete has to be
+        # remembered differently, and the student is told which kind it is.
+        "imported": (task.source or "manual") != "manual",
+    }
+
+
+@app.route("/api/events", methods=["POST"])
+@login_required
+def create_event():
+    data = request.get_json(silent=True) or {}
+    fields, error = _event_fields(data)
+    if error:
+        return jsonify({"error": error}), 400
+    fields.setdefault("course_full", "OTHER")
+    fields.setdefault("course_prefix", "OTHER")
+    fields.setdefault("kind", "event")
+    # base_title() exists to merge an LMS feed's "Assignment 1 (opens)" with its
+    # "(due)" twin. A student's own event has no twin, and collapsing it would
+    # show them a title they did not type.
+    base = fields["title"]
+    task = Task(
+        id=uuid4().hex, user_id=current_user.id,
+        group_id=make_group_id(fields["course_full"], base), base_title=base,
+        is_deadline=True, source="manual", sync_state="active",
+        created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        **fields,
+    )
+    db.session.add(task)
+    db.session.commit()
+    return jsonify({"ok": True, "event": _event_json(task)}), 201
+
+
+@app.route("/api/events/<event_id>", methods=["POST", "PATCH"])
+@login_required
+def update_event(event_id):
+    task = Task.query.filter_by(user_id=current_user.id, id=event_id).first()
+    if not task:
+        return jsonify({"error": "That event no longer exists."}), 404
+    data = request.get_json(silent=True) or {}
+    fields, error = _event_fields(data, partial=True)
+    if error:
+        return jsonify({"error": error}), 400
+    for key, value in fields.items():
+        setattr(task, key, value)
+    if "title" in fields:
+        task.base_title = task.title if (task.source or "manual") == "manual" else base_title(task.title)
+    if "title" in fields or "course_full" in fields:
+        task.group_id = make_group_id(task.course_full or "OTHER", task.base_title or "")
+    db.session.commit()
+    return jsonify({"ok": True, "event": _event_json(task)})
+
+
+@app.route("/api/events/<event_id>", methods=["DELETE"])
+@login_required
+def delete_event(event_id):
+    """Delete the whole calendar entry, not one row of it.
+
+    An imported assignment can be three Tasks -- opens, due, closes -- sharing
+    a group, and the calendar shows the group once. Deleting only the row the
+    student clicked let the group fall back to its next date, so the entry
+    reappeared a few days later and the delete looked broken.
+    """
+    task = Task.query.filter_by(user_id=current_user.id, id=event_id).first()
+    if not task:
+        return jsonify({"error": "That event no longer exists."}), 404
+    siblings = Task.query.filter_by(user_id=current_user.id, group_id=task.group_id).all()
+    restore = _event_json(task)
+    restore["group_id"] = task.group_id
+    restorable = False
+    for row in siblings:
+        if (row.source or "manual") == "manual":
+            db.session.delete(row)
+        else:
+            # Imported: keep the row so the next sync recognises it and leaves
+            # it alone, rather than importing it again and undoing the delete.
+            row.sync_state = "dismissed"
+            restorable = True
+    db.session.commit()
+    restore["restorable"] = restorable
+    return jsonify({"ok": True, "deleted": restore})
+
+
+@app.route("/api/events/<event_id>/restore", methods=["POST"])
+@login_required
+def restore_event(event_id):
+    """Undo for a deleted import. A manual event's rows are gone, so the client
+    sends its fields back to /api/events instead."""
+    task = Task.query.filter_by(user_id=current_user.id, id=event_id).first()
+    if not task:
+        return jsonify({"error": "That event cannot be restored."}), 404
+    for row in Task.query.filter_by(user_id=current_user.id, group_id=task.group_id).all():
+        row.sync_state = "active"
+    db.session.commit()
+    return jsonify({"ok": True, "event": _event_json(task)})
+
+
+# ============================
+# Finding exams a student has not put on their calendar
+# ============================
+# The dates are already in the building: an analysed outline records
+# important_dates, and announcements say "Midterm 2 is on Oct 30 at 6pm in
+# Southam". Neither ever became a calendar entry, so a student who had done
+# everything Nexora asked still had to copy their own midterms across by hand.
+#
+# Deliberately deterministic. Dates are the one thing a model must not be
+# allowed to be creative about, and this runs on every page view -- a Gemini
+# call here would burn the quota the outline pipeline needs.
+
+_MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun",
+     "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+
+# "Midterm 2", "Final Exam", "Unit Test 1", "Term Test", "Quiz 3"
+_EXAM_WORDS = re.compile(
+    r"\b((?:unit|term)\s*\d*\s*test|final\s+exam(?:ination)?|final|"
+    r"midterm(?:\s+exam)?|mid-term|test|quiz|exam(?:ination)?)\b", re.I)
+# Words that make an "exam" mention about something other than a sitting.
+_NOT_AN_EXAM = re.compile(
+    r"\b(practice|review|prep(?:aration)?|sample|past|mock|solutions?|"
+    r"answers?|study\s+guide|office\s+hours|tutorial\s+on)\b", re.I)
+
+_DATE_PATTERNS = [
+    # 2026-10-30
+    (re.compile(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b"), ("y", "m", "d")),
+    # Oct 30, 2026 / October 30 2026 / Oct. 30
+    (re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+"
+                r"(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(20\d{2}))?\b", re.I), ("mon", "d", "y?")),
+    # 30 October 2026
+    (re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+"
+                r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:,?\s+(20\d{2}))?\b", re.I),
+     ("d", "mon", "y?")),
+]
+
+_TIME_PATTERNS = [
+    # 6:30 pm / 6 pm
+    re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\b", re.I),
+    # 18:30
+    re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b"),
+]
+
+_LOCATION_RE = re.compile(
+    r"\b(?i:in|at|room|location)\b[:\s]+(?i:the\s+)?"
+    r"((?:[A-Z][A-Za-z.]*\s+){0,3}"
+    r"(?:Hall|Building|Centre|Center|Theatre|Theater|Gym|Room|Fieldhouse)"
+    r"(?:\s+\d{1,4}[A-Z]?)?|[A-Z]{2,4}\s?\d{2,4})\b")
+
+
+def _guess_year(month, day, reference=None):
+    """An outline says "Oct 30" and means the term in progress. Assume the next
+    occurrence, so a date in the past few weeks stays in the past rather than
+    jumping a year forward."""
+    reference = reference or date.today()
+    for year in (reference.year, reference.year + 1):
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            continue
+        if candidate >= reference - timedelta(days=45):
+            return candidate
+    return None
+
+
+def _find_date(text, reference=None):
+    for pattern, order in _DATE_PATTERNS:
+        match = pattern.search(text or "")
+        if not match:
+            continue
+        groups = match.groups()
+        try:
+            if order[0] == "y":
+                return date(int(groups[0]), int(groups[1]), int(groups[2]))
+            fields = dict(zip(order, groups))
+            month = _MONTHS[fields["mon"][:3].lower()]
+            day = int(fields["d"])
+            year = fields.get("y?")
+            if year:
+                return date(int(year), month, day)
+            return _guess_year(month, day, reference)
+        except (ValueError, KeyError, TypeError):
+            continue
+    return None
+
+
+def _find_time(text):
+    for pattern in _TIME_PATTERNS:
+        match = pattern.search(text or "")
+        if not match:
+            continue
+        groups = match.groups()
+        try:
+            hour = int(groups[0])
+            minute = int(groups[1] or 0)
+        except (TypeError, ValueError):
+            continue
+        if len(groups) == 3 and groups[2]:
+            meridiem = groups[2].lower()
+            if hour == 12:
+                hour = 0 if meridiem == "a" else 12
+            elif meridiem == "p":
+                hour += 12
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return f"{hour:02d}:{minute:02d}"
+    return None
+
+
+def _find_location(text):
+    match = _LOCATION_RE.search(text or "")
+    return match.group(1).strip()[:255] if match else ""
+
+
+def _looks_like_an_exam(text):
+    text = str(text or "")
+    return bool(_EXAM_WORDS.search(text)) and not _NOT_AN_EXAM.search(text)
+
+
+def _exam_title(text, course):
+    """A short name for the entry: the exam phrase itself, plus the number that
+    tells two of them apart.
+
+    Reading forward from the match with a character class was too eager -- for
+    "Unit 1 Test in week 5" it stopped at "Unit 1" and dropped the word that
+    said what it was.
+    """
+    match = _EXAM_WORDS.search(str(text or ""))
+    if not match:
+        return "Exam"
+    name = re.sub(r"\s+", " ", match.group(0)).strip(" -")
+    # "Midterm 2" -- the number follows the phrase rather than sitting inside it.
+    trailing = re.match(r"\s*#?\s*(\d{1,2}|[IVX]{1,4})\b", str(text)[match.end():])
+    if trailing and not re.search(r"\d", name):
+        name = f"{name} {trailing.group(1)}"
+    return name.title()[:120] or "Exam"
+
+
+def _detect_course_exams(user, course, profile_json, reference=None):
+    """Candidates from one course's analysed outline and its announcements."""
+    found = []
+
+    try:
+        analysis = json.loads(profile_json or "{}")
+    except Exception:
+        analysis = {}
+    for item in (analysis.get("important_dates") or [])[:60]:
+        if not isinstance(item, dict):
+            continue
+        description = str(item.get("description") or item.get("title") or "")
+        if not _looks_like_an_exam(description):
+            continue
+        when = _find_date(str(item.get("date") or ""), reference) or _find_date(description, reference)
+        if not when:
+            continue
+        found.append({
+            "title": _exam_title(description, course), "course": course,
+            "date": when.isoformat(), "time": _find_time(description) or "",
+            "location": _find_location(description), "kind": "exam",
+            "source": "Course outline", "detail": description[:300],
+        })
+
+    announcements = CourseContent.query.filter_by(
+        user_id=user.id, course_full=course).filter(
+        CourseContent.content_type.in_(["announcement", "news"])).order_by(
+        CourseContent.updated_at.desc()).limit(40).all()
+    for row in announcements:
+        text = f"{row.title or ''}. {(row.content_text or '')[:1200]}"
+        if not _looks_like_an_exam(text):
+            continue
+        when = _find_date(text, reference)
+        if not when:
+            continue
+        found.append({
+            "title": _exam_title(text, course), "course": course,
+            "date": when.isoformat(), "time": _find_time(text) or "",
+            "location": _find_location(text), "kind": "exam",
+            "source": "Announcement", "detail": (row.title or "")[:300],
+        })
+    return found
+
+
+def _existing_exam_keys(user):
+    """What is already on the calendar, so a suggestion is never a duplicate."""
+    keys = set()
+    for row in Task.query.filter_by(user_id=user.id).all():
+        if (row.sync_state or "") == "dismissed":
+            continue
+        keys.add((str(row.course_full or "").upper(),
+                  str(row.due_raw or ""),
+                  re.sub(r"[^a-z0-9]+", "", str(row.title or "").lower())[:24]))
+    return keys
+
+
+def _exam_suggestions(user, reference=None):
+    profiles = CourseOutlineProfile.query.filter_by(user_id=user.id).all()
+    by_course = {p.course_full: p.grading_json for p in profiles}
+    courses = {c.course_code for c in SyncedCourse.query.filter_by(user_id=user.id).all()
+               if c.course_code and not bool(getattr(c, "is_hidden", False))}
+    courses.update(by_course.keys())
+
+    existing = _existing_exam_keys(user)
+    today = reference or date.today()
+    out, seen = [], set()
+    for course in sorted(courses):
+        for item in _detect_course_exams(user, course, by_course.get(course), reference):
+            when = parse_iso_date(item["date"])
+            if not when or when < today:
+                continue      # a sitting that has already happened is not news
+            key = (course.upper(), item["date"],
+                   re.sub(r"[^a-z0-9]+", "", item["title"].lower())[:24])
+            if key in existing or key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+    out.sort(key=lambda x: (x["date"], x["course"]))
+    return out[:25]
+
+
+@app.route("/api/exams/suggestions")
+@login_required
+def exam_suggestions():
+    items = _exam_suggestions(current_user)
+    return jsonify({"ok": True, "count": len(items), "suggestions": items})
+
+
+@app.route("/api/exams/accept", methods=["POST"])
+@login_required
+def accept_exam_suggestions():
+    """Create the ones the student ticked. Never automatic: these are read out
+    of prose by a regex, and a wrong exam date is worse than no exam date."""
+    data = request.get_json(silent=True) or {}
+    wanted = data.get("events")
+    if not isinstance(wanted, list) or not wanted:
+        return jsonify({"error": "Nothing was selected."}), 400
+    existing = _existing_exam_keys(current_user)
+    created = []
+    for item in wanted[:25]:
+        if not isinstance(item, dict):
+            continue
+        fields, error = _event_fields({
+            "title": item.get("title"), "date": item.get("date"),
+            "time": item.get("time") or "", "course": item.get("course") or "OTHER",
+            "kind": "exam", "location": item.get("location") or "",
+            "notes": item.get("detail") or "",
+        })
+        if error:
+            continue
+        key = (str(fields.get("course_full", "OTHER")).upper(), fields["due_raw"],
+               re.sub(r"[^a-z0-9]+", "", fields["title"].lower())[:24])
+        if key in existing:
+            continue
+        existing.add(key)
+        base = fields["title"]
+        task = Task(
+            id=uuid4().hex, user_id=current_user.id,
+            group_id=make_group_id(fields.get("course_full", "OTHER"), base),
+            base_title=base, is_deadline=True, source="manual", sync_state="active",
+            created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), **fields,
+        )
+        db.session.add(task)
+        created.append(_event_json(task))
+    db.session.commit()
+    return jsonify({"ok": True, "created": created, "count": len(created)})
 
 
 @app.route("/api/start-my-day", methods=["GET"])
@@ -5574,11 +6042,21 @@ def calendar_page():
             course = c.get("course_full", "") or "OTHER"
             color_index = sum(ord(ch) for ch in course) % 8
 
+            task_ids = [i for i in (c.get("task_ids") or []) if i]
             tasks_by_date[iso].append({
                 "title": c.get("title", "Task"),
                 "course": course,
                 "color_index": color_index,
                 "status": status_for(c.get("main_due_raw", ""))[1],
+                # Enough for the editor to open on this entry without a second
+                # request. `id` is any row of the group; delete and edit resolve
+                # the rest of the group from it server-side.
+                "id": task_ids[0] if task_ids else "",
+                "kind": c.get("kind") or "due",
+                "time": c.get("due_time") or "",
+                "location": c.get("location") or "",
+                "notes": c.get("notes") or "",
+                "imported": (c.get("source") or "manual") != "manual",
             })
 
     weeks = []
@@ -5609,14 +6087,182 @@ def calendar_page():
             week.append(None)
         weeks.append(week)
 
+    # The course list the "add an event" form offers, so a student picks rather
+    # than types a code that has to match one Nexora already knows.
+    known_courses = sorted({
+        c.course_code for c in SyncedCourse.query.filter_by(user_id=current_user.id).all()
+        if c.course_code and not bool(getattr(c, "is_hidden", False))
+    } | {c.get("course_full") for c in cards if c.get("course_full") and c.get("course_full") != "OTHER"})
+
     return render_template(
         "calendar.html",
         weeks=weeks,
         month_title=current_month.strftime("%B %Y"),
         prev_month=prev_month.strftime("%Y-%m"),
         next_month=next_month.strftime("%Y-%m"),
+        this_month=date.today().strftime("%Y-%m"),
+        is_this_month=(year, month) == (date.today().year, date.today().month),
+        today_iso=date.today().isoformat(),
+        known_courses=known_courses,
         user=current_user,
     )
+
+
+# ============================
+# Calendar subscription (.ics)
+# ============================
+# Google Calendar cannot sign in to Nexora, so "connect my calendar" is a URL
+# it polls rather than an OAuth grant. That needs no Google Cloud project and
+# no verification, and it works in Apple Calendar and Outlook unchanged. The
+# trade is that Google decides how often to refresh -- usually a few hours --
+# and the events are read-only on their side.
+
+ICS_WINDOW_PAST = 60      # days of finished work worth keeping visible
+ICS_WINDOW_AHEAD = 400    # a full academic year plus a margin
+
+
+def _ics_escape(value):
+    """RFC 5545 text escaping. A comma or semicolon left raw ends the property
+    early and Google silently drops the whole event."""
+    return (str(value or "")
+            .replace("\\", "\\\\").replace(";", "\\;")
+            .replace(",", "\\,").replace("\r\n", "\\n")
+            .replace("\n", "\\n").replace("\r", "\\n"))
+
+
+def _ics_fold(line):
+    """Lines are limited to 75 octets; longer ones continue with a leading
+    space. Folding on characters would split a multi-byte one in half."""
+    raw = line.encode("utf-8")
+    if len(raw) <= 73:
+        return line
+    chunks = []
+    while raw:
+        head, raw = raw[:73], raw[73:]
+        # never cut inside a UTF-8 sequence
+        while raw and (raw[0] & 0xC0) == 0x80:
+            head, raw = head + raw[:1], raw[1:]
+        chunks.append(head.decode("utf-8"))
+    return "\r\n ".join(chunks)
+
+
+def _calendar_token(user, create=False):
+    token = (user.calendar_token or "").strip()
+    if not token and create:
+        token = secrets.token_urlsafe(24)
+        user.calendar_token = token
+        db.session.commit()
+    return token
+
+
+def _feed_events(user):
+    """Every dated, unfinished-or-recent item, as (task, date) pairs."""
+    today = date.today()
+    rows = Task.query.filter_by(user_id=user.id).filter(
+        (Task.sync_state.is_(None)) | (Task.sync_state != "dismissed")).all()
+    seen = {}
+    for row in rows:
+        if (row.kind or "") == "junk":
+            continue
+        due = parse_iso_date(row.due_raw or "")
+        if not due:
+            continue
+        if not (today - timedelta(days=ICS_WINDOW_PAST) <= due <= today + timedelta(days=ICS_WINDOW_AHEAD)):
+            continue
+        # An assignment can be three rows -- opens, due, closes. The calendar
+        # shows the group once, and so should the feed.
+        key = (row.group_id or row.id, due.isoformat())
+        if key not in seen or (row.kind or "") == "due":
+            seen[key] = (row, due)
+    return list(seen.values())
+
+
+def _build_ics(user, events):
+    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VCALENDAR", "VERSION:2.0",
+        "PRODID:-//Nexora//Academic calendar//EN",
+        "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+        "X-WR-CALNAME:Nexora",
+        "X-WR-CALDESC:Deadlines and exams imported into Nexora",
+        # A hint only: Google honours its own refresh schedule regardless.
+        "REFRESH-INTERVAL;VALUE=DURATION:PT6H",
+        "X-PUBLISHED-TTL:PT6H",
+    ]
+    for row, due in events:
+        title = row.title or "Untitled"
+        course = row.course_full or ""
+        summary = f"{course} - {title}" if course and course != "OTHER" else title
+        lines.append("BEGIN:VEVENT")
+        lines.append(f"UID:{row.id}@nexora")
+        lines.append(f"DTSTAMP:{stamp}")
+        time_raw = (row.due_time or "").strip()
+        if _TIME_RE.match(time_raw):
+            hour, minute = time_raw.split(":")
+            start = f"{due.strftime('%Y%m%d')}T{hour}{minute}00"
+            end_hour = (int(hour) + 1) % 24
+            # A one-hour block is a guess, but a zero-length event is invisible
+            # in Google's month view, which defeats the point of the feed.
+            end_day = due + timedelta(days=1) if int(hour) == 23 else due
+            lines.append(f"DTSTART:{start}")
+            lines.append(f"DTEND:{end_day.strftime('%Y%m%d')}T{end_hour:02d}{minute}00")
+        else:
+            # All-day. DTEND is exclusive in iCalendar, so it is the next day.
+            lines.append(f"DTSTART;VALUE=DATE:{due.strftime('%Y%m%d')}")
+            lines.append(f"DTEND;VALUE=DATE:{(due + timedelta(days=1)).strftime('%Y%m%d')}")
+        lines.append(f"SUMMARY:{_ics_escape(summary)}")
+        if row.location:
+            lines.append(f"LOCATION:{_ics_escape(row.location)}")
+        detail = row.notes or ""
+        if (row.kind or "") == "exam":
+            detail = (detail + "\n" if detail else "") + "Exam"
+        if detail:
+            lines.append(f"DESCRIPTION:{_ics_escape(detail)}")
+        if row.completed:
+            lines.append("STATUS:CANCELLED")
+        lines.append("END:VEVENT")
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(_ics_fold(line) for line in lines) + "\r\n"
+
+
+@app.route("/calendar/feed/<token>.ics")
+@limiter.limit("60 per hour")
+def calendar_feed(token):
+    """Deliberately unauthenticated: the token is the credential, because the
+    calendar app fetching this has no way to sign in. Nothing here is writable
+    and nothing but this student's own dated items is returned."""
+    token = (token or "").strip()
+    if len(token) < 20:
+        return Response("Not found", status=404, mimetype="text/plain")
+    user = User.query.filter_by(calendar_token=token).first()
+    if not user:
+        return Response("Not found", status=404, mimetype="text/plain")
+    body = _build_ics(user, _feed_events(user))
+    # content_type, not mimetype: Flask appends its own charset to a mimetype,
+    # and "text/calendar; charset=utf-8; charset=utf-8" is not a header anyone
+    # should have to parse.
+    return Response(body, content_type="text/calendar; charset=utf-8", headers={
+        "Content-Disposition": 'inline; filename="nexora.ics"',
+        "Cache-Control": "private, max-age=900",
+        # The URL is a secret; keeping it out of search engines is free.
+        "X-Robots-Tag": "noindex, nofollow",
+    })
+
+
+@app.route("/api/calendar/feed", methods=["GET", "POST", "DELETE"])
+@login_required
+def calendar_feed_link():
+    """GET returns the link (creating one on first ask), POST rotates it,
+    DELETE turns the feed off entirely."""
+    if request.method == "DELETE":
+        current_user.calendar_token = ""
+        db.session.commit()
+        return jsonify({"ok": True, "url": ""})
+    if request.method == "POST":
+        current_user.calendar_token = secrets.token_urlsafe(24)
+        db.session.commit()
+    token = _calendar_token(current_user, create=True)
+    return jsonify({"ok": True, "url": url_for("calendar_feed", token=token, _external=True)})
 
 
 @app.route("/connect-brightspace")
@@ -5711,10 +6357,50 @@ def sync_now():
 @app.route("/grade-calculator")
 @login_required
 def grade_calculator():
+    """One page for every course's grades, rather than one page per course.
+
+    Opening a course workspace to read a grading scheme meant a navigation per
+    course, which for a full term is most of what a student does here. The
+    picker puts the same thing behind a dropdown; the workspace is untouched
+    and still works.
+    """
+    user_id = current_user.id
+    profiles = {p.course_full: p for p in
+                CourseOutlineProfile.query.filter_by(user_id=user_id).all()}
+    synced = {c.course_code: c for c in SyncedCourse.query.filter_by(user_id=user_id).all()
+              if c.course_code and not bool(getattr(c, "is_hidden", False))}
+    graded = {row.course_full for row in
+              GradeEntry.query.filter_by(user_id=user_id).with_entities(
+                  GradeEntry.course_full).distinct()}
+
+    courses = []
+    for code in sorted(set(synced) | set(profiles) | graded):
+        if not code or code == "OTHER":
+            continue
+        profile = profiles.get(code)
+        confirmed = None
+        if profile:
+            try:
+                confirmed = bool(json.loads(profile.grading_json or "{}").get("confirmed"))
+            except Exception:
+                confirmed = False
+        courses.append({
+            "code": code,
+            "name": (synced.get(code).course_name if synced.get(code) else "") or code,
+            "term": (synced.get(code).term if synced.get(code) else "") or "",
+            "analyzed": profile is not None,
+            "confirmed": confirmed,
+        })
+
+    requested = _normalize_course_code(request.args.get("course", "") or "")
+    if requested and not any(c["code"] == requested for c in courses):
+        requested = ""
+
     # The calculator converts a running total into a letter, so it needs the
     # student's own scale rather than a hardcoded one.
     return render_template("grade_calculator.html",
-                           grading_scale=_get_user_grading_scale(current_user.id))
+                           grading_scale=_get_user_grading_scale(user_id),
+                           courses=courses, requested_course=requested)
 
 
 @app.route("/api/analyze-outline", methods=["POST"])
@@ -6335,6 +7021,10 @@ def _import_canvas_tasks(user, rows):
         base_name = base_title(row["title"])
         group_id = make_group_id(course, base_name)
         existing = Task.query.filter_by(user_id=user.id, source_uid=row["uid"]).first()
+        if existing and existing.sync_state == "dismissed":
+            # Deleted on purpose; a refresh must not bring it back.
+            counts["unchanged"] += 1
+            continue
         if existing:
             if existing.due_raw == row["due"] and existing.title == row["title"]:
                 counts["unchanged"] += 1

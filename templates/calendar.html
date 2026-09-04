@@ -9,26 +9,47 @@
 .cal{--c0:#E8A94A;--c1:#7FB08A;--c2:#7892C8;--c3:#C9705C;--c4:#C4A47C;--c5:#8FA6B2;--c6:#B08FA8;--c7:#9BAF7E}
 
 .monthnav{display:flex;align-items:center;gap:8px}
-.monthnav a{display:grid;place-items:center;width:34px;height:34px;border-radius:5px;
+.monthnav a,.monthnav button{display:grid;place-items:center;height:34px;border-radius:5px;
   border:1px solid var(--line-2);color:var(--fg-2);text-decoration:none;font-size:15px;
+  background:var(--surface);font-family:inherit;cursor:pointer;
   transition:border-color .2s var(--ease),color .2s var(--ease)}
-.monthnav a:hover{border-color:var(--fg-3);color:var(--fg)}
+.monthnav a{width:34px}
+.monthnav a:hover,.monthnav button:hover{border-color:var(--fg-3);color:var(--fg)}
+.monthnav .today{width:auto;padding:0 12px;font-size:12.5px}
+.monthnav .today[disabled]{opacity:.4;cursor:default}
 .monthnav strong{font-family:var(--serif);font-weight:400;font-size:1.06rem;min-width:9.5ch;
   text-align:center}
+.monthnav .add{background:var(--amber);border-color:var(--amber);color:#140F09;font-weight:600;
+  width:auto;padding:0 14px;font-size:13px}
+.monthnav .add:hover{filter:brightness(1.06);color:#140F09}
 
 .weekhead,.month{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px}
 .weekhead{padding:0 0 8px}
 .weekhead span{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
   color:var(--fg-3);padding-left:2px}
 .month{background:var(--line);border:1px solid var(--line);border-radius:9px;overflow:hidden}
-.day{background:var(--surface);min-height:118px;padding:8px 8px 10px;display:flex;flex-direction:column;gap:5px}
+.day{background:var(--surface);min-height:118px;padding:8px 8px 10px;display:flex;flex-direction:column;gap:5px;
+  position:relative}
 .day.blank{background:var(--bg)}
 .day .n{font-family:var(--mono);font-size:11px;color:var(--fg-3);font-variant-numeric:tabular-nums}
 .day.today{background:var(--surface-2)}
 .day.today .n{color:#140F09;background:var(--amber);border-radius:3px;padding:1px 5px;
   align-self:flex-start;font-weight:500}
+
+/* One quiet target per day. It only appears on hover so an empty month is
+   still a calendar rather than a grid of plus signs. */
+.dayadd{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:5px;
+  border:1px solid var(--line-2);background:var(--surface-2);color:var(--fg-3);
+  font:inherit;font-size:14px;line-height:1;cursor:pointer;display:grid;place-items:center;
+  opacity:0;transition:opacity .15s var(--ease)}
+.day:hover .dayadd,.dayadd:focus-visible{opacity:1}
+.dayadd:hover{border-color:var(--amber);color:var(--amber)}
+
 .ev{border-left:2px solid var(--ev,var(--amber));border-radius:0 4px 4px 0;padding:5px 7px;
-  background:var(--surface-2);min-width:0}
+  background:var(--surface-2);min-width:0;width:100%;text-align:left;border-top:0;border-right:0;
+  border-bottom:0;font:inherit;color:inherit;cursor:pointer;display:block}
+.ev:hover{background:var(--surface-3)}
+.ev:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
 .day.today .ev{background:var(--surface-3)}
 .ev strong{display:block;font-size:11.5px;font-weight:500;line-height:1.3;
   overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
@@ -36,6 +57,7 @@
    half that matters, so it wraps onto a second line instead. */
 .ev small{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.06em;color:var(--fg-3);
   margin-top:3px;line-height:1.45}
+.ev .t{color:var(--amber)}
 
 /* A seven-column month is unreadable on a phone, so it becomes a list of the
    days that actually have something on them. */
@@ -47,8 +69,57 @@
   .day.blank,.day:not(.today):not(:has(.ev)){display:none}
   .day .n{padding-top:2px;min-width:3ch}
   .day > .evs{flex:1;display:flex;flex-direction:column;gap:5px;min-width:0}
+  .dayadd{opacity:1}
 }
 .evs{display:flex;flex-direction:column;gap:5px;min-width:0}
+
+/* ---- exams Nexora found but has not added ---- */
+.found{border:1px solid var(--line-2);border-radius:10px;background:var(--surface);
+  padding:16px 18px;margin-bottom:18px}
+.found[hidden]{display:none}
+.found h2{font-family:var(--serif);font-weight:400;font-size:1.1rem;margin:0 0 4px}
+.found > p{color:var(--fg-2);font-size:13px;margin:0 0 14px;line-height:1.55}
+.found ul{list-style:none;margin:0;padding:0;display:grid;gap:7px}
+.found li{display:flex;align-items:flex-start;gap:11px;padding:10px 12px;border-radius:7px;
+  background:var(--surface-2);border:1px solid var(--line)}
+.found li input{margin:2px 0 0;accent-color:var(--amber);flex:none}
+.found li .who{display:block;font-size:13.5px;font-weight:500}
+.found li .when{display:block;font-family:var(--mono);font-size:10.5px;color:var(--fg-3);
+  margin-top:3px;letter-spacing:.04em}
+.found .acts{display:flex;gap:9px;align-items:center;margin-top:14px;flex-wrap:wrap}
+.found button{border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);
+  color:var(--fg-2);font:inherit;font-size:13px;padding:8px 13px;cursor:pointer}
+.found button:hover{border-color:var(--fg-3);color:var(--fg)}
+.found button.primary{background:var(--amber);border-color:var(--amber);color:#140F09;font-weight:600}
+.found button.primary:hover{filter:brightness(1.06)}
+.found .note{font-size:12px;color:var(--fg-3);margin:12px 0 0;line-height:1.55}
+
+/* ---- the editor ---- */
+dialog.sheet{border:1px solid var(--line-2);border-radius:12px;background:var(--surface);
+  color:var(--fg);padding:0;width:min(440px,calc(100vw - 32px));box-shadow:0 24px 70px #00000066}
+dialog.sheet::backdrop{background:#0B0908cc}
+.sheet form{padding:20px 22px 18px;display:grid;gap:13px}
+.sheet h2{font-family:var(--serif);font-weight:400;font-size:1.25rem;margin:0}
+.sheet label{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--fg-3);margin-bottom:5px}
+.sheet input,.sheet select,.sheet textarea{width:100%;background:var(--surface-2);
+  border:1px solid var(--line-2);color:var(--fg);padding:9px 11px;border-radius:6px;
+  font:inherit;font-size:13.5px}
+.sheet textarea{min-height:62px;resize:vertical}
+.sheet input:focus,.sheet select:focus,.sheet textarea:focus{outline:none;border-color:var(--amber)}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.sheet .row{display:flex;gap:9px;align-items:center;margin-top:4px}
+.sheet .row .spacer{flex:1}
+.sheet button{border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);
+  color:var(--fg-2);font:inherit;font-size:13px;padding:9px 14px;cursor:pointer}
+.sheet button:hover{border-color:var(--fg-3);color:var(--fg)}
+.sheet button.primary{background:var(--amber);border-color:var(--amber);color:#140F09;font-weight:600}
+.sheet button.primary:hover{filter:brightness(1.06);color:#140F09}
+.sheet button.danger{border-color:rgba(201,112,92,.5);color:#C9705C}
+.sheet button.danger:hover{border-color:#C9705C;color:#C9705C}
+.sheet .err{color:#C9705C;font-size:12.5px;min-height:1em}
+.sheet .locked{font-size:12px;color:var(--fg-3);line-height:1.5}
+
 </style>
 {% endblock %}
 
@@ -57,32 +128,56 @@
   <div>
     <p class="eyebrow">Every deadline, in order</p>
     <h1>Calendar</h1>
-    <p class="lede">Everything Nexora has imported, laid out by the day it is due.</p>
+    <p class="lede">Everything Nexora has imported, plus anything you add yourself.</p>
   </div>
   <div class="monthnav">
-    <a href="{{ url_for('calendar_page') }}?month={{ prev_month }}" aria-label="Previous month">&lsaquo;</a>
+    <a href="{{ url_for('calendar_page') }}?month={{ prev_month }}" aria-label="Previous month" title="Previous month">&lsaquo;</a>
     <strong>{{ month_title }}</strong>
-    <a href="{{ url_for('calendar_page') }}?month={{ next_month }}" aria-label="Next month">&rsaquo;</a>
+    <a href="{{ url_for('calendar_page') }}?month={{ next_month }}" aria-label="Next month" title="Next month">&rsaquo;</a>
+    <a class="today" href="{{ url_for('calendar_page') }}?month={{ this_month }}"
+       {% if is_this_month %}aria-disabled="true" tabindex="-1" style="opacity:.4;pointer-events:none"{% endif %}>Today</a>
+    <button type="button" class="add" id="addEvent">+ Add event</button>
   </div>
 </div>
+
+<section class="found" id="found" hidden aria-live="polite">
+  <h2 id="foundTitle">Exams in your course material</h2>
+  <p>
+    Read out of your course outlines and announcements. Nothing is added until
+    you say so &mdash; check each date against the source before you rely on it.
+  </p>
+  <ul id="foundList"></ul>
+  <div class="acts">
+    <button type="button" class="primary" id="foundAdd">Add to my calendar</button>
+    <button type="button" id="foundNone">Not now</button>
+  </div>
+  <p class="note" id="foundNote" hidden></p>
+</section>
 
 <div class="cal">
   <div class="weekhead" aria-hidden="true">
     <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
   </div>
 
-  <div class="month">
+  <div class="month" id="month">
     {% for week in weeks %}
       {% for day in week %}
         {% if day %}
-          <div class="day{% if day.is_today %} today{% endif %}">
+          <div class="day{% if day.is_today %} today{% endif %}" data-date="{{ day.iso }}">
             <span class="n">{{ day.day }}</span>
+            <button type="button" class="dayadd" data-date="{{ day.iso }}"
+                    aria-label="Add an event on {{ day.iso }}">+</button>
             <div class="evs">
               {% for task in day.tasks %}
-                <div class="ev" style="--ev:var(--c{{ task.color_index }})">
+                <button type="button" class="ev" style="--ev:var(--c{{ task.color_index }})"
+                        data-id="{{ task.id }}" data-title="{{ task.title }}"
+                        data-course="{{ task.course }}" data-date="{{ day.iso }}"
+                        data-time="{{ task.time }}" data-kind="{{ task.kind }}"
+                        data-location="{{ task.location }}" data-notes="{{ task.notes }}"
+                        data-imported="{{ '1' if task.imported else '' }}">
                   <strong>{{ task.title }}</strong>
-                  <small>{% if task.course %}{{ task.course }} &middot; {% endif %}{{ task.status }}</small>
-                </div>
+                  <small>{% if task.time %}<span class="t">{{ task.time }}</span> &middot; {% endif %}{% if task.course %}{{ task.course }} &middot; {% endif %}{{ task.status }}</small>
+                </button>
               {% endfor %}
             </div>
           </div>
@@ -93,4 +188,281 @@
     {% endfor %}
   </div>
 </div>
+
+<dialog class="sheet" id="sheet">
+  <form method="dialog" id="eventForm">
+    <h2 id="sheetTitle">Add an event</h2>
+
+    <div>
+      <label for="evTitle">What is it</label>
+      <input id="evTitle" maxlength="500" placeholder="Midterm 1" required>
+    </div>
+
+    <div class="pair">
+      <div>
+        <label for="evDate">Date</label>
+        <input id="evDate" type="date" required>
+      </div>
+      <div>
+        <label for="evTime">Time (optional)</label>
+        <input id="evTime" type="time">
+      </div>
+    </div>
+
+    <div class="pair">
+      <div>
+        <label for="evKind">Type</label>
+        <select id="evKind">
+          <option value="exam">Exam or midterm</option>
+          <option value="due">Deadline</option>
+          <option value="event">Something else</option>
+        </select>
+      </div>
+      <div>
+        <label for="evCourse">Course</label>
+        <select id="evCourse">
+          <option value="OTHER">No course</option>
+          {% for code in known_courses %}<option value="{{ code }}">{{ code }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div>
+      <label for="evLocation">Where (optional)</label>
+      <input id="evLocation" maxlength="255" placeholder="Southam Hall, Kailash Mital Theatre">
+    </div>
+
+    <div>
+      <label for="evNotes">Notes (optional)</label>
+      <textarea id="evNotes" maxlength="2000"></textarea>
+    </div>
+
+    <p class="locked" id="importedNote" hidden>
+      This came from your LMS. Editing it here changes only your copy in Nexora,
+      and the next sync will not overwrite the change.
+    </p>
+    <p class="err" id="evError" role="alert"></p>
+
+    <div class="row">
+      <button type="button" class="danger" id="evDelete" hidden>Delete</button>
+      <span class="spacer"></span>
+      <button type="button" id="evCancel">Cancel</button>
+      <button type="submit" class="primary" id="evSave">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status">
+  <span id="toastText"></span>
+  <button type="button" id="toastUndo">Undo</button>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const sheet = $('sheet');
+  let editing = null;          // the event being edited, or null when adding
+
+  /* ---- the editor ---- */
+  function open(event, dateIso) {
+    editing = event;
+    $('sheetTitle').textContent = event ? 'Edit event' : 'Add an event';
+    $('evTitle').value = event?.title || '';
+    $('evDate').value = event?.date || dateIso || '';
+    $('evTime').value = event?.time || '';
+    $('evKind').value = event?.kind && ['exam','due','event'].includes(event.kind) ? event.kind : 'exam';
+    $('evCourse').value = [...$('evCourse').options].some(o => o.value === event?.course)
+      ? event.course : 'OTHER';
+    $('evLocation').value = event?.location || '';
+    $('evNotes').value = event?.notes || '';
+    $('evDelete').hidden = !event;
+    $('importedNote').hidden = !event?.imported;
+    $('evError').textContent = '';
+    sheet.showModal();
+    $('evTitle').focus();
+  }
+
+  function readEvent(button) {
+    const d = button.dataset;
+    return { id: d.id, title: d.title, course: d.course, date: d.date, time: d.time,
+             kind: d.kind, location: d.location, notes: d.notes, imported: !!d.imported };
+  }
+
+  $('addEvent').onclick = () => open(null, '{{ today_iso }}');
+  $('evCancel').onclick = () => sheet.close();
+
+  // One listener for the whole grid: the cells are re-rendered by a page load,
+  // never by script, so there is nothing to rebind.
+  $('month').addEventListener('click', e => {
+    const add = e.target.closest('.dayadd');
+    if (add) { open(null, add.dataset.date); return; }
+    const ev = e.target.closest('.ev');
+    if (ev) open(readEvent(ev));
+  });
+
+  /* ---- saving ---- */
+  $('eventForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const body = {
+      title: $('evTitle').value, date: $('evDate').value, time: $('evTime').value,
+      kind: $('evKind').value, course: $('evCourse').value,
+      location: $('evLocation').value, notes: $('evNotes').value,
+    };
+    const url = editing ? `/api/events/${encodeURIComponent(editing.id)}` : '/api/events';
+    $('evSave').disabled = true;
+    try {
+      const res = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) { $('evError').textContent = data.error || 'That could not be saved.'; return; }
+      // A save can move an event into another month, so the month has to be
+      // re-read rather than patched in place.
+      location.reload();
+    } catch (_) {
+      $('evError').textContent = 'Could not reach Nexora. Check your connection.';
+    } finally {
+      $('evSave').disabled = false;
+    }
+  });
+
+  /* ---- deleting, with a way back ---- */
+  let undo = null, undoTimer = null;
+
+  function showToast(text, action) {
+    undo = action;
+    $('toastText').textContent = text;
+    $('toastUndo').hidden = !action;
+    $('toast').classList.add('on');
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(hideToast, 9000);
+  }
+  function hideToast() { $('toast').classList.remove('on'); undo = null; }
+
+  $('toastUndo').onclick = async () => {
+    const action = undo;
+    hideToast();
+    if (action) await action();
+  };
+
+  /* ---- exams Nexora found in the course material ----
+     Offered, never inserted. These come out of prose with a regular
+     expression: a misread date that appeared on the calendar by itself would
+     be indistinguishable from one the university actually published. */
+  const DISMISSED = 'nexora-exam-suggestions-hidden';
+
+  function note(text) {
+    const el = $('foundNote');
+    el.textContent = text || '';
+    el.hidden = !text;
+  }
+
+  function describe(item) {
+    const when = new Date(item.date + 'T00:00:00').toLocaleDateString(undefined,
+      { weekday: 'short', month: 'short', day: 'numeric' });
+    const bits = [when];
+    if (item.time) bits.push(item.time);
+    if (item.location) bits.push(item.location);
+    bits.push(item.source);
+    return bits.join(' · ');
+  }
+
+  (async () => {
+    let dismissed = '';
+    try { dismissed = localStorage.getItem(DISMISSED) || ''; } catch (_) {}
+
+    let data;
+    try {
+      const res = await fetch('/api/exams/suggestions');
+      if (!res.ok) return;
+      data = await res.json();
+    } catch (_) { return; }
+
+    const items = data.suggestions || [];
+    if (!items.length) return;
+
+    // "Not now" should stay quiet until something new turns up, not until the
+    // student clears their browser.
+    const fingerprint = items.map(i => `${i.course}|${i.date}|${i.title}`).join('~');
+    if (dismissed === fingerprint) return;
+
+    const list = $('foundList');
+    items.forEach((item, index) => {
+      const row = document.createElement('li');
+      const box = document.createElement('input');
+      box.type = 'checkbox'; box.checked = true; box.id = `found-${index}`;
+      box.dataset.index = String(index);
+      const label = document.createElement('label');
+      label.htmlFor = box.id;
+      const who = document.createElement('span');
+      who.className = 'who';
+      // Course titles and announcement text come out of the LMS, so they are
+      // set as text and never concatenated into markup.
+      who.textContent = `${item.course} · ${item.title}`;
+      const when = document.createElement('span');
+      when.className = 'when';
+      when.textContent = describe(item);
+      label.append(who, when);
+      row.append(box, label);
+      list.append(row);
+    });
+    $('foundTitle').textContent = items.length === 1
+      ? 'An exam in your course material'
+      : `${items.length} exams in your course material`;
+    $('found').hidden = false;
+
+    $('foundNone').onclick = () => {
+      try { localStorage.setItem(DISMISSED, fingerprint); } catch (_) {}
+      $('found').hidden = true;
+    };
+
+    $('foundAdd').onclick = async () => {
+      const chosen = [...list.querySelectorAll('input:checked')]
+        .map(box => items[Number(box.dataset.index)]);
+      if (!chosen.length) { note('Tick at least one first.'); return; }
+      $('foundAdd').disabled = true;
+      try {
+        const res = await fetch('/api/exams/accept', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ events: chosen }),
+        });
+        if (!res.ok) throw new Error('rejected');
+        location.reload();
+      } catch (_) {
+        note('Those could not be added. Try again.');
+        $('foundAdd').disabled = false;
+      }
+    };
+  })();
+
+  $('evDelete').onclick = async () => {
+    if (!editing) return;
+    const res = await fetch(`/api/events/${encodeURIComponent(editing.id)}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { $('evError').textContent = data.error || 'That could not be deleted.'; return; }
+    const gone = data.deleted || {};
+    sheet.close();
+
+    // An imported entry keeps its row and can simply be un-dismissed. A manual
+    // one is really gone, so undo re-creates it from what the delete returned.
+    const restore = gone.restorable
+      ? () => fetch(`/api/events/${encodeURIComponent(gone.id)}/restore`, { method: 'POST' })
+                .then(() => location.reload())
+      : () => fetch('/api/events', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: gone.title, date: gone.date, time: gone.time,
+                                       kind: gone.kind, course: gone.course,
+                                       location: gone.location, notes: gone.notes }),
+              }).then(() => location.reload());
+
+    // Hide it immediately; the reload on undo puts it back.
+    document.querySelectorAll(`.ev[data-id="${CSS.escape(gone.id || '')}"]`).forEach(n => n.remove());
+    showToast(`Deleted "${gone.title || 'event'}".`, restore);
+  };
+})();
+</script>
 {% endblock %}

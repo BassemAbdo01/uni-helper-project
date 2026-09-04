@@ -200,3 +200,19 @@ tr:last-child td{border-bottom:0}
 #nexToast a{color:var(--amber);text-decoration:none;margin-left:4px}
 @media (max-width:560px){#nexToast{left:12px;right:12px;transform:translateY(14px);text-align:center}
   #nexToast.on{transform:translateY(0)}}
+
+/* ============================ undo toast ============================ */
+/* Shared because two pages now need the same promise: an action took effect
+   immediately, and there is a way back for a few seconds. A confirm dialog
+   before every tick would be worse -- this keeps the fast path fast. */
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(12px);
+  display:flex;align-items:center;gap:14px;background:var(--surface-2);color:var(--fg);
+  border:1px solid var(--line-2);border-radius:9px;padding:11px 14px;font-size:13.5px;
+  box-shadow:0 16px 44px #00000055;opacity:0;pointer-events:none;
+  transition:opacity .18s var(--ease),transform .18s var(--ease);z-index:60;max-width:calc(100vw - 32px)}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
+.toast > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toast button{background:none;border:0;color:var(--amber);font:inherit;font-weight:600;
+  cursor:pointer;padding:0;flex:none}
+.toast button:hover{text-decoration:underline}
+@media (prefers-reduced-motion:reduce){.toast{transition:none}}

@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 188 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 311 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -204,6 +204,62 @@ bullet with the reason, not a red cross.
 
 Do not "simplify" any of these back into a boolean. The failure mode is silent
 and it is the worst thing this app can do to someone.
+
+## Events, exams and the calendar feed
+
+**An event is a `Task`.** Not its own table: the dashboard, calendar,
+completion toggle and `.ics` feed already understand Tasks, and a parallel
+model would have to be taught to every one of them. `kind` separates them --
+`due` from an LMS, `exam` and `event` from the student. `due_time`,
+`location` and `notes` were added for exams.
+
+Two traps in that choice, both already paid for:
+
+- `build_grouped_cards` only dated `opens`/`due`/`closes`. A kind it did not
+  know left `main_due_raw` empty, so a midterm someone added by hand never
+  landed on a day. The last branch now takes any dated kind.
+- Delete acts on the **group**, not the row. An imported assignment can be
+  three Tasks sharing a `group_id`, and the calendar shows the group once;
+  deleting only the clicked row let the group fall back to its next date and
+  the entry reappeared days later.
+
+**Deleting an import is `sync_state='dismissed'`, never a row deletion.** Both
+importers check it before re-adding, otherwise the next sync undoes the
+student's decision. `load_tasks` filters it out.
+
+**Exam detection is deterministic on purpose** (`_find_date`, `_find_time`,
+`_find_location`, `_looks_like_an_exam`). Dates are the one thing a model must
+not be creative about, and this runs on ordinary page views where a Gemini call
+would eat the quota the outline pipeline needs. Suggestions are *offered*,
+never inserted: a misread date that appeared by itself would be
+indistinguishable from one the university published. `_NOT_AN_EXAM` is what
+stops "practice midterm posted" becoming a midterm -- keep the plurals in it.
+
+**The `.ics` feed is how Google Calendar connects**, because Google cannot sign
+in to Nexora. The token in the path is the entire credential, so it is
+rotatable and the route is deliberately unauthenticated. iCalendar is fussy in
+ways that fail silently: an unescaped comma ends a property early, lines are
+limited to 75 **octets** (fold without splitting a UTF-8 sequence), and `DTEND`
+is exclusive -- an all-day event ending the same day is zero-length and Google
+hides it. Use `content_type=`, not `mimetype=`, or Flask appends a second
+charset.
+
+## The grade calculator is the one place for grades
+
+`/grade-calculator` takes `?course=`, lists the student's courses, and loads
+that course's saved `GradeEntry` rows, its policy, and the official result from
+`_compute_official_result` -- never its own copy of the pass-rule maths, which
+is how two screens come to disagree about whether someone passed.
+
+**Marks post as `"16/20"`, not as `16` with a separate maximum.** A bare number
+is read as a percentage by `_parse_mark_entry` -- correct for the single-field
+entry it was built for, wrong for the two boxes here, where 4 out of 20 was
+stored as 4%.
+
+The course workspace still owns the same data and is untouched, on Bassem's
+call: it is the riskiest file in the repo and this change is about where
+things live, not how they are calculated. Remove its outline/grades tabs only
+once he has said the new page is better.
 
 ## Outline analysis
 

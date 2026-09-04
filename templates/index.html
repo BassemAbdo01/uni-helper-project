@@ -211,6 +211,7 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
                         aria-label="Options for {{ c.course }}">&#8943;</button>
                 <div class="cmenu" hidden>
                   <a href="{{ url_for('course_workspace', course_code=c.course) }}">Open workspace</a>
+                  <a href="{{ url_for('grade_calculator') }}?course={{ c.course }}">Grades &amp; outline</a>
                   <button type="button" class="remove-course">Remove from Nexora</button>
                 </div>
               </article>
@@ -285,6 +286,10 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
     <a href="{{ url_for('profile') }}">Profile</a>
   </div>
 </dialog>
+<div class="toast" id="toast" role="status">
+  <span id="toastText"></span>
+  <button type="button" id="toastUndo">Undo</button>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -320,18 +325,67 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
     });
   }
 
+  /* ---- undo ----
+     Ticking something off removes it from the list, so a mis-click used to
+     mean going and finding the task again with no hint that it had been
+     marked done at all. A confirm dialog would tax every correct tick to
+     protect the rare wrong one; a few seconds of undo costs nothing. */
+  const toast = $('#toast');
+  let undoAction = null, undoTimer = null;
+
+  function showUndo(text, action) {
+    undoAction = action;
+    $('#toastText').textContent = text;
+    $('#toastUndo').hidden = !action;
+    toast.classList.add('on');
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(hideUndo, 9000);
+  }
+  function hideUndo() { toast.classList.remove('on'); undoAction = null; }
+
+  $('#toastUndo').addEventListener('click', async () => {
+    const action = undoAction;
+    hideUndo();
+    if (action) await action();
+  });
+  // Ctrl/Cmd-Z while the offer is up, because that is what the hands do.
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && undoAction) {
+      e.preventDefault();
+      $('#toastUndo').click();
+    }
+  });
+
+  async function setCompleted(group, completed) {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(group)}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ completed })
+    });
+    if (!res.ok) throw new Error('rejected');
+  }
+
   /* ---- ticking a priority off ---- */
   $$('.task').forEach(btn => btn.addEventListener('click', async () => {
     const done = btn.getAttribute('aria-pressed') !== 'true';
     btn.setAttribute('aria-pressed', String(done));
     try {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(btn.dataset.group)}/complete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ completed: done })
+      await setCompleted(btn.dataset.group, done);
+      if (!done) return;
+      // Remember where it sat so undo puts it back in order rather than at
+      // the bottom of the list.
+      const parent = btn.parentNode, next = btn.nextSibling;
+      const label = $('strong', btn)?.textContent || 'Task';
+      setTimeout(() => btn.remove(), 420);
+      showUndo(`Marked "${label}" done.`, async () => {
+        try {
+          await setCompleted(btn.dataset.group, false);
+          btn.setAttribute('aria-pressed', 'false');
+          parent.insertBefore(btn, next);
+        } catch {
+          showUndo('That could not be undone. Refresh and try again.', null);
+        }
       });
-      if (!res.ok) throw new Error('rejected');
-      if (done) setTimeout(() => btn.remove(), 420);
     } catch {
       btn.setAttribute('aria-pressed', String(!done));   // put it back; nothing was saved
     }
