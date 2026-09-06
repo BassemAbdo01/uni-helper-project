@@ -2,9 +2,10 @@
 {% block title %}Create your account — Nexora{% endblock %}
 
 {% block body %}
-  <p class="eyebrow">Free while you study</p>
+  <p class="eyebrow">Free for {{ trial_days }} days</p>
   <h1>Start your <em>semester</em> in order.</h1>
-  <p class="sub">Sync Brightspace, read your outline, know your real grade. No card.</p>
+  <p class="sub">Sync Brightspace, read your outline, know your real grade.
+    No card, and nothing charged when the {{ trial_days }} days are up.</p>
 
   {% if error %}<div class="note bad">{{ error }}</div>{% endif %}
 

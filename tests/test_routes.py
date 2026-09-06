@@ -468,3 +468,60 @@ def test_course_order_does_not_move_between_loads(client):
         nexora.db.session.commit()
 
     assert order(client.get("/dashboard").get_data(as_text=True)) == first
+
+
+# --------------------------------------------------- public pricing claims
+
+# Every page a stranger can read, that talks about price at all.
+PRICING_PAGES = ["/", "/signup", "/what-do-i-need"]
+
+
+@pytest.mark.parametrize("path", PRICING_PAGES)
+def test_no_public_page_promises_free_forever(client, path):
+    """"Free while you study. No card." shipped to production for one deploy
+    after the trial went live, on the landing page and again on /signup -- the
+    page where someone actually commits. It reads as a promise of permanent
+    free access, and it is the kind of claim that costs a refund argument
+    rather than a bug report."""
+    body = client.get(path).get_data(as_text=True).lower()
+    for claim in ("free while you study", "free forever", "always free",
+                  "free for life", "free, forever"):
+        assert claim not in body, f"{path} promises permanent free access: {claim!r}"
+
+
+@pytest.mark.parametrize("path", ["/", "/signup"])
+def test_the_trial_length_comes_from_the_setting(client, path):
+    """Not typed into the template. TRIAL_DAYS is an environment variable, so a
+    hardcoded number is wrong the moment it is changed -- and nobody edits a
+    marketing page because they changed a setting."""
+    import app as nexora
+    body = client.get(path).get_data(as_text=True)
+    assert f"{nexora.TRIAL_DAYS} days" in body, f"{path} does not quote TRIAL_DAYS"
+
+
+def test_the_corpus_claim_matches_the_corpus(client):
+    """The landing page cites the eval as proof. A number that drifts from the
+    corpus it describes is a claim nobody checked."""
+    import app as nexora
+    from evals.outline_corpus import CASES
+    assert nexora.OUTLINE_CORPUS_CASES == len(CASES), (
+        f"landing page claims {nexora.OUTLINE_CORPUS_CASES} grading patterns, "
+        f"the corpus has {len(CASES)}")
+    body = client.get("/").get_data(as_text=True)
+    assert f"{len(CASES)}/{len(CASES)}" in body
+
+
+def test_no_price_is_quoted_while_price_label_is_unset(client):
+    """PRICE_LABEL is the only place an amount may come from."""
+    import app as nexora
+    if nexora.PRICE_LABEL:
+        pytest.skip("a price has been set, so quoting one is correct")
+    import re
+    # A bare "$" is not a price -- these pages are full of $('id') helpers and
+    # JS template literals. A dollar sign followed by a digit is.
+    money = re.compile(r"\$\s?\d")
+    for path in PRICING_PAGES:
+        body = client.get(path).get_data(as_text=True)
+        found = money.search(body)
+        assert not found, (f"{path} quotes a price with PRICE_LABEL unset: "
+                           f"{body[max(0, found.start()-40):found.end()+40]!r}")

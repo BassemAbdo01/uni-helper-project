@@ -193,6 +193,11 @@ PRICE_LABEL = os.environ.get("PRICE_LABEL", "").strip()
 # The public outline reader: the one endpoint strangers can spend money on.
 # One Gemini call each, roughly a cent, so the ceiling is what keeps the bill
 # predictable. Raise it when there is revenue behind it.
+# How many structurally different outlines evals/outline_corpus.py covers. The
+# landing page quotes it as proof, so it lives beside the other public-facing
+# numbers rather than being typed into the template and left to rot.
+OUTLINE_CORPUS_CASES = 15
+
 PUBLIC_ANALYSES_PER_DAY = int(os.environ.get("PUBLIC_ANALYSES_PER_DAY", "150"))
 PUBLIC_ANALYSES_PER_IP = os.environ.get("PUBLIC_ANALYSES_PER_IP", "3 per day")
 # Whether the cap message mentions making an account. Off means it just says
@@ -1471,6 +1476,11 @@ def auto_sync_if_needed():
 # ============================
 @app.route("/")
 def landing():
+    # The page quotes the trial length and the corpus size. Both are facts that
+    # move, and this is the most-read public page on the site, so it must never
+    # carry a hardcoded number that has quietly stopped being true. "Free while
+    # you study. No card." shipped for one deploy after the trial went live,
+    # which reads as a promise of permanent free access.
     return render_template("landing.html")
 
 
@@ -8224,8 +8234,18 @@ def handle_unexpected(exc):
 @app.context_processor
 def _inject_contact():
     """SUPPORT_EMAIL, everywhere. Kept out of the templates so a personal address
-    can never be hardcoded onto a page the whole internet can read."""
-    return {"contact_email": SUPPORT_EMAIL}
+    can never be hardcoded onto a page the whole internet can read.
+
+    The same reasoning applies to the trial length and the corpus size: both
+    are quoted as fact on public pages, both move, and both were hardcoded.
+    /signup carried "Free while you study" for one deploy after the trial went
+    live -- a promise of permanent free access on the page where someone
+    commits -- and it would have drifted again, because signup renders from
+    five different places and only one of them passes anything.
+    """
+    return {"contact_email": SUPPORT_EMAIL,
+            "trial_days": TRIAL_DAYS,
+            "corpus_cases": OUTLINE_CORPUS_CASES}
 
 
 # ============================
