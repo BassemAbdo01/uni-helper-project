@@ -16,6 +16,7 @@ import zipfile
 import base64
 from datetime import datetime, date, timedelta
 import calendar as calendar_module
+from functools import wraps
 from uuid import uuid4
 from pathlib import Path
 
@@ -160,11 +161,44 @@ limiter = Limiter(
     storage_uri=RATE_LIMIT_STORAGE,
     strategy="fixed-window",
     headers_enabled=True,
+    # A ceiling on every route, which the tighter per-route limits override.
+    # Thirty-four API endpoints had none; decorating them by hand would have
+    # left the thirty-fifth uncovered the day someone added it.
+    default_limits=["600 per hour", "60 per minute"],
+    # The .ics feed is polled by Google on its own schedule and carries its own
+    # limit; page loads should not be counted against an API budget.
+    default_limits_exempt_when=lambda: request.endpoint in {"static", "healthz"},
 )
 
 # Gemini work is the scarce resource: an outline analysis is a three-stage
 # pipeline, so a handful of these is worth many ordinary requests.
 AI_LIMIT = "40 per day; 12 per hour"
+
+# ============================
+# Access: a free month, then paid
+# ============================
+# Every number here is an environment variable because the pricing is not
+# settled. Nothing in the code assumes an amount or a currency; the gate only
+# ever asks _entitlement whether this account is active today.
+TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "30"))
+REFERRAL_MONTH_DAYS = int(os.environ.get("REFERRAL_MONTH_DAYS", "30"))
+REFERRAL_MONTHS_MAX = int(os.environ.get("REFERRAL_MONTHS_MAX", "6"))
+# Existing accounts at the moment this shipped are not shown a paywall for
+# something they have been using for free; they are granted a year.
+GRANDFATHER_DAYS = int(os.environ.get("GRANDFATHER_DAYS", "365"))
+# Set once there is something to charge. Until then the gate still works and
+# the expiry copy simply says pricing is coming.
+PRICE_LABEL = os.environ.get("PRICE_LABEL", "").strip()
+
+# The public outline reader: the one endpoint strangers can spend money on.
+# One Gemini call each, roughly a cent, so the ceiling is what keeps the bill
+# predictable. Raise it when there is revenue behind it.
+PUBLIC_ANALYSES_PER_DAY = int(os.environ.get("PUBLIC_ANALYSES_PER_DAY", "150"))
+PUBLIC_ANALYSES_PER_IP = os.environ.get("PUBLIC_ANALYSES_PER_IP", "3 per day")
+# Whether the cap message mentions making an account. Off means it just says
+# come back tomorrow -- a rate limit dressed as a sales pitch reads as
+# manufactured scarcity, and students notice.
+PUBLIC_CAP_MENTIONS_SIGNUP = os.environ.get("PUBLIC_CAP_MENTIONS_SIGNUP", "1") != "0"
 
 # Email is configured entirely from the environment so any SMTP provider works
 # without a code change -- Gmail with an app password costs nothing and is
@@ -238,6 +272,25 @@ class User(db.Model, UserMixin):
     # the path is the whole of the authentication. It is issued on demand and
     # can be rotated, which is the only way to un-share a link once shared.
     calendar_token = db.Column(db.String(64), default="")
+    # Whether the first-run tour has been seen. On the account rather than in
+    # localStorage: a student signing in on a laptop after their phone has
+    # already been shown it, and clearing site data should not start it again.
+    tour_done = db.Column(db.Boolean, default=False)
+
+    # --- access ---
+    # A month free from signup, no card. After that the account goes read-only
+    # rather than dark: what is already imported stays visible, nothing
+    # refreshes, and nothing costs a Gemini call. See _entitlement.
+    trial_ends_at = db.Column(db.DateTime, nullable=True)
+    paid_until = db.Column(db.DateTime, nullable=True)
+    # Referral: a month for each friend who actually starts using it. The code
+    # is the student's own; referred_by is whoever sent them.
+    referral_code = db.Column(db.String(12), default="", index=True)
+    referred_by = db.Column(db.String(12), default="")
+    referral_months = db.Column(db.Integer, default=0)
+    referral_credited = db.Column(db.Boolean, default=False)
+    # So the "your month is nearly up" email is sent once, not on every visit.
+    trial_notice_sent = db.Column(db.String(20), default="")
 
     tasks = db.relationship("Task", backref="user", lazy=True, cascade="all, delete-orphan")
 
@@ -318,6 +371,12 @@ class CourseOutlineProfile(db.Model):
     pass_mark = db.Column(db.Float, default=50.0)
     final_minimum = db.Column(db.Float, nullable=True)
     analysis_notes = db.Column(db.Text, default="")
+    # What each assessment actually covers, read out of the outline once and
+    # kept. The planner rebuilds constantly; a Gemini call per rebuild would
+    # spend the quota the outline pipeline needs, and the answer never changes
+    # between rebuilds anyway.
+    study_brief_json = db.Column(db.Text, default="")
+    brief_built_at = db.Column(db.DateTime, nullable=True)
     analyzed_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -370,6 +429,80 @@ class SyncedCourse(db.Model):
     last_sync_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ClassBlock(db.Model):
+    """One recurring commitment in a student's week.
+
+    Times are minutes from midnight rather than a time column: the planner does
+    arithmetic on them constantly, and a weekly repeat has no date to anchor a
+    timestamp to. Not only classes -- a shift at work or a commute blocks study
+    time exactly as a lecture does, which is why `kind` is open.
+    """
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    course_full = db.Column(db.String(40), default="")
+    label = db.Column(db.String(200), default="")
+    weekday = db.Column(db.Integer, default=0)          # 0 = Monday
+    start_min = db.Column(db.Integer, default=0)
+    end_min = db.Column(db.Integer, default=0)
+    location = db.Column(db.String(255), default="")
+    kind = db.Column(db.String(30), default="lecture")
+    source = db.Column(db.String(20), default="manual")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class StudyPreference(db.Model):
+    """When this student will actually work.
+
+    A plan that ignores these is the thing everybody abandons: it schedules
+    three hours at 7am for someone who does not exist before ten.
+    """
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), primary_key=True)
+    earliest_min = db.Column(db.Integer, default=9 * 60)
+    latest_min = db.Column(db.Integer, default=22 * 60)
+    session_min = db.Column(db.Integer, default=50)
+    break_min = db.Column(db.Integer, default=10)
+    max_daily_min = db.Column(db.Integer, default=240)
+    # Weekdays kept clear, comma-separated, 0 = Monday.
+    days_off = db.Column(db.String(20), default="")
+    # Minutes to leave either side of a class, for getting there and back.
+    buffer_min = db.Column(db.Integer, default=15)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class StudySession(db.Model):
+    """One block of the generated plan.
+
+    Stored rather than recomputed on view so that ticking sessions off means
+    something, and so the plan does not silently rearrange itself between two
+    looks at the same week.
+    """
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    on_date = db.Column(db.String(20), default="", index=True)
+    start_min = db.Column(db.Integer, default=0)
+    end_min = db.Column(db.Integer, default=0)
+    course_full = db.Column(db.String(40), default="")
+    title = db.Column(db.String(255), default="")
+    focus = db.Column(db.String(500), default="")
+    reason = db.Column(db.String(255), default="")
+    task_id = db.Column(db.String(64), default="")
+    item_kind = db.Column(db.String(30), default="work")
+    state = db.Column(db.String(20), default="planned")   # planned | done | skipped
+    generated_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class PublicUsage(db.Model):
+    """How many anonymous outline analyses have run today.
+
+    A per-IP limit alone does not bound the bill -- a thousand people asking
+    once each is a thousand analyses. This is the ceiling on the day, and it is
+    in the database rather than in memory because a worker restart must not
+    hand out a fresh allowance.
+    """
+    day = db.Column(db.String(10), primary_key=True)
+    count = db.Column(db.Integer, default=0)
 
 
 class HiddenCourse(db.Model):
@@ -444,7 +577,15 @@ def ensure_schema_columns():
     """Add synchronization columns to existing SQLite/Postgres databases safely."""
     migrations = {
         "user": {
+            "trial_ends_at": "TIMESTAMP NULL",
+            "paid_until": "TIMESTAMP NULL",
+            "referral_code": "VARCHAR(12) DEFAULT ''",
+            "referred_by": "VARCHAR(12) DEFAULT ''",
+            "referral_months": "INTEGER DEFAULT 0",
+            "referral_credited": "BOOLEAN DEFAULT FALSE",
+            "trial_notice_sent": "VARCHAR(20) DEFAULT ''",
             "calendar_token": "VARCHAR(64) DEFAULT ''",
+            "tour_done": "BOOLEAN DEFAULT FALSE",
             "sync_status": "VARCHAR(30) DEFAULT 'never'",
             "sync_message": "TEXT DEFAULT 'Not synchronized yet.'",
             "extension_token": "VARCHAR(128) DEFAULT ''",
@@ -470,6 +611,10 @@ def ensure_schema_columns():
         "grade_entry": {
             "notes": "VARCHAR(255) DEFAULT ''",
         },
+        "course_outline_profile": {
+            "study_brief_json": "TEXT DEFAULT ''",
+            "brief_built_at": "TIMESTAMP NULL",
+        },
     }
 
     inspector = db.inspect(db.engine)
@@ -483,9 +628,172 @@ def ensure_schema_columns():
     db.session.commit()
 
 
+def grandfather_existing_accounts():
+    """Anyone already using Nexora when access control shipped keeps it.
+
+    Showing a paywall to the people who used it while it was free -- including
+    the early testers who found the bugs -- would be a poor way to say thank
+    you. They get a year; new signups get the month.
+    """
+    stamp = datetime.utcnow() + timedelta(days=GRANDFATHER_DAYS)
+    granted = 0
+    for user in User.query.filter(
+            User.trial_ends_at.is_(None), User.paid_until.is_(None)).all():
+        user.paid_until = stamp
+        granted += 1
+    if granted:
+        db.session.commit()
+        app.logger.info("Granted %s existing account(s) %s days of access.",
+                        granted, GRANDFATHER_DAYS)
+
+
 with app.app_context():
     db.create_all()
     ensure_schema_columns()
+    grandfather_existing_accounts()
+
+
+# ============================
+# Access: one place that decides
+# ============================
+# Every gated route asks this and nothing else. Two screens disagreeing about
+# whether someone has paid is the same class of bug as two screens disagreeing
+# about whether they passed -- and here it costs money in both directions.
+
+
+def _referral_code_for(user):
+    """A short, unambiguous code. No 0/O/1/I, because it gets read aloud."""
+    if user.referral_code:
+        return user.referral_code
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    for _ in range(12):
+        code = "".join(secrets.choice(alphabet) for _ in range(7))
+        if not User.query.filter_by(referral_code=code).first():
+            user.referral_code = code
+            db.session.commit()
+            return code
+    return ""          # astronomically unlikely; the caller shows nothing
+
+
+def _entitlement(user, now=None):
+    """Is this account active today, and why.
+
+    `state` is one of trial / paid / expired. `active` is the only thing a
+    gate should branch on.
+    """
+    now = now or datetime.utcnow()
+    paid_until = user.paid_until
+    trial_ends = user.trial_ends_at
+
+    if paid_until and paid_until > now:
+        left = (paid_until - now).days
+        return {"active": True, "state": "paid", "until": paid_until.date().isoformat(),
+                "days_left": left,
+                "message": f"Active until {paid_until.strftime('%d %b %Y')}."}
+    if trial_ends and trial_ends > now:
+        left = (trial_ends - now).days
+        return {"active": True, "state": "trial", "until": trial_ends.date().isoformat(),
+                "days_left": left,
+                "message": (f"Free month — {left} day{'' if left == 1 else 's'} left."
+                            if left else "Free month — last day.")}
+    ended = paid_until or trial_ends
+    return {"active": False, "state": "expired",
+            "until": ended.date().isoformat() if ended else None, "days_left": 0,
+            "message": ("Your free month has ended. Everything you have already imported "
+                        "stays here to read; syncing and the AI features need a "
+                        "subscription." if not paid_until else
+                        "Your subscription has ended. Everything you have already imported "
+                        "stays here to read.")}
+
+
+def _start_trial(user):
+    """Called once, at signup. Idempotent so a re-run cannot extend anyone."""
+    if user.trial_ends_at or user.paid_until:
+        return
+    user.trial_ends_at = datetime.utcnow() + timedelta(days=TRIAL_DAYS)
+
+
+def _grant_days(user, days):
+    """Add time, from a referral or a payment, on top of whatever is left.
+
+    Extends from the later of now and the current expiry, so crediting someone
+    mid-trial adds a month rather than replacing the days they had.
+    """
+    now = datetime.utcnow()
+    base = max([d for d in (user.paid_until, user.trial_ends_at, now) if d])
+    user.paid_until = base + timedelta(days=days)
+
+
+def _credit_referrer(user):
+    """Pay the person who referred this student, once they actually use it.
+
+    Deliberately not on signup: "a month for every email address you can think
+    of" is the whole exploit. It fires the first time the referred account does
+    real work, and only ever once.
+    """
+    if user.referral_credited or not user.referred_by:
+        return
+    referrer = User.query.filter_by(referral_code=user.referred_by).first()
+    user.referral_credited = True          # set either way; one shot per account
+    if not referrer or referrer.id == user.id:
+        db.session.commit()
+        return
+    if (referrer.referral_months or 0) >= REFERRAL_MONTHS_MAX:
+        db.session.commit()
+        return
+    referrer.referral_months = (referrer.referral_months or 0) + 1
+    _grant_days(referrer, REFERRAL_MONTH_DAYS)
+    db.session.add(AcademicUpdate(
+        id=uuid4().hex, user_id=referrer.id, course_full="",
+        update_type="referral",
+        title="A friend started using Nexora — a free month is on your account",
+        detail=f"{REFERRAL_MONTH_DAYS} days added. "
+               f"{REFERRAL_MONTHS_MAX - referrer.referral_months} left to earn."))
+    db.session.commit()
+
+
+def requires_active(view):
+    """Gate the things that cost money or reach the outside world.
+
+    What stays available on an expired account, on purpose: reading everything
+    already imported, entering marks by hand, exporting, and deleting the
+    account. Taking away work a student has already done is how you get told
+    about it publicly.
+    """
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        state = _entitlement(current_user)
+        if state["active"]:
+            return view(*args, **kwargs)
+        return jsonify({
+            "error": state["message"],
+            "subscription_required": True,
+            "state": state["state"],
+            # Nothing here names a price until there is one to name.
+            "price": PRICE_LABEL or None,
+        }), 402
+    return wrapper
+
+
+@app.route("/api/plan")
+@login_required
+def plan_api():
+    state = _entitlement(current_user)
+    code = _referral_code_for(current_user)
+    return jsonify({
+        "ok": True, **state,
+        "referral": {
+            "code": code,
+            "url": url_for("signup", ref=code, _external=True) if code else "",
+            "earned": current_user.referral_months or 0,
+            "max": REFERRAL_MONTHS_MAX,
+            "days_per_referral": REFERRAL_MONTH_DAYS,
+        },
+        "price": PRICE_LABEL or None,
+        "trial_days": TRIAL_DAYS,
+    })
+
+
 
 
 # ============================
@@ -1118,7 +1426,6 @@ def fetch_feed_ics(feed_url):
 
     req = urllib.request.Request(feed_url, headers={"User-Agent": "NexoraSync/1.0"})
     with urllib.request.urlopen(req, timeout=20) as resp:
-        content_type = (resp.headers.get("Content-Type") or "").lower()
         data = resp.read()
 
     text_data = data.decode("utf-8", errors="ignore")
@@ -1182,8 +1489,24 @@ def _gemini_model_candidates(vision=False, reasoning=False):
         os.environ.get("GEMINI_MODEL", "").strip(),
         os.environ.get("GEMINI_FALLBACK_MODEL", "").strip(),
     ])
+    # Ordered by MEASURED availability on the current key, newest first among
+    # equals -- not by version number alone. Probed 2026-09-05, three passes:
+    # 3.7-flash answered every time in about a second; 3.6-flash, which used to
+    # lead this list, answered 429 on two of three; 3.8-flash answered 503 on
+    # every attempt after the first and cost 6-12s each time before falling
+    # through. Both Pro candidates 429 on every call, so the reasoning chain
+    # lands here in practice, and whichever model leads this list is the one
+    # that reads a student's outline.
+    #
+    # That mattered more than it looks: with 3.6 quota-exhausted the chain fell
+    # all the way to gemini-3.5-flash-lite, and flash-lite is the model that
+    # drops selection_rules on a multi-option outline (see the corpus note in
+    # CLAUDE.md). The eval was failing on the weakest model in the list purely
+    # because the two above it were unavailable.
     defaults = [
+        "gemini-3.7-flash",
         "gemini-3.6-flash",
+        "gemini-3.8-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
         "gemini-flash-latest",
@@ -1217,6 +1540,13 @@ def _gemini_model_candidates(vision=False, reasoning=False):
 # worth a database round trip, and each worker learns it within one request.
 _QUOTA_COOLDOWN_SECONDS = 600
 _MISSING_MODEL_COOLDOWN_SECONDS = 86400
+# 503 is "overloaded", which is usually transient but can persist for a while:
+# gemini-3.8-flash answered 503 on every probe, and each attempt burned 6-12
+# seconds before the chain moved on. Retrying it once is right; retrying it on
+# every call for the next minute is 20 wasted seconds per analysis on a path
+# that already takes 37. Much shorter than the quota cooldown, because unlike
+# quota this really does clear on its own.
+_OVERLOADED_COOLDOWN_SECONDS = 120
 _gemini_model_cooldowns = {}
 _gemini_cooldown_lock = threading.Lock()
 
@@ -1346,6 +1676,14 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2, r
                 if exc.code in (500, 502, 503, 504) and attempt < 1:
                     time.sleep(1.5 * (attempt + 1))
                     continue
+                if exc.code in (500, 502, 503, 504):
+                    # Retried and still overloaded. Park it briefly so the next
+                    # request does not pay the same wait to learn the same
+                    # thing; _usable_gemini_models un-parks everything if the
+                    # whole list ends up cold, so this can never be the reason
+                    # a student gets nothing.
+                    _mark_gemini_model_unavailable(model, _OVERLOADED_COOLDOWN_SECONDS)
+                    break
                 # 400/403/404 usually means this specific model is unavailable
                 # for the current project/key. Move on to the next candidate.
                 break
@@ -2674,6 +3012,15 @@ def signup():
             email=email,
             password_hash=generate_password_hash(password),
         )
+        # A referral code arrives in the URL, so it is checked against a real
+        # account before it is kept -- and self-referral is refused here rather
+        # than being caught later when the credit is paid.
+        referred = (request.form.get("ref") or request.args.get("ref") or "").strip().upper()[:12]
+        if referred:
+            referrer = User.query.filter_by(referral_code=referred).first()
+            if referrer and referrer.email != email:
+                user.referred_by = referred
+        _start_trial(user)
 
         db.session.add(user)
         db.session.commit()
@@ -2681,7 +3028,7 @@ def signup():
         login_user(user)
         return redirect(url_for("home"))
 
-    return render_template("signup.html")
+    return render_template("signup.html", ref=(request.args.get("ref") or "").strip().upper()[:12])
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -2793,6 +3140,7 @@ def grading_scale_api():
 @app.route("/api/grading-scale/analyze", methods=["POST"])
 @limiter.limit(AI_LIMIT)
 @login_required
+@requires_active
 def analyze_grading_scale_upload():
     uploads=request.files.getlist("files") or request.files.getlist("file")
     uploads=[u for u in uploads if u and u.filename]
@@ -2862,8 +3210,107 @@ def admin_feedback():
         feedback_messages=feedback_messages
     )
 
-@app.route("/logout")
+# ============================
+# Taking your data out, and taking your account down
+# ============================
+# The privacy policy already promised deletion -- by emailing a human, with no
+# SMTP configured behind it. That is not a promise a paid product can keep, and
+# "email us and we will get to it" is not something to ask money for. Both are
+# self-service now.
+
+_USER_TABLES = [
+    ("Task", "user_id"), ("CourseContent", "user_id"), ("GradeEntry", "user_id"),
+    ("CourseOutlineProfile", "user_id"), ("StudyArtifact", "user_id"),
+    ("SyncedFile", "user_id"), ("SyncedCourse", "user_id"), ("HiddenCourse", "user_id"),
+    ("CanvasAccount", "user_id"), ("PasswordResetToken", "user_id"),
+    ("UserGradingScale", "user_id"), ("AcademicUpdate", "user_id"),
+    ("ClassBlock", "user_id"), ("StudyPreference", "user_id"),
+    ("StudySession", "user_id"), ("Feedback", "user_id"),
+]
+
+
+@app.route("/api/account/export")
+@login_required
+def account_export():
+    """Everything Nexora holds about this student, as one JSON file.
+
+    Built by walking the models rather than hand-listing columns, so a table
+    added later is included instead of being quietly left out of an export
+    somebody is relying on.
+    """
+    user_id = current_user.id
+    payload = {
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "account": {"name": current_user.name, "email": current_user.email,
+                    "joined": None},
+        "data": {},
+    }
+    for model_name, column in _USER_TABLES:
+        model = globals().get(model_name)
+        if model is None:
+            continue
+        rows = model.query.filter_by(**{column: user_id}).all()
+        out = []
+        for row in rows:
+            item = {}
+            for field in model.__table__.columns.keys():
+                value = getattr(row, field, None)
+                if isinstance(value, (datetime, date)):
+                    value = value.isoformat()
+                item[field] = value
+            out.append(item)
+        payload["data"][model_name] = out
+
+    body = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    stamp = date.today().isoformat()
+    return Response(body, content_type="application/json; charset=utf-8", headers={
+        "Content-Disposition": f'attachment; filename="nexora-export-{stamp}.json"',
+    })
+
+
+@app.route("/api/account", methods=["DELETE"])
+@limiter.limit("6 per hour")
+@login_required
+def account_delete():
+    """Delete the account and everything attached to it.
+
+    The password is required: this is irreversible, and a session left open on
+    a shared machine must not be enough to wipe someone's term.
+    """
+    data = request.get_json(silent=True) or {}
+    password = str(data.get("password") or "")
+    if not password or not check_password_hash(current_user.password_hash, password):
+        return jsonify({"error": "That password is not right, so nothing was deleted."}), 403
+    if str(data.get("confirm") or "").strip().upper() != "DELETE":
+        return jsonify({"error": "Type DELETE to confirm."}), 400
+
+    user_id = current_user.id
+    email = current_user.email
+    for model_name, column in _USER_TABLES:
+        model = globals().get(model_name)
+        if model is None:
+            continue
+        model.query.filter_by(**{column: user_id}).delete(synchronize_session=False)
+    db.session.flush()
+    user = User.query.get(user_id)
+    if user:
+        db.session.delete(user)
+    db.session.commit()
+    logout_user()
+    app.logger.info("Account deleted on request: user %s", user_id)
+    return jsonify({"ok": True, "deleted": email})
+
+
+@app.route("/logout", methods=["POST", "GET"])
 def logout():
+    """POST for real; GET only to keep an old bookmark working.
+
+    As a GET this was a one-tag attack: any page anywhere could sign a student
+    out with <img src="https://nexora/logout">. Harmless on its own, and
+    exactly the kind of thing that should not be true of a paid product. The
+    templates all POST now; the GET branch survives so a bookmarked link or a
+    stale tab still lands somewhere sensible rather than on an error.
+    """
     logout_user()
     return redirect(url_for("landing"))
 
@@ -3038,7 +3485,6 @@ def home():
     month_title = today.strftime("%B %Y")
     month_days = []
 
-    first_day = date(today.year, today.month, 1)
     last_day_num = calendar_module.monthrange(today.year, today.month)[1]
 
     deadline_days = set()
@@ -3119,6 +3565,7 @@ def home():
         course_cards=course_cards,
         course_groups=course_groups,
         current_term_label=current_term_label,
+        show_tour=not bool(getattr(current_user, "tour_done", False)),
         task_preview=task_preview,
         upcoming_cards=upcoming_cards,
         month_title=month_title,
@@ -3563,6 +4010,7 @@ def exam_suggestions():
 
 @app.route("/api/exams/accept", methods=["POST"])
 @login_required
+@requires_active
 def accept_exam_suggestions():
     """Create the ones the student ticked. Never automatic: these are read out
     of prose by a regex, and a wrong exam date is worse than no exam date."""
@@ -3599,6 +4047,983 @@ def accept_exam_suggestions():
         created.append(_event_json(task))
     db.session.commit()
     return jsonify({"ok": True, "created": created, "count": len(created)})
+
+
+# ============================
+# The study planner
+# ============================
+# Nexora can do this properly because it already knows three things a generic
+# planner never does: when the student is in class, when each piece of work is
+# due, and what each piece is worth. So time goes where it moves the grade,
+# instead of being spread evenly over courses.
+#
+# The scheduling is arithmetic, not a model. A plan has to be the same plan
+# when you look at it twice, has to explain why each block is there, and must
+# not cost quota to redraw. Gemini reads the timetable image; nothing more.
+
+STUDY_HORIZON_DAYS = 14
+EXAM_REVISION_WINDOW = 12      # days before an exam that revision may start
+MAX_CONSECUTIVE_SAME = 2       # sessions in a row on one thing before switching
+
+# Rough hours of work a thing deserves, before weight is taken into account.
+# A student can always drag more or less at it; these only set proportions.
+_BASE_EFFORT = {
+    "exam": 6.0, "final": 8.0, "midterm": 5.0, "test": 3.0, "quiz": 1.5,
+    "assignment": 3.0, "project": 6.0, "lab": 2.0, "report": 3.0,
+    "essay": 5.0, "presentation": 3.0, "reading": 1.5, "event": 0.0,
+}
+
+_KIND_WORDS = [
+    ("final", re.compile(r"\bfinal\b", re.I)),
+    ("midterm", re.compile(r"\bmid[- ]?term\b", re.I)),
+    ("exam", re.compile(r"\bexam(?:ination)?\b", re.I)),
+    ("test", re.compile(r"\btest\b", re.I)),
+    ("quiz", re.compile(r"\bquiz\b", re.I)),
+    ("project", re.compile(r"\bproject|milestone\b", re.I)),
+    ("essay", re.compile(r"\bessay|paper\b", re.I)),
+    ("presentation", re.compile(r"\bpresentation|seminar\b", re.I)),
+    ("lab", re.compile(r"\blab\b", re.I)),
+    ("report", re.compile(r"\breport\b", re.I)),
+    ("reading", re.compile(r"\breading|chapter\b", re.I)),
+    ("assignment", re.compile(r"\bassignment|problem\s+set|homework\b", re.I)),
+]
+
+# What to actually do in the block. "Study BIOL for 90 minutes" is the advice
+# that makes plans useless; a verb and an object is something a person can start.
+_FOCUS = {
+    "final": "Work through past questions and the topics you score worst on",
+    "midterm": "Redo the hardest problems from the covered modules, closed-book",
+    "exam": "Practise questions under time, then review what you got wrong",
+    "test": "Practise questions from the covered material",
+    "quiz": "Skim the module and answer the practice questions",
+    "assignment": "Draft the next section and note what you are stuck on",
+    "project": "Move one deliverable forward and commit what you finish",
+    "essay": "Outline, then write one section without editing",
+    "presentation": "Build the next two slides and say them out loud once",
+    "lab": "Read the manual section and pre-answer the questions",
+    "report": "Write up the results section from your data",
+    "reading": "Read actively and write five questions on it",
+    "work": "Make progress and note where you got stuck",
+}
+
+
+def _item_kind(title, category=""):
+    hay = f"{title} {category}"
+    for name, pattern in _KIND_WORDS:
+        if pattern.search(hay):
+            return name
+    return "work"
+
+
+def _assessment_stem(name):
+    """A key that matches a numbered instance to its group.
+
+    An outline lists "Unit tests" worth 30; the deadlines are "Unit 1 Test",
+    "Unit 2 Test", "Unit 3 Test". Plain containment misses that in both
+    directions -- neither string contains the other -- so the number and the
+    plural come off before comparing.
+    """
+    key = re.sub(r"[^a-z0-9]+", " ", str(name or "").lower()).strip()
+    key = re.sub(r"\b\d+\b", " ", key)                 # "unit 2 test" -> "unit test"
+    key = re.sub(r"\b([ivx]{1,4})\b", " ", key)         # "midterm II"  -> "midterm"
+    words = [re.sub(r"e?s$", "", w) if len(w) > 3 else w for w in key.split()]
+    return " ".join(w for w in words if w)
+
+
+def _match_assessment(title, table):
+    """Find the entry in `table` that this piece of work belongs to."""
+    if not table:
+        return None
+    if title in table:
+        return table[title]
+    stem = _assessment_stem(title)
+    if not stem:
+        return None
+    for name, value in table.items():
+        other = _assessment_stem(name)
+        if other and (other == stem or other in stem or stem in other):
+            return value
+    return None
+
+
+def _course_study_brief(user_id, course):
+    """{assessment name -> what to actually do for it}, read from the outline.
+
+    This is the difference between "study BIOL for 90 minutes" and "Unit 2
+    Test: cellular respiration and photosynthesis -- work the module 4-6
+    problems". The outline already lists the topics; nothing else in Nexora was
+    reading them.
+
+    Cached on the outline profile. Read-only here: building is a separate,
+    explicit request, because it costs a Gemini call.
+    """
+    profile = CourseOutlineProfile.query.filter_by(user_id=user_id, course_full=course).first()
+    if not profile or not profile.study_brief_json:
+        return {}
+    try:
+        data = json.loads(profile.study_brief_json)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _build_course_brief(user_id, course):
+    """Ask Gemini, once, what each assessment in this course covers."""
+    profile = CourseOutlineProfile.query.filter_by(user_id=user_id, course_full=course).first()
+    if not profile:
+        return None, "Nexora has not read an outline for this course yet."
+    try:
+        analysis = json.loads(profile.grading_json or "{}")
+    except Exception:
+        analysis = {}
+    components = [c.get("name") for c in (analysis.get("input_components")
+                                          or analysis.get("components") or [])
+                  if isinstance(c, dict) and c.get("name")]
+    if not components:
+        return None, "That outline has no assessments to plan around yet."
+
+    outline = CourseContent.query.filter_by(
+        user_id=user_id, course_full=course, content_type="outline").order_by(
+        CourseContent.updated_at.desc()).first()
+    outline_text = _sanitize_extracted_text((outline.content_text or "") if outline else "")
+    # Module and lecture titles say what the course is actually covering, which
+    # an outline's topic list sometimes does not.
+    modules = [f"- {row.module_name or row.title}" for row in CourseContent.query.filter_by(
+        user_id=user_id, course_full=course).filter(
+        CourseContent.content_type.in_(["lecture", "resource", "outline"])).order_by(
+        CourseContent.updated_at.desc()).limit(40).all()]
+    rules = [str(r) for r in (analysis.get("rules") or [])][:8]
+
+    if len(outline_text.strip()) < 200 and not modules:
+        return None, "There is not enough course material saved yet for this to be worth doing."
+
+    schema = {"assessments": [{
+        "name": "Unit 2 Test",
+        "topics": ["cellular respiration", "photosynthesis"],
+        "how": "Work the module 4-6 problems closed-book, then review what you missed",
+    }]}
+    instructions = (
+        "You are planning revision for one university course.\n"
+        f"The assessments are exactly: {json.dumps(components, ensure_ascii=False)}\n"
+        "1. Return one entry per assessment in that list, using its name verbatim. "
+        "Do not invent assessments and do not rename them.\n"
+        "2. topics: at most four short topic names, taken from the outline or the module "
+        "titles. If the outline does not say what an assessment covers, return an empty list "
+        "rather than guessing.\n"
+        "3. how: one sentence, an instruction the student can start on. Name the thing to do "
+        "and the material to do it with. Never say \"study\" or \"review the material\".\n"
+        "4. Say nothing about dates, weights or marks. Nexora already knows those."
+    )
+    try:
+        parsed = _gemini_json(
+            "You turn a course outline into concrete revision instructions. Output only JSON.",
+            f"Return strict JSON matching this schema:\n{json.dumps(schema, indent=2)}\n\n"
+            f"{instructions}\n\nOUTLINE:\n{outline_text[:24000]}\n\n"
+            "MODULES AND MATERIAL:\n" + "\n".join(modules[:40]) + "\n\n"
+            "RULES THE OUTLINE STATES:\n" + "\n".join(rules),
+            max_tokens=2200)
+    except Exception as exc:
+        app.logger.warning("Study brief failed for %s: %s", course, exc)
+        if _looks_like_quota_error(exc):
+            return None, ("Nexora's AI has hit its usage limit for now. Your plan still works "
+                          "from weights and deadlines; try this again later.")
+        return None, "Nexora could not read that outline for topics right now."
+
+    known = {re.sub(r"[^a-z0-9]+", " ", c.lower()).strip(): c for c in components}
+    brief = {}
+    for entry in (parsed.get("assessments") if isinstance(parsed, dict) else None) or []:
+        if not isinstance(entry, dict):
+            continue
+        key = re.sub(r"[^a-z0-9]+", " ", str(entry.get("name") or "").lower()).strip()
+        name = known.get(key) or next((v for k, v in known.items() if key and (key in k or k in key)), None)
+        if not name:
+            continue          # a component this course does not have
+        topics = [str(t).strip()[:60] for t in (entry.get("topics") or [])
+                  if str(t).strip()][:4]
+        how = str(entry.get("how") or "").strip()[:300]
+        if not how and not topics:
+            continue
+        brief[name] = {"topics": topics, "how": how}
+
+    if not brief:
+        return None, "Nexora could not match that outline to your assessments."
+    profile.study_brief_json = json.dumps(brief, ensure_ascii=False)
+    profile.brief_built_at = datetime.utcnow()
+    db.session.commit()
+    return brief, None
+
+
+def _study_preference(user_id):
+    row = StudyPreference.query.filter_by(user_id=user_id).first()
+    if not row:
+        row = StudyPreference(user_id=user_id)
+        db.session.add(row)
+        db.session.commit()
+    return row
+
+
+def _days_off(pref):
+    out = set()
+    for piece in str(pref.days_off or "").split(","):
+        piece = piece.strip()
+        if piece.isdigit() and 0 <= int(piece) <= 6:
+            out.add(int(piece))
+    return out
+
+
+def _free_slots(user_id, pref, start, days):
+    """Windows of a day with nothing already in them.
+
+    Classes are subtracted with a buffer either side, because a block that
+    begins the minute a lecture ends is a block nobody attends.
+    """
+    blocks = ClassBlock.query.filter_by(user_id=user_id).all()
+    by_day = {}
+    for block in blocks:
+        by_day.setdefault(int(block.weekday or 0), []).append(block)
+
+    off = _days_off(pref)
+    buffer_min = max(0, int(pref.buffer_min or 0))
+    slots = []
+    for offset in range(days):
+        day = start + timedelta(days=offset)
+        if day.weekday() in off:
+            continue
+        busy = []
+        for block in by_day.get(day.weekday(), []):
+            busy.append((max(0, int(block.start_min or 0) - buffer_min),
+                         min(24 * 60, int(block.end_min or 0) + buffer_min)))
+        busy.sort()
+        cursor = int(pref.earliest_min or 0)
+        limit = int(pref.latest_min or 24 * 60)
+        for begin, finish in busy:
+            if finish <= cursor or begin >= limit:
+                continue
+            if begin > cursor:
+                slots.append((day, cursor, min(begin, limit)))
+            cursor = max(cursor, finish)
+        if cursor < limit:
+            slots.append((day, cursor, limit))
+    return [(d, a, b) for d, a, b in slots if b - a >= 25]
+
+
+def _component_weights(user_id):
+    """Course code -> {normalised assessment name: weight}."""
+    weights = {}
+    for row in GradeEntry.query.filter_by(user_id=user_id).all():
+        key = re.sub(r"[^a-z0-9]+", " ", str(row.name or "").lower()).strip()
+        if key:
+            weights.setdefault(row.course_full or "", {})[key] = float(row.weight or 0)
+    return weights
+
+
+def _weight_for(item_title, course, weights):
+    """What this piece of work is worth, if the outline said.
+
+    Matched loosely: a deadline called "Assignment 3 - Collections" should find
+    the outline's "Assignments" row rather than falling back to a default.
+    """
+    table = weights.get(course) or {}
+    if not table:
+        return None
+    key = re.sub(r"[^a-z0-9]+", " ", str(item_title or "").lower()).strip()
+    if key in table:
+        return table[key]
+    for name, weight in table.items():
+        if name and (name in key or key in name):
+            return weight
+    # A numbered piece belongs to its group: "Unit tests" worth 30 over three
+    # tests is 10 each, which is a better guess than "unknown". The trailing-
+    # digit strip missed "Unit 2 Test", where the number is in the middle.
+    stem = _assessment_stem(key)
+    for name, weight in table.items():
+        other = _assessment_stem(name)
+        if stem and other and (other == stem or stem in other or other in stem):
+            return weight
+    return None
+
+
+def _course_standing(user_id):
+    """How each course is actually going, from the marks already entered.
+
+    The point of a plan is to put hours where they are needed, and "needed" is
+    not only about weight and deadlines: a course someone is scoring 45% in
+    needs more of the week than one they are acing, and Nexora is holding both
+    numbers already. Without this, a plan gives the same time to a course you
+    are failing and one you have locked up.
+    """
+    standing = {}
+    for row in GradeEntry.query.filter_by(user_id=user_id).all():
+        if row.score is None or not row.max_score:
+            continue
+        # A bonus is optional, so it is not evidence about how a course is
+        # going. Counting an unearned one dragged the average down and sent
+        # hours to a course the student is acing; worse, it became the `worst`
+        # assessment, so the plan told them to go and revise extra credit.
+        if _is_bonus_row(row):
+            continue
+        pct = max(0.0, min(100.0, float(row.score) / float(row.max_score) * 100))
+        weight = max(0.0, float(row.weight or 0))
+        bucket = standing.setdefault(row.course_full or "", {"points": 0.0, "weight": 0.0, "worst": None})
+        if weight > 0:
+            bucket["points"] += pct * weight
+            bucket["weight"] += weight
+        if bucket["worst"] is None or pct < bucket["worst"][1]:
+            bucket["worst"] = (row.name or "", pct)
+
+    out = {}
+    for course, bucket in standing.items():
+        average = (bucket["points"] / bucket["weight"]) if bucket["weight"] else None
+        out[course] = {"average": average, "worst": bucket["worst"],
+                       "marked_weight": bucket["weight"]}
+    return out
+
+
+def _at_risk_courses(user_id):
+    """Courses where a mandatory rule is currently NOT satisfied.
+
+    _compute_official_result is the only place the pass-rule maths lives, so it
+    is asked rather than reimplemented. A rule that cannot be evaluated yet is
+    not a failure and must not pull time toward the wrong course.
+    """
+    risky = {}
+    for profile in CourseOutlineProfile.query.filter_by(user_id=user_id).all():
+        try:
+            result, error = _compute_official_result(user_id, profile.course_full)
+        except Exception:
+            continue
+        if error or not result:
+            continue
+        failing = [r for r in (result.get("pass_rules") or []) if r.get("passed") is False]
+        if failing:
+            risky[profile.course_full] = failing[0].get("message") or "A pass rule is not satisfied"
+    return risky
+
+
+def _study_items(user_id, today=None):
+    """Everything worth spending time on, with a priority and an effort budget."""
+    today = today or date.today()
+    weights = _component_weights(user_id)
+    standing = _course_standing(user_id)
+    at_risk = _at_risk_courses(user_id)
+    briefs = {}
+    horizon = today + timedelta(days=STUDY_HORIZON_DAYS + 21)
+    items = []
+    for card in sort_cards(build_grouped_cards(load_tasks())):
+        due = parse_iso_date(card.get("main_due_raw") or "")
+        if not due or due > horizon:
+            continue
+        title = card.get("title") or "Coursework"
+        course = card.get("course_full") or "OTHER"
+        kind = card.get("kind") if card.get("kind") in _BASE_EFFORT else None
+        kind = kind or _item_kind(title)
+        if kind == "event":
+            continue
+        weight = _weight_for(title, course, weights)
+        hours = _BASE_EFFORT.get(kind, 2.0)
+        if weight:
+            # Weight is the honest signal when the outline gave one: a 30%
+            # midterm earns three times the hours of a 10% one.
+            hours = max(1.0, min(12.0, hours * (float(weight) / 12.0) ** 0.7))
+        days_left = (due - today).days
+        # Value per remaining day. Something worth 25% due in two days beats
+        # something worth 25% due in three weeks, which is the whole point.
+        urgency = 1.0 / max(0.75, days_left + 0.75)
+        priority = (float(weight) if weight else 6.0) * urgency
+        if days_left < 0:
+            priority *= 2.5          # overdue work is the first thing to clear
+
+        # Where the student actually stands in this course. Capped both ways:
+        # a weak course earns more of the week, not the whole of it.
+        note = ""
+        course_standing = standing.get(course) or {}
+        average = course_standing.get("average")
+        if average is not None and course_standing.get("marked_weight", 0) >= 5:
+            if average < 50:
+                priority *= 1.6
+                note = f"you are at {average:.0f}% in this course"
+            elif average < 65:
+                priority *= 1.25
+                note = f"you are at {average:.0f}% in this course"
+            elif average >= 85:
+                priority *= 0.8
+                note = f"you are at {average:.0f}% here already"
+        if course in at_risk:
+            # A mandatory rule that is currently failing outranks arithmetic.
+            priority *= 1.9
+            note = at_risk[course]
+            if len(note) > 90:
+                note = note[:87] + "..."
+        extra_hours = 0.0
+        if average is not None and average < 55 and hours:
+            extra_hours = hours * 0.4
+        hours += extra_hours
+
+        # What the outline says this particular assessment covers, if the
+        # student has had Nexora read it.
+        if course not in briefs:
+            briefs[course] = _course_study_brief(user_id, course)
+        entry = _match_assessment(title, briefs[course])
+
+        items.append({
+            "brief": entry or None,
+            "task_id": card.get("task_ids", [""])[0] if card.get("task_ids") else "",
+            "title": title, "course": course, "kind": kind, "due": due,
+            "days_left": days_left, "weight": weight,
+            "minutes_needed": int(round(hours * 60)),
+            "priority": priority,
+            "standing_note": note,
+            "worst": (course_standing.get("worst") or (None, None))[0] or "",
+        })
+    items.sort(key=lambda x: -x["priority"])
+    return items
+
+
+def _focus_for(item):
+    """What to do in this block.
+
+    The outline's own topics when Nexora has read them, and the generic verb
+    for the kind of assessment otherwise. Naming the topics is most of what
+    makes a block something a person can start rather than dread.
+    """
+    brief = item.get("brief") or {}
+    how = str(brief.get("how") or "").strip()
+    topics = [t for t in (brief.get("topics") or []) if t]
+    if topics:
+        listed = ", ".join(topics[:3])
+        return (f"{listed} — {how}" if how else
+                f"{listed} — {_FOCUS.get(item['kind'], _FOCUS['work'])}")[:500]
+    if how:
+        return how[:500]
+    return _FOCUS.get(item["kind"], _FOCUS["work"])
+
+
+def _reason_for(item, today):
+    bits = []
+    if item.get("standing_note"):
+        # The most useful half of "why now" is usually where they stand, not
+        # the weight -- so it goes first.
+        bits.append(item["standing_note"])
+    if item["weight"]:
+        bits.append(f"worth {item['weight']:g}% of the course")
+    if item["days_left"] < 0:
+        bits.append(f"overdue by {abs(item['days_left'])} day{'' if abs(item['days_left']) == 1 else 's'}")
+    elif item["days_left"] == 0:
+        bits.append("due today")
+    else:
+        bits.append(f"due in {item['days_left']} day{'' if item['days_left'] == 1 else 's'}")
+    return "; ".join(bits)[:255]
+
+
+def _build_plan(user_id, today=None, days=None):
+    """Fill the free time with the work that matters most, soonest.
+
+    Deliberately simple and greedy. A cleverer optimiser would produce a plan
+    nobody could argue with -- and nobody could follow, because they could not
+    see why any block was where it was.
+    """
+    today = today or date.today()
+    days = days or STUDY_HORIZON_DAYS
+    pref = _study_preference(user_id)
+    slots = _free_slots(user_id, pref, today, days)
+    items = _study_items(user_id, today)
+    if not items or not slots:
+        return []
+
+    session_len = max(20, int(pref.session_min or 50))
+    break_len = max(0, int(pref.break_min or 0))
+    daily_cap = max(session_len, int(pref.max_daily_min or 240))
+    remaining = {id(i): i["minutes_needed"] for i in items}
+    # Work that is already late still has to fit somewhere. Without this the
+    # "never schedule past the deadline" rule silently excluded exactly the
+    # work the student is most behind on -- every day is past its deadline.
+    OVERDUE_GRACE = 3
+    latest_day = {id(i): (i["due"] if i["due"] >= today else today + timedelta(days=OVERDUE_GRACE))
+                  for i in items}
+    spent_on_day = {}
+    plan = []
+    last_item, run = None, 0
+
+    for day, begin, end in slots:
+        cursor = begin
+        while cursor + session_len <= end:
+            used = spent_on_day.get(day, 0)
+            if used + session_len > daily_cap:
+                break
+
+            choices = []
+            for item in items:
+                if remaining[id(item)] <= 0:
+                    continue
+                # Never after the deadline, and revision for a distant exam
+                # does not start now just because there is a gap in the week.
+                if day > latest_day[id(item)]:
+                    continue
+                if item["kind"] in ("exam", "final", "midterm", "test") and \
+                        (item["due"] - day).days > EXAM_REVISION_WINDOW:
+                    continue
+                score = item["priority"]
+                if item is last_item and run >= MAX_CONSECUTIVE_SAME:
+                    # Interleaving beats blocking for retention, and stops one
+                    # course eating a whole evening.
+                    score *= 0.35
+                # Bring work forward when its deadline is inside the plan.
+                if (latest_day[id(item)] - day).days <= 1:
+                    score *= 1.6
+                choices.append((score, item))
+            if not choices:
+                break
+            choices.sort(key=lambda x: -x[0])
+            item = choices[0][1]
+
+            length = min(session_len, remaining[id(item)])
+            if length < 20:
+                length = min(session_len, max(20, remaining[id(item)]))
+            plan.append({
+                "on_date": day.isoformat(), "start_min": cursor,
+                "end_min": cursor + length, "course_full": item["course"],
+                "title": item["title"], "item_kind": item["kind"],
+                "task_id": item["task_id"] or "",
+                "focus": _focus_for(item),
+                "reason": _reason_for(item, today),
+            })
+            remaining[id(item)] -= length
+            spent_on_day[day] = used + length
+            run = run + 1 if item is last_item else 1
+            last_item = item
+            cursor += length + break_len
+    return plan
+
+
+def _save_plan(user_id, plan):
+    """Replace the plan from today forward, keeping what is already done.
+
+    A regenerate must not quietly erase the evidence that someone did the work,
+    and must not touch a week they have already lived through.
+    """
+    today = date.today().isoformat()
+    stale = StudySession.query.filter_by(user_id=user_id).filter(
+        StudySession.on_date >= today, StudySession.state == "planned").all()
+    for row in stale:
+        db.session.delete(row)
+    db.session.flush()
+    kept = {(r.on_date, r.start_min) for r in
+            StudySession.query.filter_by(user_id=user_id).filter(
+                StudySession.on_date >= today).all()}
+    made = 0
+    for entry in plan:
+        if (entry["on_date"], entry["start_min"]) in kept:
+            continue      # that slot already holds a session they acted on
+        db.session.add(StudySession(id=uuid4().hex, user_id=user_id, **entry))
+        made += 1
+    db.session.commit()
+    return made
+
+
+def _session_json(row):
+    return {
+        "id": row.id, "date": row.on_date, "start": row.start_min, "end": row.end_min,
+        "start_label": f"{row.start_min // 60:02d}:{row.start_min % 60:02d}",
+        "end_label": f"{row.end_min // 60:02d}:{row.end_min % 60:02d}",
+        "minutes": max(0, row.end_min - row.start_min),
+        "course": row.course_full, "title": row.title, "focus": row.focus,
+        "reason": row.reason, "kind": row.item_kind, "state": row.state,
+        "task_id": row.task_id or "",
+    }
+
+
+_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+_WEEKDAY_INDEX = {name: i for i, name in enumerate(_WEEKDAYS)}
+_WEEKDAY_INDEX.update({name[:3]: i for i, name in enumerate(_WEEKDAYS)})
+_WEEKDAY_INDEX.update({"tues": 1, "thur": 3, "thurs": 3, "r": 3, "m": 0, "t": 1, "w": 2, "f": 4})
+
+CLASS_KINDS = {"lecture", "lab", "tutorial", "seminar", "work", "commute", "other"}
+
+
+def _parse_clock(value):
+    """Minutes from midnight, from anything a timetable writes a time as."""
+    raw = str(value or "").strip().lower().replace(".", ":")
+    if not raw:
+        return None
+    match = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(a|p)?m?", raw)
+    if not match:
+        match = re.fullmatch(r"(\d{1,2}):(\d{2})", raw)
+        if not match:
+            return None
+        hour, minute, meridiem = int(match.group(1)), int(match.group(2)), None
+    else:
+        hour = int(match.group(1))
+        minute = int(match.group(2) or 0)
+        meridiem = match.group(3)
+    if meridiem == "p" and hour < 12:
+        hour += 12
+    if meridiem == "a" and hour == 12:
+        hour = 0
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour * 60 + minute
+
+
+def _parse_weekday(value):
+    raw = str(value or "").strip().lower()
+    if raw.isdigit() and 0 <= int(raw) <= 6:
+        return int(raw)
+    return _WEEKDAY_INDEX.get(raw[:9]) if raw[:9] in _WEEKDAY_INDEX else _WEEKDAY_INDEX.get(raw[:3])
+
+
+def _block_json(row):
+    return {
+        "id": row.id, "course": row.course_full or "", "label": row.label or "",
+        "weekday": int(row.weekday or 0), "start": int(row.start_min or 0),
+        "end": int(row.end_min or 0),
+        "start_label": f"{int(row.start_min or 0) // 60:02d}:{int(row.start_min or 0) % 60:02d}",
+        "end_label": f"{int(row.end_min or 0) // 60:02d}:{int(row.end_min or 0) % 60:02d}",
+        "location": row.location or "", "kind": row.kind or "lecture",
+        "source": row.source or "manual",
+    }
+
+
+def _block_fields(data, partial=False):
+    fields = {}
+    if not partial or "label" in data:
+        label = str(data.get("label") or "").strip()
+        if not label:
+            return None, "Give the class a name."
+        fields["label"] = label[:200]
+    if not partial or "weekday" in data:
+        weekday = _parse_weekday(data.get("weekday"))
+        if weekday is None:
+            return None, "Choose a day of the week."
+        fields["weekday"] = weekday
+    if not partial or "start" in data:
+        start = _parse_clock(data.get("start"))
+        if start is None:
+            return None, "That start time could not be read. Use something like 11:35."
+        fields["start_min"] = start
+    if not partial or "end" in data:
+        end = _parse_clock(data.get("end"))
+        if end is None:
+            return None, "That end time could not be read. Use something like 12:55."
+        fields["end_min"] = end
+    if "course" in data:
+        fields["course_full"] = _normalize_course_code(str(data.get("course") or "")) or ""
+    if "location" in data:
+        fields["location"] = str(data.get("location") or "").strip()[:255]
+    if "kind" in data:
+        kind = str(data.get("kind") or "lecture").strip().lower()
+        fields["kind"] = kind if kind in CLASS_KINDS else "other"
+
+    start = fields.get("start_min")
+    end = fields.get("end_min")
+    if start is not None and end is not None and end <= start:
+        return None, "The class has to end after it starts."
+    return fields, None
+
+
+@app.route("/study-plan")
+@login_required
+def study_plan_page():
+    user_id = current_user.id
+    pref = _study_preference(user_id)
+    blocks = ClassBlock.query.filter_by(user_id=user_id).order_by(
+        ClassBlock.weekday.asc(), ClassBlock.start_min.asc()).all()
+    today = date.today()
+    sessions = StudySession.query.filter_by(user_id=user_id).filter(
+        StudySession.on_date >= today.isoformat()).order_by(
+        StudySession.on_date.asc(), StudySession.start_min.asc()).all()
+
+    courses = sorted({c.course_code for c in SyncedCourse.query.filter_by(user_id=user_id).all()
+                      if c.course_code and not bool(getattr(c, "is_hidden", False))})
+    return render_template(
+        "study_plan.html",
+        blocks=[_block_json(b) for b in blocks],
+        sessions=[_session_json(x) for x in sessions],
+        preferences={
+            "earliest_min": pref.earliest_min, "latest_min": pref.latest_min,
+            "session_min": pref.session_min, "break_min": pref.break_min,
+            "max_daily_min": pref.max_daily_min, "buffer_min": pref.buffer_min,
+            "days_off": [int(d) for d in str(pref.days_off or "").split(",") if d.strip().isdigit()],
+        },
+        courses=courses,
+        weekdays=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+        today_iso=today.isoformat(),
+    )
+
+
+@app.route("/api/timetable", methods=["GET", "POST"])
+@login_required
+def timetable_api():
+    if request.method == "GET":
+        rows = ClassBlock.query.filter_by(user_id=current_user.id).order_by(
+            ClassBlock.weekday.asc(), ClassBlock.start_min.asc()).all()
+        return jsonify({"blocks": [_block_json(r) for r in rows]})
+
+    data = request.get_json(silent=True) or {}
+    # A confirmed extraction posts the whole week at once; the editor posts one.
+    if isinstance(data.get("blocks"), list):
+        if data.get("replace"):
+            ClassBlock.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
+        made, skipped = 0, 0
+        for entry in data["blocks"][:80]:
+            fields, error = _block_fields(entry if isinstance(entry, dict) else {})
+            if error:
+                skipped += 1
+                continue
+            fields.setdefault("course_full", "")
+            db.session.add(ClassBlock(id=uuid4().hex, user_id=current_user.id,
+                                      source="import", **fields))
+            made += 1
+        db.session.commit()
+        rows = ClassBlock.query.filter_by(user_id=current_user.id).order_by(
+            ClassBlock.weekday.asc(), ClassBlock.start_min.asc()).all()
+        return jsonify({"ok": True, "added": made, "skipped": skipped,
+                        "blocks": [_block_json(r) for r in rows]})
+
+    fields, error = _block_fields(data)
+    if error:
+        return jsonify({"error": error}), 400
+    fields.setdefault("course_full", "")
+    row = ClassBlock(id=uuid4().hex, user_id=current_user.id, source="manual", **fields)
+    db.session.add(row)
+    db.session.commit()
+    return jsonify({"ok": True, "block": _block_json(row)}), 201
+
+
+@app.route("/api/timetable/<block_id>", methods=["POST", "DELETE"])
+@login_required
+def timetable_block(block_id):
+    row = ClassBlock.query.filter_by(user_id=current_user.id, id=block_id).first()
+    if not row:
+        return jsonify({"error": "That class is no longer there."}), 404
+    if request.method == "DELETE":
+        db.session.delete(row)
+        db.session.commit()
+        return jsonify({"ok": True})
+    fields, error = _block_fields(request.get_json(silent=True) or {}, partial=True)
+    if error:
+        return jsonify({"error": error}), 400
+    for key, value in fields.items():
+        setattr(row, key, value)
+    if int(row.end_min or 0) <= int(row.start_min or 0):
+        return jsonify({"error": "The class has to end after it starts."}), 400
+    db.session.commit()
+    return jsonify({"ok": True, "block": _block_json(row)})
+
+
+@app.route("/api/timetable/analyze", methods=["POST"])
+@limiter.limit(AI_LIMIT)
+@login_required
+@requires_active
+def timetable_analyze():
+    """Read a timetable screenshot or PDF into proposed class blocks.
+
+    Proposed, not saved. A misread class time silently poisons every study
+    block for the rest of term, so the student confirms the week first.
+    """
+    uploads = [u for u in (request.files.getlist("files") or []) if u and u.filename]
+    text = ""
+    if uploads:
+        if len(uploads) > 5:
+            return jsonify({"error": "Upload at most 5 pages at once."}), 400
+        try:
+            parts = []
+            for index, upload in enumerate(uploads, 1):
+                name, extracted, _hash, _size = _extract_uploaded_course_file(upload)
+                extracted = _sanitize_extracted_text(extracted)
+                if not extracted:
+                    raise ValueError(f"Nexora could not read any text from {name}.")
+                parts.append(f"\n===== PAGE {index}: {name} =====\n{extracted}")
+            text = "\n".join(parts)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 422
+        except Exception:
+            app.logger.exception("Timetable extraction failed")
+            return jsonify({"error": "Nexora could not read that timetable file."}), 422
+    else:
+        text = _sanitize_extracted_text(str((request.get_json(silent=True) or {}).get("text") or ""))
+
+    if len(text.strip()) < 15:
+        return jsonify({"error": "That timetable looks empty. Upload a clearer screenshot, or add your classes by hand."}), 400
+
+    schema = {"blocks": [{"label": "BIOL 1103 Lecture", "course": "BIOL1103",
+                          "weekday": "monday", "start": "11:35", "end": "12:55",
+                          "location": "Southam Hall", "kind": "lecture"}]}
+    rules = (
+        "Read this university timetable and return every recurring class.\n"
+        "1. One entry per day a class meets. A class listed as Monday & Wednesday is TWO entries.\n"
+        "2. weekday is the full day name in English. start and end are 24-hour HH:MM.\n"
+        "3. A range like 11:35-12:55 gives start 11:35 and end 12:55. Times before 8:00 in a "
+        "university timetable are almost always afternoons -- 4:35 means 16:35.\n"
+        "4. course is the course code with no space, e.g. BIOL1103, or \"\" if there is none.\n"
+        "5. kind is one of lecture, lab, tutorial, seminar, other.\n"
+        "6. Never invent a class, a time or a room. Omit anything you cannot read.\n"
+        "7. Return only classes and other weekly commitments, never one-off events, "
+        "deadlines or holidays."
+    )
+    try:
+        parsed = _gemini_json(
+            "You read university timetables into strict JSON. Output only JSON.",
+            f"Return strict JSON matching this schema:\n{json.dumps(schema, indent=2)}\n\n"
+            f"{rules}\n\nTIMETABLE:\n{text[:40000]}",
+            max_tokens=3000)
+    except Exception as exc:
+        app.logger.warning("Timetable analysis failed: %s", exc)
+        message = ("Nexora's AI has hit its usage limit for now, so it could not read this "
+                   "timetable. Add your classes by hand below, or try again later."
+                   if _looks_like_quota_error(exc) else
+                   "Nexora could not read that timetable. Add your classes by hand below.")
+        return jsonify({"error": message, "retryable": True}), 503
+
+    proposed, dropped = [], 0
+    for entry in (parsed.get("blocks") if isinstance(parsed, dict) else None) or []:
+        fields, error = _block_fields(entry if isinstance(entry, dict) else {})
+        if error:
+            dropped += 1
+            continue
+        proposed.append({
+            "label": fields["label"], "course": fields.get("course_full", ""),
+            "weekday": fields["weekday"], "start": fields["start_min"],
+            "end": fields["end_min"], "location": fields.get("location", ""),
+            "kind": fields.get("kind", "lecture"),
+            "start_label": f"{fields['start_min'] // 60:02d}:{fields['start_min'] % 60:02d}",
+            "end_label": f"{fields['end_min'] // 60:02d}:{fields['end_min'] % 60:02d}",
+        })
+    proposed.sort(key=lambda b: (b["weekday"], b["start"]))
+    if not proposed:
+        return jsonify({"error": "Nexora could not find any classes in that file. Add them by hand below."}), 422
+    return jsonify({"ok": True, "blocks": proposed, "dropped": dropped,
+                    "notice": "Check every day and time before you save these. A wrong class "
+                              "time quietly moves every study block for the rest of term."})
+
+
+@app.route("/api/study-preferences", methods=["GET", "POST"])
+@login_required
+def study_preferences_api():
+    pref = _study_preference(current_user.id)
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        numbers = {
+            "earliest_min": (0, 23 * 60), "latest_min": (60, 24 * 60),
+            "session_min": (20, 180), "break_min": (0, 60),
+            "max_daily_min": (30, 12 * 60), "buffer_min": (0, 120),
+        }
+        for key, (low, high) in numbers.items():
+            if key in data:
+                try:
+                    setattr(pref, key, max(low, min(high, int(float(data[key])))))
+                except (TypeError, ValueError):
+                    return jsonify({"error": f"{key.replace('_', ' ')} needs to be a number."}), 400
+        if pref.latest_min - pref.earliest_min < pref.session_min:
+            return jsonify({"error": "That leaves no room for a session. Widen the hours or shorten the session."}), 400
+        if "days_off" in data:
+            days = data["days_off"] if isinstance(data["days_off"], list) else str(data["days_off"]).split(",")
+            clean = sorted({int(d) for d in days if str(d).strip().isdigit() and 0 <= int(d) <= 6})
+            if len(clean) >= 7:
+                return jsonify({"error": "Keep at least one day available to study."}), 400
+            pref.days_off = ",".join(str(d) for d in clean)
+        db.session.commit()
+    return jsonify({"ok": True, "preferences": {
+        "earliest_min": pref.earliest_min, "latest_min": pref.latest_min,
+        "session_min": pref.session_min, "break_min": pref.break_min,
+        "max_daily_min": pref.max_daily_min, "buffer_min": pref.buffer_min,
+        "days_off": [int(d) for d in str(pref.days_off or "").split(",") if d.strip().isdigit()],
+    }})
+
+
+@app.route("/api/study-plan", methods=["GET"])
+@login_required
+def study_plan_api():
+    today = date.today()
+    rows = StudySession.query.filter_by(user_id=current_user.id).filter(
+        StudySession.on_date >= today.isoformat()).order_by(
+        StudySession.on_date.asc(), StudySession.start_min.asc()).all()
+    return jsonify({
+        "ok": True,
+        "sessions": [_session_json(r) for r in rows],
+        "has_timetable": ClassBlock.query.filter_by(user_id=current_user.id).count() > 0,
+    })
+
+
+@app.route("/api/study-plan/brief", methods=["POST"])
+@limiter.limit(AI_LIMIT)
+@login_required
+@requires_active
+def study_plan_brief():
+    """Read every analysed outline for what each assessment actually covers.
+
+    Separate from generating a plan on purpose: this is the only part that
+    costs a Gemini call, and the answer does not change between rebuilds. One
+    call per course, cached on the outline profile.
+    """
+    profiles = CourseOutlineProfile.query.filter_by(user_id=current_user.id).all()
+    if not profiles:
+        return jsonify({"error": "Analyse a course outline first — that is where the topics come from."}), 400
+    wanted = _normalize_course_code(str((request.get_json(silent=True) or {}).get("course") or ""))
+    if wanted:
+        profiles = [p for p in profiles if p.course_full == wanted] or profiles
+
+    done, failed, last_error = [], [], ""
+    for profile in profiles[:12]:
+        brief, error = _build_course_brief(current_user.id, profile.course_full)
+        if brief:
+            done.append({"course": profile.course_full, "assessments": len(brief)})
+        else:
+            failed.append(profile.course_full)
+            last_error = error or last_error
+    if not done:
+        return jsonify({"error": last_error or "Nexora could not read topics out of your outlines."}), 503
+    return jsonify({"ok": True, "read": done, "skipped": failed,
+                    "notice": last_error if failed else ""})
+
+
+@app.route("/api/study-plan/generate", methods=["POST"])
+@login_required
+@requires_active
+def study_plan_generate():
+    plan = _build_plan(current_user.id)
+    if not plan:
+        # Three different reasons produce an empty plan, and the student can
+        # only act on the one that applies to them.
+        if not ClassBlock.query.filter_by(user_id=current_user.id).count():
+            reason = "Add your timetable first so Nexora knows when you are free."
+        elif not _study_items(current_user.id):
+            reason = "Nothing is due in the next two weeks, so there is nothing to plan. Sync your courses if that looks wrong."
+        else:
+            reason = "Your week has no free time inside your study hours. Widen the hours, or free up a day."
+        return jsonify({"ok": True, "created": 0, "sessions": [], "reason": reason})
+    made = _save_plan(current_user.id, plan)
+    rows = StudySession.query.filter_by(user_id=current_user.id).filter(
+        StudySession.on_date >= date.today().isoformat()).order_by(
+        StudySession.on_date.asc(), StudySession.start_min.asc()).all()
+    return jsonify({"ok": True, "created": made, "sessions": [_session_json(r) for r in rows]})
+
+
+@app.route("/api/study-plan/<session_id>", methods=["POST"])
+@login_required
+def study_session_state(session_id):
+    row = StudySession.query.filter_by(user_id=current_user.id, id=session_id).first()
+    if not row:
+        return jsonify({"error": "That session is no longer in your plan."}), 404
+    state = str((request.get_json(silent=True) or {}).get("state") or "").lower()
+    if state not in {"planned", "done", "skipped"}:
+        return jsonify({"error": "Unknown session state."}), 400
+    row.state = state
+    db.session.commit()
+    return jsonify({"ok": True, "session": _session_json(row)})
+
+
+@app.route("/api/tour", methods=["POST", "DELETE"])
+@login_required
+def tour_state():
+    """POST marks the first-run tour as seen; DELETE arms it again.
+
+    Finishing and skipping are the same outcome on purpose. A student who
+    dismisses it has decided, and showing it again on the next visit would be
+    the app arguing with them.
+    """
+    current_user.tour_done = request.method == "POST"
+    db.session.commit()
+    return jsonify({"ok": True, "tour_done": bool(current_user.tour_done)})
 
 
 @app.route("/api/start-my-day", methods=["GET"])
@@ -4323,6 +5748,17 @@ def _fail_letter(user_id):
     scale=profile.get("scale") or []
     return scale[-1]["letter"] if scale else "F"
 
+def _is_bonus_row(row):
+    """Bonus and extra-credit weight is additive, so it never sits below the line.
+
+    Same signal _check_total uses on analysis components, applied to the saved
+    grade rows. Keeping one definition matters: if the two ever disagree, an
+    outline flagged as totalling 100% would be marked out of 103.
+    """
+    return bool(re.search(r'bonus|extra\s*credit',
+                          f"{row.name or ''} {row.category or ''}", re.I))
+
+
 def _compute_official_result(user_id, course, target=50.0, assumed_other_average=100.0):
     """Single source of truth for a student's official grade, pass/fail
     status, and pass-rule results for a course.
@@ -4407,8 +5843,18 @@ def _compute_official_result(user_id, course, target=50.0, assumed_other_average
             **decorated,
         }, None
     # Single fixed scheme.
-    scheme_total=sum(max(0.0,float(r.weight or 0)) for r in rows) or float(analysis.get('total_weight') or 100)
-    earned=0.0; completed_weight=0.0; final_row=None
+    # The denominator is the BASE scheme -- every weighted row except a bonus.
+    # Dividing by base+bonus was wrong three separate ways on the same outline:
+    # a student perfect on all seven graded components of BIOL 1103 who declined
+    # the 2% bonus was shown 97.09% rather than 100%, so optional work he never
+    # had to do cost him marks; a student who earned it in full was shown 100
+    # while _evaluate_option -- which sums points without normalising -- said
+    # 103, so the two paths disagreed about the same student; and an unmarked
+    # bonus row kept `remaining` above zero for ever, which left official_grade
+    # None and the whole result panel stuck on INCOMPLETE. A bonus is additive:
+    # it belongs in the numerator only.
+    scheme_total=sum(max(0.0,float(r.weight or 0)) for r in rows if not _is_bonus_row(r)) or float(analysis.get('total_weight') or 100)
+    earned=0.0; completed_weight=0.0; base_completed=0.0; final_row=None
     # Separate the final from all other work. Current standing uses every saved
     # mark, but the What-do-I-need solver intentionally ignores a saved final
     # so students can run a hypothetical target at any time.
@@ -4418,12 +5864,18 @@ def _compute_official_result(user_id, course, target=50.0, assumed_other_average
         if is_final: final_row=r
         if r.score is not None and r.weight>0:
             contribution=(_row_percent(r)/100)*float(r.weight)
+            is_bonus=_is_bonus_row(r)
+            # Earned bonus points count towards the mark and towards what is
+            # still needed on the final; bonus WEIGHT never counts towards how
+            # much of the course is outstanding, because none of it is owed.
             earned+=contribution; completed_weight+=float(r.weight)
+            if not is_bonus: base_completed+=float(r.weight)
             if not is_final:
-                nonfinal_earned+=contribution; nonfinal_completed_weight+=float(r.weight)
-    remaining=max(0.0,scheme_total-completed_weight); normalized_target=target/100*scheme_total
+                nonfinal_earned+=contribution
+                if not is_bonus: nonfinal_completed_weight+=float(r.weight)
+    remaining=max(0.0,scheme_total-base_completed); normalized_target=target/100*scheme_total
     needed_average=None if remaining<=0 else (normalized_target-earned)/remaining*100
-    current_on_completed=earned/completed_weight*100 if completed_weight else 0
+    current_on_completed=earned/base_completed*100 if base_completed else 0
     official_grade=earned/scheme_total*100 if remaining<=0 and scheme_total else None
     pass_ok,rule_results=_evaluate_pass_rules(analysis,row_map,official_grade)
     required_final=None
@@ -4473,6 +5925,7 @@ def _verify_quote_in_source(quote, source_text):
 
 @app.route('/api/course/<course_code>/ask', methods=['POST'])
 @login_required
+@requires_active
 def ask_course_ai(course_code):
     """Ask Nexora: a grounded, last-resort backup for when a student has a
     question the outline-review UI doesn't answer, or a grading-policy edge
@@ -4594,6 +6047,7 @@ def ask_course_ai(course_code):
 @app.route('/api/course/<course_code>/outline/upload', methods=['POST'])
 @limiter.limit(AI_LIMIT)
 @login_required
+@requires_active
 def upload_course_outline(course_code):
     course=_normalize_course_code(course_code)
     uploads=request.files.getlist('files') or request.files.getlist('file')
@@ -4633,6 +6087,7 @@ def upload_course_outline(course_code):
 
 @app.route('/api/course/<course_code>/material/upload', methods=['POST'])
 @login_required
+@requires_active
 def upload_course_material(course_code):
     course=_normalize_course_code(course_code)
     upload=request.files.get('file')
@@ -4895,6 +6350,15 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
             # A failed repair leaves the original result untouched; whatever is
             # still unresolved surfaces as an ambiguity for the student below.
             pass
+    # An outline that never states its weights must not come back with any.
+    # See _scheme_is_uncorroborated: this is the one failure mode where the
+    # model is both wrong and confident, so it is checked arithmetically
+    # rather than asked for in the prompt.
+    uncorroborated = _scheme_is_uncorroborated(final, excerpt)
+    if uncorroborated:
+        final["components"] = []
+        final["grading_options"] = []
+
     def _clean_ambiguity_item(v):
         """The AI can report an ambiguity as a rich dict ({'topic':..,
         'description':..}) or a plain string. Keep dicts as dicts so the
@@ -4927,6 +6391,13 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
                 if cleaned:
                     ambiguities.append(cleaned)
     ambiguities.extend(deterministic)
+    if uncorroborated:
+        ambiguities.append(
+            "This outline does not state the weight of each assessment -- it says the "
+            "weighting will be announced separately. Nexora has not guessed them. Add "
+            "each weight yourself once your instructor gives them, and the grade "
+            "calculator will work normally."
+        )
     # The model chain falls back to flash tiers when a Pro model is not
     # available on this key. That silently lowers reasoning quality on the one
     # task where it matters most, so say so rather than hiding it.
@@ -4968,6 +6439,9 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
     # "1.0%" instead of "96%". Detect the fraction case and rescale it.
     if 0 < score <= 1:
         score = score * 100
+    # A refused scheme is not a confident reading, whatever the auditor scored.
+    if uncorroborated:
+        score = min(score, 40)
     final["confidence_score"] = max(0, min(100, score))
     final["confidence"] = (
         "high" if score >= 90 and not deterministic else "medium" if score >= 70 else "low"
@@ -4984,6 +6458,64 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
         "checks. Review and confirm every rule before relying on it."
     )
     return final
+
+def _scheme_is_uncorroborated(model, source_text):
+    """True when not one extracted weight appears as a number in the outline.
+
+    The case this exists for: an outline that says the weighting "will be
+    announced in class during the first week". The three-stage pipeline read
+    the four assessment names, gave them plausible weights, and scored itself
+    high confidence -- a fabricated grading scheme presented as fact. A student
+    plans a term around that and never finds out it was invented.
+
+    No prompt rule can be trusted to prevent this, because the failure is the
+    model being confident. This is arithmetic instead: a real outline always
+    states at least one of its weights verbatim.
+
+    All-or-nothing on purpose. A single weight can legitimately be derived and
+    never appear -- "4 assignments at 6% each" is a 24% component and the
+    outline never writes 24 -- so dropping components individually would delete
+    real ones. Only a scheme with no numeric support anywhere is refused.
+    """
+    components = [c for c in (model.get("components") or []) if isinstance(c, dict)]
+    for option in (model.get("grading_options") or []):
+        if isinstance(option, dict):
+            components += [c for c in (option.get("components") or []) if isinstance(c, dict)]
+    weights = []
+    for comp in components:
+        try:
+            weight = float(comp.get("weight") or 0)
+        except (TypeError, ValueError):
+            continue
+        if weight > 0:
+            weights.append(weight)
+    if not weights:
+        return False
+    tokens = re.findall(r"\d+(?:\.\d+)?", source_text or "")
+    stated = {t for t in tokens}
+    stated |= {t.rstrip("0").rstrip(".") for t in tokens if "." in t}
+    values = []
+    for t in tokens[:120]:            # bounded: outlines carry dates and room numbers too
+        try:
+            value = float(t)
+        except ValueError:
+            continue
+        if value > 0 and value not in values:
+            values.append(value)
+    for weight in weights:
+        token = str(int(weight)) if float(weight).is_integer() else str(weight)
+        if token in stated:
+            return False
+        # A syllabus priced in points never writes the percentage: "homework
+        # 100 points out of 500" is a 20% component and 20 appears nowhere.
+        # Converting it is correct, so the arithmetic has to be allowed for or
+        # this guard would blank a scheme that was read perfectly.
+        for part in values:
+            for whole in values:
+                if whole > 0 and abs(part / whole * 100 - weight) < 0.05:
+                    return False
+    return True
+
 
 def _outline_extraction_rules():
     """The extraction rules, shared by the single-call prompt and the pipeline.
@@ -5100,6 +6632,7 @@ OUTLINE:
 @app.route("/api/course/<course_code>/outline/analyze", methods=["POST"])
 @limiter.limit(AI_LIMIT)
 @login_required
+@requires_active
 def analyze_course_outline(course_code):
     course = _normalize_course_code(course_code)
     # Bound once, here: the login proxy is only valid for the life of a request,
@@ -5574,6 +7107,7 @@ def confirm_course_outline_policy(course_code):
 @app.route("/api/course/<course_code>/study-tools/generate", methods=["POST"])
 @limiter.limit(AI_LIMIT)
 @login_required
+@requires_active
 def generate_study_tool(course_code):
     course=_normalize_course_code(course_code)
     data=request.get_json(silent=True) or {}
@@ -5677,6 +7211,11 @@ def sync_courses():
     user = _extension_user_from_request()
     if not user:
         return jsonify({"error": "Invalid or missing extension token."}), 401
+    access = _entitlement(user)
+    if not access["active"]:
+        # This is the read-only state, seen from the extension's side: what is
+        # already imported stays, and nothing new arrives.
+        return jsonify({"error": access["message"], "subscription_required": True}), 402
 
     payload = request.get_json(silent=True) or {}
     courses = payload.get("courses") or []
@@ -5741,11 +7280,17 @@ def _prune_courses(user, courses, origin):
 def _import_courses(user, courses):
     """Upsert a list of courses for one student.
 
+    Also where a referral is paid out: the friend has now imported their
+    courses, which is the first thing that proves the account is a person
+    rather than an address someone typed to farm free months.
+
     Called by the extension's sync route and by the Canvas sync, so a course
     imported from either LMS is stored identically.
     """
     counts = {"added": 0, "updated": 0, "unchanged": 0}
     imported = []
+    if courses:
+        _credit_referrer(user)
     for item in courses[:80]:
         url = str(item.get("brightspace_url") or item.get("url") or "").strip()[:4000]
         raw_code = str(item.get("course_code") or item.get("code") or item.get("title") or "OTHER")
@@ -5826,6 +7371,11 @@ def extension_sync_status():
     user = _extension_user_from_request()
     if not user:
         return jsonify({"error": "Invalid or missing extension token."}), 401
+    access = _entitlement(user)
+    if not access["active"]:
+        # This is the read-only state, seen from the extension's side: what is
+        # already imported stays, and nothing new arrives.
+        return jsonify({"error": access["message"], "subscription_required": True}), 402
     hidden_codes = {h.course_code for h in HiddenCourse.query.filter_by(user_id=user.id).all()}
     courses = [c for c in SyncedCourse.query.filter_by(user_id=user.id).order_by(SyncedCourse.updated_at.desc()).all() if c.course_code not in hidden_codes]
     content_total = CourseContent.query.filter_by(user_id=user.id).filter(~CourseContent.course_full.in_(hidden_codes) if hidden_codes else True).count()
@@ -5845,6 +7395,11 @@ def sync_course_content():
     user = _extension_user_from_request()
     if not user:
         return jsonify({"error": "Invalid or missing extension token."}), 401
+    access = _entitlement(user)
+    if not access["active"]:
+        # This is the read-only state, seen from the extension's side: what is
+        # already imported stays, and nothing new arrives.
+        return jsonify({"error": access["message"], "subscription_required": True}), 402
 
     payload = request.get_json(silent=True) or {}
     if not isinstance(payload.get("items") or [], list):
@@ -6406,6 +7961,7 @@ def grade_calculator():
 @app.route("/api/analyze-outline", methods=["POST"])
 @limiter.limit(AI_LIMIT)
 @login_required
+@requires_active
 def analyze_outline_generic():
     """Analyze an uploaded or pasted course outline and return grade components."""
     text = ""
@@ -6462,6 +8018,14 @@ def analyze_outline_generic():
     if not isinstance(parsed, dict):
         parsed = {}
 
+    # An outline that never states a weight must not come back carrying any.
+    # The pipeline has the same guard; both paths analyse the same documents
+    # and a student must not get a fabricated scheme from whichever one they
+    # happened to use. See _scheme_is_uncorroborated.
+    uncorroborated = _scheme_is_uncorroborated(parsed, text)
+    if uncorroborated:
+        parsed = dict(parsed, components=[], grading_options=[])
+
     components = []
     total = 0.0
     for comp in parsed.get("components") or []:
@@ -6498,7 +8062,11 @@ def analyze_outline_generic():
         "final_minimum": parsed.get("final_minimum"),
         "component_minimums": parsed.get("component_minimums") or [],
         "rules": parsed.get("rules") or [],
-        "error": "" if components else "No clear grade components were detected.",
+        "error": ("" if components else
+                  ("This outline does not say what each assessment is worth -- the weighting "
+                   "is announced separately. Nexora will not guess weights nobody wrote; add "
+                   "them yourself once you have them."
+                   if uncorroborated else "No clear grade components were detected.")),
     })
 
 @app.route("/api/sync/file", methods=["POST"])
@@ -6506,6 +8074,11 @@ def sync_course_file():
     user = _extension_user_from_request()
     if not user:
         return jsonify({"error": "Invalid or missing extension token."}), 401
+    access = _entitlement(user)
+    if not access["active"]:
+        # This is the read-only state, seen from the extension's side: what is
+        # already imported stays, and nothing new arrives.
+        return jsonify({"error": access["message"], "subscription_required": True}), 402
     uploaded = request.files.get("file")
     if not uploaded:
         return jsonify({"error": "No file supplied."}), 400
@@ -6568,6 +8141,48 @@ def _error_response(code, title, message):
     if _wants_json():
         return jsonify({"error": message}), code
     return render_template("error.html", code=code, title=title, message=message), code
+
+
+# ============================
+# Response headers
+# ============================
+# There were none. For an app holding someone's grades that is worth fixing
+# before it is worth charging for: without X-Frame-Options any site can put
+# Nexora in an invisible iframe over its own buttons, and without a CSP an
+# injected <script src> can reach any host it likes.
+#
+# The policy names the four origins the pages actually use. 'unsafe-inline' is
+# in there because every page carries its own <style> and <script> block --
+# it weakens the XSS half of CSP but keeps the part that matters most here,
+# which is that script can only ever come from these hosts.
+_CSP = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    # Course images come from whichever LMS the student uses, and that domain
+    # is not known ahead of time.
+    "img-src 'self' data: blob: https:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+])
+
+
+@app.after_request
+def _security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Content-Security-Policy", _CSP)
+    if IS_PRODUCTION:
+        # Only in production: sending HSTS from a local http server would pin
+        # localhost to https in the developer's browser.
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 
 @app.errorhandler(404)
@@ -7280,6 +8895,7 @@ def canvas_connect():
 @app.route("/api/canvas/sync", methods=["POST"])
 @limiter.limit("30 per hour")
 @login_required
+@requires_active
 def canvas_sync_now():
     account = CanvasAccount.query.filter_by(user_id=current_user.id).first()
     if not account:
@@ -7348,6 +8964,11 @@ def canvas_ingest():
     user = _extension_user_from_request()
     if not user:
         return jsonify({"error": "Invalid or missing extension token."}), 401
+    access = _entitlement(user)
+    if not access["active"]:
+        # This is the read-only state, seen from the extension's side: what is
+        # already imported stays, and nothing new arrives.
+        return jsonify({"error": access["message"], "subscription_required": True}), 402
 
     payload = request.get_json(silent=True) or {}
     pages = payload.get("pages")
@@ -7394,6 +9015,143 @@ def privacy():
     """Public, and deliberately not behind login: the Chrome Web Store listing
     has to link to it, and a reviewer reads it without an account."""
     return render_template("privacy.html", updated="31 August 2026")
+
+
+def _public_budget_left():
+    row = PublicUsage.query.get(date.today().isoformat())
+    return PUBLIC_ANALYSES_PER_DAY - (row.count if row else 0)
+
+
+def _spend_public_budget():
+    today = date.today().isoformat()
+    row = PublicUsage.query.get(today)
+    if not row:
+        row = PublicUsage(day=today, count=0)
+        db.session.add(row)
+    row.count = (row.count or 0) + 1
+    db.session.commit()
+
+
+@app.route("/what-do-i-need")
+def public_analyzer():
+    """The shop window: read a real course outline, no account.
+
+    This is the only honest way to sell a grading engine. A student who has
+    never heard of Nexora will not create an account to find out whether it
+    reads their outline correctly -- but they will paste one in. Nothing is
+    stored, and the result is theirs to keep only if they sign up.
+    """
+    return render_template("public_analyzer.html",
+                           trial_days=TRIAL_DAYS,
+                           budget_left=max(0, _public_budget_left()))
+
+
+@app.route("/api/public/analyze-outline", methods=["POST"])
+@limiter.limit(PUBLIC_ANALYSES_PER_IP)
+def public_analyze_outline():
+    """One Gemini call, no account, nothing written down.
+
+    Deliberately the single-call analyzer rather than the three-stage pipeline:
+    a third of the cost, several times faster, and this is a demonstration
+    rather than the policy someone will rely on all term. The saved version a
+    signed-in student gets is the careful one.
+    """
+    if _public_budget_left() <= 0:
+        message = ("Nexora has read its limit of outlines for today. "
+                   + ("An account gets its own allowance instead of sharing this one."
+                      if PUBLIC_CAP_MENTIONS_SIGNUP else "Try again tomorrow."))
+        return jsonify({"error": message, "capped": True,
+                        "signup": PUBLIC_CAP_MENTIONS_SIGNUP}), 429
+
+    text = ""
+    uploads = [u for u in (request.files.getlist("files") or []) if u and u.filename]
+    if uploads:
+        if len(uploads) > 3:
+            return jsonify({"error": "Upload at most 3 pages here. An account takes 8."}), 400
+        try:
+            parts = []
+            for upload in uploads:
+                name, extracted, _hash, _size = _extract_uploaded_course_file(upload)
+                extracted = _sanitize_extracted_text(extracted)
+                if not extracted:
+                    raise ValueError(f"Nexora could not read any text from {name}.")
+                parts.append(extracted)
+            text = "\n\n".join(parts)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 422
+        except Exception:
+            app.logger.exception("Public outline extraction failed")
+            return jsonify({"error": "Nexora could not read that file. Try a PDF, or paste the text."}), 422
+    else:
+        text = _sanitize_extracted_text(str((request.get_json(silent=True) or {}).get("text") or ""))
+
+    if len(text.strip()) < 60:
+        return jsonify({"error": "Paste the grading section of your outline, or upload the file."}), 400
+
+    try:
+        parsed = _gemini_json(
+            "You extract university grading schemes as strict JSON. Output only JSON.",
+            _outline_analysis_prompt(text, "this course"),
+            max_tokens=3500)
+    except Exception as exc:
+        app.logger.warning("Public outline analysis failed: %s", exc)
+        if _looks_like_quota_error(exc):
+            return jsonify({"error": "Nexora's AI is at its limit right now. Try again in a little while.",
+                            "capped": True}), 503
+        return jsonify({"error": "Nexora could not read that outline. Try pasting just the grading table."}), 503
+
+    _spend_public_budget()
+    parsed = _normalize_advanced_grading_model(parsed if isinstance(parsed, dict) else {})
+    # Same guard as the two signed-in paths. This one is the shop window, so a
+    # fabricated scheme here is also the first thing a stranger ever sees
+    # Nexora do.
+    if _scheme_is_uncorroborated(parsed, text):
+        return jsonify({"error": "This outline does not say what each assessment is worth -- "
+                                 "it says the weighting will be announced separately. Nexora "
+                                 "will not guess weights nobody wrote."}), 422
+
+    components = []
+    total = 0.0
+    for comp in (parsed.get("components") or []):
+        if not isinstance(comp, dict):
+            continue
+        try:
+            weight = float(comp.get("weight") or 0)
+        except (TypeError, ValueError):
+            continue
+        if weight <= 0 or weight > 100:
+            continue
+        components.append({"name": str(comp.get("name") or "Assessment")[:120],
+                           "weight": round(weight, 2),
+                           # The page separates bonus weight from the base, and
+                           # the name alone is not always enough to spot one.
+                           "category": str(comp.get("category") or "")[:50],
+                           "notes": str(comp.get("notes") or "")[:200]})
+        total += weight
+    if not components:
+        return jsonify({"error": "Nexora could not find a grading breakdown in that. "
+                                 "Paste the section with the percentages in it."}), 422
+
+    return jsonify({
+        "ok": True,
+        "components": components,
+        "total_weight": round(total, 2),
+        "pass_mark": parsed.get("pass_mark"),
+        "rules": [str(r)[:300] for r in (parsed.get("rules") or [])][:6],
+        "options": [str(o.get("option_name") or "") for o in (parsed.get("grading_options") or [])
+                    if isinstance(o, dict)][:4],
+        "ambiguities": [str(a)[:300] for a in (parsed.get("ambiguities") or [])][:3],
+        "notice": "Read by AI, and not guaranteed correct. Check it against your outline "
+                  "before relying on it.",
+        "budget_left": max(0, _public_budget_left()),
+    })
+
+
+@app.route("/terms")
+def terms():
+    """Public, like /privacy: Stripe and the app stores both link to it, and
+    someone deciding whether to pay reads it before they have an account."""
+    return render_template("terms.html", updated="4 September 2026")
 
 
 @app.route("/healthz")

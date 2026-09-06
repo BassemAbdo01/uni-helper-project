@@ -692,15 +692,29 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   }
 
   /* ---------------- the arithmetic ---------------- */
+  // Bonus weight is additive: it can only ever raise a mark, so it belongs in
+  // the points earned and never in the weight divided by. The server draws the
+  // same line in _is_bonus_row, and this panel has to match it -- a page that
+  // says 97.09% beside a result panel saying 100% is the same bug as two
+  // screens disagreeing about whether someone passed.
+  const isBonus = c => /bonus|extra\s*credit/i.test(`${c.name || ''} ${c.category || ''}`);
   const totals = () => {
     let earnedPoints = 0, gradedWeight = 0, remainingWeight = 0, totalWeight = 0;
     const outstanding = [];
     for (const c of components) {
       const w = Number(c.weight) || 0;
-      totalWeight += w;
+      const bonus = isBonus(c);
+      if (!bonus) totalWeight += w;
       const pct = pctOf(c);
-      if (pct == null) { remainingWeight += w; if (w > 0) outstanding.push(c.name || 'that'); }
-      else { gradedWeight += w; earnedPoints += pct / 100 * w; }
+      if (pct == null) {
+        // An unmarked bonus is not outstanding work -- none of it is owed, and
+        // counting it left the page insisting part of the course was still to
+        // come for every student who simply ignored the extra credit.
+        if (!bonus) { remainingWeight += w; if (w > 0) outstanding.push(c.name || 'that'); }
+      } else {
+        if (!bonus) gradedWeight += w;
+        earnedPoints += pct / 100 * w;
+      }
     }
     return { earnedPoints, gradedWeight, remainingWeight, totalWeight, outstanding };
   };
@@ -742,7 +756,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 
     clearAlert();
     if (t.totalWeight && Math.abs(t.totalWeight - 100) > 0.5) {
-      showAlert(`Weights total ${t.totalWeight.toFixed(2)}%, not 100%. That is normal when the outline has a bonus; otherwise check the rows.`);
+      showAlert(`Weights total ${t.totalWeight.toFixed(2)}%, not 100%, once any bonus is set aside. Check the rows against your outline.`);
     }
   }
 

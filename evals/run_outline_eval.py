@@ -38,6 +38,13 @@ def _find(components, needle):
     return None
 
 
+def _weight_of(comp):
+    try:
+        return float(comp.get("weight") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _is_bonus(comp):
     """Match the same signal app.py uses to separate bonus weight from the base."""
     blob = f"{comp.get('name') or ''} {comp.get('category') or ''}"
@@ -83,12 +90,23 @@ def score(case, parsed):
         if extra > 0:
             names = [c.get("name") for c in components]
             problems.append(f"{extra} unexpected component(s): {names}")
-    elif expect["components"] is not None and components:
-        # An empty list means the outline states no weights, so any component is
-        # invented. None means the top-level list is not what this case is about
-        # -- for a multi-scheme outline it is legitimately ambiguous which scheme
-        # belongs there, and the per-option checks below carry the real assertion.
-        problems.append(f"invented {len(components)} component(s) from an outline with no weights")
+    elif expect["components"] is not None:
+        # An empty expected list means the outline states no weights, so a
+        # FABRICATED WEIGHT is the failure -- not a named assessment. Naming
+        # the four things the outline does name, at weight 0 with a note that
+        # the weighting is unannounced, is the best available answer and more
+        # use to a student than a blank page: they can fill the numbers in the
+        # week the instructor gives them. This check originally flagged any
+        # component at all and so failed that correct answer, which is the same
+        # overfitting the weight-transfer case had. None means the top-level
+        # list is not what this case is about -- for a multi-scheme outline it
+        # is legitimately ambiguous which scheme belongs there, and the
+        # per-option checks below carry the real assertion.
+        invented = [c for c in components if _weight_of(c) > 0]
+        if invented:
+            problems.append(
+                f"invented a weight for {len(invented)} component(s) from an outline that "
+                f"states none: {[(c.get('name'), _weight_of(c)) for c in invented]}")
 
     if expect.get("total") is not None:
         total = sum(float(c.get("weight") or 0) for c in components)
@@ -187,6 +205,18 @@ def run(cases, show_raw=False, pipeline=False):
             print(f"[ERROR] {case['id']}: {type(exc).__name__}: {exc}")
             results.append((case["id"], ["call failed"]))
             continue
+
+        # Score what a student is actually shown, not the raw model reply. Every
+        # route that serves a single-call analysis applies this guard, and the
+        # pipeline applies it internally, so scoring the reply before it would
+        # measure something nobody is ever given. It is what makes
+        # `underspecified` pass: gemini-3.7-flash invents four components for
+        # that outline every time, and refusing them is the app being correct.
+        if isinstance(parsed, dict) and app._scheme_is_uncorroborated(parsed, case["text"]):
+            parsed = dict(parsed, components=[], grading_options=[],
+                          confidence="low",
+                          ambiguities=list(parsed.get("ambiguities") or [])
+                          + ["This outline does not state its weights."])
 
         problems = score(case, parsed)
         mark = "PASS" if not problems else "FAIL"

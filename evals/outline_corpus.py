@@ -217,7 +217,15 @@ applies only in the student's favour.
     {
         "id": "underspecified",
         "why": "The outline genuinely omits the weights. Inventing plausible ones is the "
-               "worst possible behaviour; saying so is correct.",
+               "worst possible behaviour; saying so is correct. Note what passes this case: "
+               "the raw model invents four components here every time -- flash-lite did, and "
+               "so does gemini-3.7-flash -- and _scheme_is_uncorroborated is what refuses "
+               "them. Two different right answers exist here and both pass: the single-call "
+               "path names the four assessments at weight 0 with a note that the weighting is "
+               "unannounced, which is honest and useful; the three-stage pipeline invented "
+               "25/25/20/30 at HIGH confidence, and _scheme_is_uncorroborated is what refuses "
+               "that. So the case scores whether a WEIGHT was fabricated, never whether an "
+               "assessment was named -- flagging the latter failed a correct answer.",
         "text": """
 Evaluation
 
@@ -321,6 +329,89 @@ and 4000 level SYSC courses.
             "options_count": 2,
             "options_base_total": 100,
             "some_option_contains": ["participation"],
+        },
+    },
+
+    {
+        "id": "points_not_percent",
+        "why": "A syllabus priced in raw points, which is the North American default and is "
+               "not in this corpus anywhere else. Nexora's entire model is percentage weight, "
+               "so a component recorded at its point value is catastrophic and silent: 500 "
+               "points of work becomes 500% of a course, every contribution is five times too "
+               "big, and the student is told they are failing. The correct reading divides by "
+               "the stated total.",
+        "text": """
+Grading
+
+Your grade is based on 500 possible points, distributed as follows:
+
+  Homework (10 sets, 10 points each)      100 points
+  Laboratory reports (5 @ 20)             100 points
+  Midterm examination                     100 points
+  Final examination                       200 points
+                                          -----------
+  Total                                   500 points
+
+Letter grades are assigned on the usual scale: 450 points and above is an A,
+400 and above a B, 350 and above a C, 300 and above a D.
+""",
+        "expect": {
+            "components": [("homework", 20), ("lab", 20), ("midterm", 20), ("final", 40)],
+            "total": 100,
+            "signals": [],
+        },
+    },
+    {
+        "id": "penalties_are_not_weights",
+        "why": "Every number on this page is a percentage and only four of them are weights. "
+               "A late penalty, an attendance deduction and a pass mark all read like rows in "
+               "a grading table to anything matching on '%'. One false component dilutes every "
+               "real one, so this case fails on an EXTRA component as hard as on a missing one.",
+        "text": """
+Course Evaluation
+
+Term paper                40%
+Seminar presentation      15%
+Participation             15%
+Final examination         30%
+
+Late work is penalized at 5% per day, to a maximum deduction of 25%. Students
+who miss more than three seminars without documentation will have 10% deducted
+from their participation mark. A final course mark of at least 50% is required
+to pass. The instructor reserves the right to adjust the class average by up to
+3% in either direction.
+""",
+        "expect": {
+            "components": [("term paper", 40), ("presentation", 15), ("participation", 15),
+                           ("final", 30)],
+            "total": 100,
+            "signals": [],
+            "must_not_contain": ["late", "deduct", "adjust"],
+        },
+    },
+    {
+        "id": "ungraded_hurdle",
+        "why": "A component worth no marks that can still fail the course. Recording it as a "
+               "weighted component corrupts the arithmetic; dropping it loses a requirement "
+               "that fails students every year. It belongs in the rules, not in the scheme.",
+        "text": """
+Evaluation
+
+Midterm test              35%
+Final examination         45%
+Term assignments          20%
+
+In addition, the six laboratory sessions are graded on a satisfactory /
+unsatisfactory basis and carry no percentage weight. A student who does not
+receive a satisfactory grade in at least five of the six laboratories will
+receive a grade of F in the course, irrespective of their standing on the
+components above.
+""",
+        "expect": {
+            "components": [("midterm", 35), ("final", 45), ("assignment", 20)],
+            "total": 100,
+            "signals": ["rules"],
+            "must_not_contain": ["laborator"],
         },
     },
 ]

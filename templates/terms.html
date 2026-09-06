@@ -1,0 +1,101 @@
+{% extends "auth_base.html" %}
+{% block title %}Terms — Nexora{% endblock %}
+{% block body %}
+<style>
+.policy{max-width:65ch;text-align:left}
+.policy h2{font-family:"Fraunces",Georgia,serif;font-weight:400;font-size:1.15rem;
+  letter-spacing:-.01em;margin:32px 0 10px}
+.policy h2:first-of-type{margin-top:26px}
+.policy p{margin:0 0 13px;color:var(--fg-2);font-size:14.5px;line-height:1.65}
+.policy ul{margin:0 0 13px;padding-left:20px;color:var(--fg-2);font-size:14.5px;line-height:1.65}
+.policy li{margin-bottom:7px}
+.policy strong{color:var(--fg);font-weight:500}
+.policy .updated{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--fg-3);margin-bottom:0}
+.policy a{color:var(--amber)}
+.policy .draft{border-left:2px solid var(--amber);background:var(--surface-2);
+  padding:12px 14px;border-radius:0 7px 7px 0;margin:0 0 22px}
+</style>
+
+<div class="policy">
+  <p class="updated">Terms of use · last updated {{ updated }}</p>
+  <h1 style="font-family:'Fraunces',Georgia,serif;font-weight:300;font-size:2rem;margin:10px 0 4px">
+    Terms
+  </h1>
+
+  <h2>What Nexora is</h2>
+  <p>
+    Nexora is a study tool for university students. It reads your courses, deadlines
+    and course documents from your own learning management system, and helps you
+    keep track of your work, calculate your standing, and plan your time.
+  </p>
+
+  <h2>Your account</h2>
+  <p>
+    One account is for one person. Keep your password to yourself; if you think
+    someone else has it, change it. You are responsible for what happens under your
+    account. You must be old enough to hold an account under the law where you live.
+  </p>
+  <p>
+    You can delete your account at any time from <strong>Profile → Export or
+    delete</strong>, which removes it and everything attached to it immediately, and
+    you can download everything Nexora holds about you from the same place.
+  </p>
+
+  <h2>What Nexora is not</h2>
+  <p>
+    <strong>Nexora is not your university, and it is not an authority on your
+    grades.</strong> It reads your course outline with the help of an AI model, and
+    an AI reading of a document can be wrong. Every grading scheme Nexora detects is
+    shown to you to confirm before it is used, and every calculated result is an
+    estimate based on what you have entered.
+  </p>
+  <p>
+    Your official marks, your official standing, and the rules of your programme come
+    from your university. If Nexora and your university disagree, your university is
+    right. Do not make a decision about dropping, withdrawing from, or continuing a
+    course on the strength of a number Nexora showed you without checking it.
+  </p>
+
+  <h2>Using it honestly</h2>
+  <p>
+    Nexora produces summaries, flashcards, practice questions and study plans from
+    your own course material. What you submit for credit is your responsibility, and
+    your university's academic integrity rules apply to you exactly as they always
+    did. Do not use Nexora to submit work that is not yours.
+  </p>
+
+  <h2>Fair use</h2>
+  <p>
+    AI features cost real money per use, so they carry limits. Do not attempt to work
+    around them, script the service, resell access, or use Nexora to read an account
+    that is not yours. Accounts doing any of those can be suspended.
+  </p>
+
+  <h2>Availability</h2>
+  <p>
+    Nexora is a small service run by one person. It aims to be available and correct,
+    but it is provided as it is, without a guarantee of uptime, and it depends on
+    services it does not control — your university's systems, and the AI provider it
+    calls. To the extent the law allows, Nexora is not liable for indirect loss, and
+    its total liability is limited to what you have paid in the previous twelve
+    months.
+  </p>
+
+  <h2>Changes</h2>
+  <p>
+    These terms may change as the service does. Material changes will be announced in
+    the app before they take effect. Continuing to use Nexora after that means you
+    accept them.
+  </p>
+
+  <h2>Contact</h2>
+  <p>
+    Anything about the above:
+    {% if contact_email %}<a href="mailto:{{ contact_email }}">{{ contact_email }}</a>{% else %}see the <a href="{{ url_for('support') }}">help page</a>{% endif %}.
+    See also the <a href="{{ url_for('privacy') }}">privacy policy</a>.
+  </p>
+
+  <p style="margin-top:26px"><a href="{{ url_for('landing') }}">&larr; Back to Nexora</a></p>
+</div>
+{% endblock %}

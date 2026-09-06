@@ -198,6 +198,10 @@ footer{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--fg-3);fo
   ::view-transition-old(root),::view-transition-new(root){animation:none}
   .rv{opacity:1;filter:none;transform:none;transition:none}.btn{transition:none}
   .bar i{transition:none}}
+.logoutlink{display:inline}
+.logoutlink button{background:none;border:0;padding:0;font:inherit;color:inherit;
+  cursor:pointer;text-decoration:none}
+.logoutlink button:hover{text-decoration:underline}
 </style>
 </head>
 <body>
@@ -355,11 +359,12 @@ Assignments (<mark>best 2 of 3</mark>) · Labs (<mark>best 10 of 12</mark>) · B
     <span>Nexora — the intelligent student OS</span>
     <span>
       {%- if current_user.is_authenticated -%}
-        <a href="{{ url_for('home') }}">Dashboard</a> · <a href="{{ url_for('logout') }}">Log out</a>
+        <a href="{{ url_for('home') }}">Dashboard</a> ·
+        <form method="post" action="{{ url_for('logout') }}" class="logoutlink"><button type="submit">Log out</button></form>
       {%- else -%}
-        <a href="{{ url_for('login') }}">Log in</a> · <a href="{{ url_for('signup') }}">Start free</a>
+        <a href="{{ url_for('public_analyzer') }}">Try it</a> · <a href="{{ url_for('login') }}">Log in</a> · <a href="{{ url_for('signup') }}">Start free</a>
       {%- endif -%}
-      · <a href="{{ url_for('support') }}">Help</a> · <a href="{{ url_for('privacy') }}">Privacy</a>
+      · <a href="{{ url_for('support') }}">Help</a> · <a href="{{ url_for('privacy') }}">Privacy</a> · <a href="{{ url_for('terms') }}">Terms</a>
     </span>
   </div></footer>
 </div>

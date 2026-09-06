@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 311 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 462 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -137,6 +137,55 @@ invalidates the rest. `/forgot-password` returns an identical response whether
 or not the address exists -- anything else turns it into a way to discover who
 has an account.
 
+## Which model actually answers
+
+`_gemini_model_candidates` is ordered by **measured availability on the live
+key, not by version number**, and the order matters more than it looks: the two
+Pro candidates 429 on every call with a free key, so the reasoning chain lands
+on the flash list in practice, and whichever id leads that list is the model
+that reads a student's outline.
+
+Probed 2026-09-05, three passes each:
+
+| Model | Result |
+|---|---|
+| `gemini-pro-latest` | 429 every time -- free key cannot serve Pro |
+| `gemini-3.1-pro-preview` | 429 every time |
+| `gemini-3.7-flash` | 200, ~1s, 3/3 |
+| `gemini-3.6-flash` | 429 on 2 of 3; 24.5s on the one that answered |
+| `gemini-3.8-flash` | 503 UNAVAILABLE, 6-12s wasted per attempt |
+| `gemini-3.5-flash-lite` | 200, fast, reliable |
+
+`gemini-3.6-flash` used to lead the list, so with its quota gone the chain fell
+all the way to `gemini-3.5-flash-lite` -- and flash-lite is the one model that
+drops `selection_rules` on a multi-option outline. The corpus was failing on
+the weakest model in the chain purely because the two above it were
+unavailable, which reads as a prompt regression and is not one. **Check which
+model answered before believing a corpus failure**; the runner prints it.
+
+Re-probe before trusting this table: availability moves.
+
+```bash
+set -a; . ./.env; set +a
+venv/Scripts/python.exe evals/probe_model_availability.py
+```
+
+`GET /v1beta/models?key=…` lists what the key is offered at all -- every id in the chain currently exists, so a failure is
+quota or overload, never a bad id.
+
+`_OVERLOADED_COOLDOWN_SECONDS` (120s) parks a model that answers 503 twice.
+Without it a persistently-overloaded candidate near the front of the chain
+costs 6-12 seconds of every analysis, on a path that already takes 37.
+
+**A paid key is worth more than Pro-tier models.** Most of the observed damage
+is unavailability, not reasoning: doomed 429s, a park, and a fall-through to the
+weakest model. A paid key on flash removes that. Routing everything to Pro
+multiplies the per-analysis cost of a path that is already the most expensive
+thing Nexora does, and CLAUDE.md's older finding still stands -- on a real
+Carleton outline flash got every weight right and missed a cap the prompt never
+asked for. Prompts and availability first; Pro is the last lever, and the
+corpus is how to tell whether it bought anything.
+
 ## Gemini quota behaviour
 
 The free key cannot serve Pro-tier models, so `gemini-pro-latest` and
@@ -155,6 +204,36 @@ with a Confirm button under it. `_fallback_is_usable` draws that line, and
 something broke. A clean table outline still uses the fallback; the gate only
 catches the cases where it understood nothing.
 
+## An outline that states no weights must come back with none
+
+`_scheme_is_uncorroborated(model, source_text)`. The three-stage pipeline read
+the `underspecified` corpus case -- an outline whose evaluation section names
+four assessments and says the weighting "will be announced in class during the
+first week" -- invented a plausible 25/25/20/30 split, and scored itself
+**high confidence**. A student plans a term around that and never finds out it
+was fabricated.
+
+No prompt rule prevents this, because the failure mode *is* the model being
+confident. The guard is arithmetic instead: a real outline always states at
+least one of its weights, so if not one extracted weight can be found in the
+source text the whole scheme is refused, the components and options are
+emptied, an ambiguity says why, and confidence is capped at 40.
+
+Two properties worth keeping:
+
+- **All-or-nothing.** One weight is legitimately derived and never written --
+  "4 assignments at 6% each" is a 24% component and no outline says 24 -- so
+  dropping components individually would delete real ones. One corroborated
+  weight clears the scheme.
+- **Points count as corroboration.** A syllabus priced in points ("homework
+  100 points out of 500") states no percentage at all, and converting it to 20%
+  is correct. The check allows any `part/whole*100` drawn from numbers in the
+  source, or the guard would blank a scheme that was read perfectly.
+
+It runs on all three paths -- the pipeline, the standalone analyzer, and the
+public reader -- because a student must not get a fabricated scheme from
+whichever one they happened to open.
+
 ## Bonus marks
 
 Grade points are summed without normalising (`contribution = pct/100 * weight`
@@ -163,6 +242,33 @@ makes a bonus work correctly as an ordinary component: a student who aces a
 scheme whose base totals 100 and also earns a 4% bonus finishes at 104, which is
 right. `_check_total` already knows this and excludes bonus weight, detected by
 `bonus|extra credit` in the name or category, before flagging a total.
+
+**A bonus never appears below the line.** It is additive, so its weight goes
+into the points earned and never into the weight divided by. Dividing by
+base+bonus was wrong three ways at once, all silent, all on the same outline:
+
+- A student perfect on all seven graded components of BIOL 1103 who declined
+  the 2% bonus was shown **97.09%**. Optional work nobody required cost him
+  marks for not doing it.
+- A student who earned it in full was shown 100 while `_evaluate_option` --
+  which sums points without normalising -- said 103. Two paths, two answers,
+  same student. Same class of bug as two screens disagreeing about a pass.
+- An unmarked bonus row kept `remaining` above zero for ever, so
+  `official_grade` stayed None and the result panel was stuck on
+  **INCOMPLETE** for every student who ignored the extra credit.
+
+`_is_bonus_row` is the row-level half of the signal `_check_total` already used
+on analysis components; keep one definition, because if they disagree an
+outline flagged as totalling 100% gets marked out of 103. `_course_standing`
+skips bonus rows too: an unearned one dragged the planner's average down, so a
+course the student was acing pulled hours, and it became the `worst`
+assessment, so the plan told them to go and revise extra credit.
+
+Three front ends do this arithmetic as well and all three had to be taught the
+same rule -- `grade_calculator.html` and `public_analyzer.html` each carry an
+`isBonus` helper mirroring the server's, and `course_workspace.html` needed
+nothing because it asks the server. A page that says 97.09% beside a result
+panel saying 100% is worse than both being wrong.
 
 So a bonus must be RECORDED, never dropped. Dropping one silently under-reports
 every student who earned it. Rule 3 briefly said to ignore bonuses, which was
@@ -296,10 +402,21 @@ set -a; . ./.env; set +a
 venv/Scripts/python.exe evals/run_outline_eval.py
 ```
 
-Eleven outlines, each isolating a different mechanism (dropped marks, overflow
-cap, excluded bonus, hurdle, aggregate minimum, alternative schemes, gated
-scheme, weight transfer, underspecified, multi-option with eligibility).
-Currently 11/11. Add a case when a new outline shape appears; the corpus is the
+Fifteen outlines, each isolating a different mechanism (dropped marks,
+overflow cap, excluded bonus, hurdle, aggregate minimum, alternative schemes,
+gated scheme, weight transfer, underspecified, multi-option with eligibility,
+two-column schemes with a bonus, a syllabus priced in points, a page where
+most percentages are penalties rather than weights, and an unweighted
+pass/fail hurdle). 15/15 on the single-call path; the pipeline path passes
+every case it has been run against since the invention guard landed.
+
+`multi_option_eligibility` is **model-dependent**: it passes on
+`gemini-3.6-flash` and fails on `gemini-3.5-flash-lite` with "selection_rules
+empty". That matters beyond the score -- with no selection rule and no
+`source_group`, `_evaluate_option` cannot find a row for "Average of best two
+written tests", marks the option incomplete and drops it, so those schemes
+silently never apply. A failing corpus run on that case is a signal about which
+model answered, not necessarily a regression. Add a case when a new outline shape appears; the corpus is the
 only defence against tuning the prompt to whatever outline is on the desk.
 
 A course-specific parser, `_math1104_outline_analysis()`, used to sit in front
@@ -325,6 +442,23 @@ The eval itself can overfit too: the weight-transfer case originally demanded
 instead, and the multi-option case first failed because its expected component
 list was short, not because the model was wrong. Check the mechanism is
 represented, not that it took the shape you imagined.
+
+The third instance was `underspecified`. Its scorer flagged *any* component
+when it expected none, so it failed the best answer the app has ever given that
+outline: four named assessments at **weight 0**, each noted "weighting to be
+announced", an explicit ambiguity, and `confidence: low`. Nothing was
+fabricated, and naming the assessments is more use to a student than a blank
+page -- they fill the numbers in the week the instructor gives them. The
+mechanism is *did it invent a weight*, so that is what the case now scores, via
+`_weight_of`. It keeps its teeth: the pipeline's 25/25/20/30 are positive
+weights and would still fail if `_scheme_is_uncorroborated` were removed.
+
+The two paths give different right answers to that outline and both pass. Worth
+remembering before "fixing" one to match the other.
+
+The runner also applies `_scheme_is_uncorroborated` before scoring, because
+every route does and the pipeline does it internally -- scoring the raw reply
+would measure something no student is ever shown.
 
 **A long rule crowds out a short one.** Rule 17 was first written as a
 paragraph explaining derived components, whole-course requirements and what it
@@ -353,6 +487,12 @@ the floating chrome. `course_workspace.html` has ~230 class names and 400 lines
 of JavaScript reaching into them; its palette was remapped in place rather than
 rewritten, because re-deriving every grid template there risks grade
 intelligence for a purely visual change.
+
+**A CSS id selector immediately after `{` is a Jinja comment.**
+`@media (max-width:900px){#tourRing{...}}` contains `{#`, which opens a comment
+that swallows the template as far as the next `#}` -- in this case several
+hundred lines away, reported as an unrelated "unknown tag 'endfor'". Put a
+space after the brace.
 
 Selectors in the shared sheet use `:where()` so page rules can override them. A
 chain of `:not()` raises specificity and silently out-ranks the page — that is
@@ -460,6 +600,154 @@ Course codes are capped at `COURSE_CODE_MAX` (40) to match every column that
 stores one. SQLite keeps an over-long value quietly; Postgres raises
 `StringDataRightTruncation` and takes the whole import down — a 500 that exists
 only in production.
+
+## The study planner
+
+`/study-plan`. Three tables: `ClassBlock` (a recurring commitment -- a lecture,
+a lab, a work shift, a commute; all block study time the same way),
+`StudyPreference` (when this student will actually work), and `StudySession`
+(the generated blocks).
+
+Times are **minutes from midnight**, not time columns. The planner does
+arithmetic on them constantly and a weekly repeat has no date to anchor a
+timestamp to.
+
+**The scheduling is arithmetic, not a model.** Gemini reads the timetable image
+and nothing else. A plan has to be the same plan when you look at it twice, has
+to explain why every block is where it is, and must not cost quota to redraw --
+`test_the_same_week_generated_twice_is_the_same_week` pins the first of those.
+
+What makes it worth using is data Nexora already has: `_study_items` reads the
+outline's component weight for each piece of work, so a 30% midterm earns three
+times the hours of a 10% quiz instead of time being spread evenly per course.
+Priority is weight ÷ days remaining, so 25% due Tuesday outranks 25% due in
+three weeks.
+
+Four traps, each with a test:
+
+- **Overdue work could never be scheduled.** The "never schedule past the
+  deadline" rule excluded it, because for late work every day is past the
+  deadline -- exactly the work a student most needs time for. `latest_day`
+  gives it a three-day grace window.
+- `_free_slots` leaves `buffer_min` either side of a class. A block starting
+  the minute a lecture ends is one nobody attends.
+- Revision for an exam more than `EXAM_REVISION_WINDOW` days away does not
+  start now just because there is a gap, and revision for a near one is spread
+  over days rather than crammed.
+- `MAX_CONSECUTIVE_SAME` switches subjects after two blocks *while another item
+  still has work*. Consecutive runs at the end of a plan are correct, not a bug
+  -- there is nothing else left to schedule.
+
+`_save_plan` replaces only `planned` sessions from today forward, so
+regenerating never erases what someone has ticked off or lived through.
+
+**The plan reads the student, not just the calendar.** `_course_standing`
+averages the marks already entered, and a course under 50% earns 1.6x the
+priority and 40% more hours while one above 85% earns 0.8x -- capped both ways,
+and ignored below 5% of marked weight, because one 2% quiz is not evidence
+about a course. `_at_risk_courses` asks `_compute_official_result` (never its
+own copy of the pass-rule maths) which courses have a rule currently failing,
+and those outrank arithmetic. A rule that is *pending* must not pull time:
+unknown is not failing, the same rule as the grade panel.
+
+**`study_brief_json` on CourseOutlineProfile is the outline's own words.**
+`_build_course_brief` asks Gemini once, per course, what each assessment
+covers, and caches it -- the answer does not change between two rebuilds of the
+same week, and a call per rebuild would spend the quota the outline pipeline
+needs. `test_a_rebuild_never_reaches_gemini` pins that. It is handed the exact
+assessment list and anything it returns outside that list is dropped, so a
+hallucinated "Comprehensive Viva" never becomes a session.
+
+**`_assessment_stem` is why "Unit 2 Test" finds "Unit tests".** An outline
+lists a group; the deadlines are numbered instances of it, and plain
+containment misses that in both directions -- so every numbered test was
+falling back to a generic focus line *and* to a default weight. Digits and
+plurals come off before comparing. `_weight_for` had the same blind spot by a
+different route.
+
+Every session carries `focus` (a verb and an object) and `reason` (what it is
+worth, when it is due). "Study BIOL for 90 minutes" is the advice that makes
+plans useless.
+
+## Access: a free month, then paid
+
+`_entitlement(user)` is the only thing any gate consults. Two screens
+disagreeing about whether someone has paid is the same class of bug as two
+disagreeing about whether they passed, and here it costs money both ways.
+
+- A new signup gets `TRIAL_DAYS` (30) with **no card**. Card-up-front converts
+  better per start and collapses the number of starts, which for an app nobody
+  has heard of is the wrong trade.
+- Expiry makes the account **read-only, not dark**. `requires_active` guards
+  only what spends Gemini quota or reaches an LMS. Reading imported work,
+  entering marks by hand, exporting and deleting all keep working. Taking away
+  work a student already did is how you get written about.
+- The extension and Canvas paths authenticate with a token, not a session, so
+  they check `_entitlement` inline beside the auth check rather than using the
+  decorator.
+- **Every number is an environment variable** (`TRIAL_DAYS`, `PRICE_LABEL`,
+  `REFERRAL_*`) because the price is not decided. Nothing quotes an amount
+  until `PRICE_LABEL` is set.
+- `grandfather_existing_accounts()` runs at startup and gives any account
+  predating this a year. The people who used it while it was free, including
+  the testers who found the bugs, do not meet a paywall.
+
+**Referrals pay on activation, never on signup.** `_credit_referrer` fires from
+`_import_courses` -- the friend has actually imported something -- and is
+one-shot per referred account, capped at `REFERRAL_MONTHS_MAX`. Paying on
+signup is the entire exploit: ten throwaway addresses, a free year.
+`_grant_days` extends from whichever expiry is later, so crediting someone on
+day two of their trial adds a month instead of costing them 28 days.
+
+## The public outline reader
+
+`/what-do-i-need` and `/api/public/analyze-outline`, both unauthenticated. It
+exists because nobody makes an account to find out whether an app reads their
+outline correctly -- but they will paste one in. It is the top of the funnel and
+the proof at the same time.
+
+Deliberately the **single-call** analyzer, not the three-stage pipeline: about a
+third of the cost, several times faster, and it is a demonstration rather than a
+policy anyone will rely on all term.
+
+**The cap is the important part.** A per-IP limit does not bound the bill -- a
+thousand people asking once each is a thousand calls. `PublicUsage` counts the
+day in the **database**, because in-memory counting gives every gunicorn worker
+its own allowance and every redeploy a fresh one. A failed analysis spends
+nothing, and hitting the ceiling makes no Gemini call at all.
+
+Measured cost per analysis, for sizing that ceiling: the saved three-stage
+analysis is ~20,500 input and ~5,000 output tokens (3.4c on Flash, 1.9c on
+Flash-Lite); the public single call is ~6,250 in and ~2,500 out (1.4c / 0.8c).
+A whole paying student is well under a dollar a term. Flash prices double on
+1 Jan 2027; Flash-Lite has no announced rise.
+
+`PUBLIC_CAP_MENTIONS_SIGNUP=0` makes the cap message say "try again tomorrow"
+instead of mentioning an account. A rate limit dressed as a sales pitch reads as
+manufactured scarcity.
+
+## The first-run tour
+
+A spotlight over the real dashboard, not a slideshow: nine steps, ordered by
+what a new account actually needs -- connect a source, save the grading scale
+that outline analysis requires, then the parts that are still empty.
+
+`tour_done` is on **User**, not in `localStorage`. Per-browser state would show
+it again on a second device and again after clearing site data. Skip and Finish
+hit the same endpoint on purpose: dismissing it is a decision. `/api/tour` is
+POST to put it away and DELETE to arm it again (the profile page's replay link);
+GET is deliberately not allowed, so a prefetch cannot spend it.
+
+**Do not animate the spotlight's geometry.** Transitioning top/left/width/height
+made the ring's *used* position depend on the animation timeline advancing.
+Where it does not -- a throttled tab, or the in-app browser pane -- the
+transitions sit at `currentTime: 0` for ever, and the ring stays where it
+started while the card describes something else. It snaps now, and cannot
+break. `getAnimations()` reporting `running` at time 0 is how that was found.
+
+Steps point at `data-tour="nav-*"` hooks on the rail rather than at `href`
+strings. A step whose target is missing is dropped rather than lighting an
+empty rectangle, which is the normal case on a fresh account.
 
 ## Conventions
 

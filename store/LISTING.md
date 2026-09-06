@@ -84,8 +84,14 @@ lecture content are available in one place.
 | `tabs` | Locates the Brightspace tab the student already has open, so the extension can read the course pages they asked to import. |
 | `scripting` | Runs the reader on that Brightspace page when the student presses Import. Injection is programmatic and only on a page the student granted. |
 | `alarms` | Schedules the optional background refresh, if the student turns auto-sync on. |
+| `notifications` | Nexora Sync can refresh a student's courses in the background while the popup is closed. If that refresh fails completely -- almost always because their university session has expired -- the extension shows one notification telling them to sign in to Brightspace again. Without it there is no way for the student to know their coursework has stopped updating. Successful syncs raise no notification; the result is shown in the extension popup instead. |
 | `optional_host_permissions` (`https://*/*`) | Universities host Brightspace on their own domains, so the set cannot be known in advance. Nothing is granted at install: the student grants one origin, their own university's, from the popup. |
 | Remote code | None. All code is in the package; nothing is fetched or evaluated at runtime. |
+
+> The `notifications` row was missing when the item was first submitted, and the
+> store blocks publishing with "A justification for notifications is required".
+> Every permission in `manifest.json` needs a row here; check the two lists match
+> before submitting a version.
 
 **Data usage disclosures — tick these**
 

@@ -29,7 +29,13 @@ class ModelTierTests(unittest.TestCase):
         models = _gemini_model_candidates()
         self.assertTrue(all('pro' not in m.lower() for m in models),
                         f'a Pro model leaked into the default tier: {models}')
-        self.assertEqual(models[0], 'gemini-3.6-flash')
+        # Was gemini-3.6-flash. Changed deliberately: probing the live key
+        # found 3.6 answering 429 on two of three calls while 3.7-flash
+        # answered every time, so the chain was falling through to
+        # flash-lite -- the one model that drops selection_rules on a
+        # multi-option outline. Whichever id leads this list is the model
+        # that reads a student's outline, so it is pinned on purpose.
+        self.assertEqual(models[0], 'gemini-3.7-flash')
 
     def test_reasoning_tier_prefers_pro(self):
         models = _gemini_model_candidates(reasoning=True)

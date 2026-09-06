@@ -29,7 +29,8 @@
     <p class="lede">Who Nexora thinks you are, and where the rest of your settings live.</p>
   </div>
   <div class="actions">
-    <a class="btn danger" href="{{ url_for('logout') }}">Log out</a>
+    <form id="logoutForm" method="post" action="{{ url_for('logout') }}" hidden></form>
+    <button class="btn danger" type="submit" form="logoutForm">Log out</button>
   </div>
 </div>
 
@@ -68,6 +69,38 @@
         </div>
         <a href="{{ url_for('feedback') }}">Open &rarr;</a>
       </div>
+      <div class="row">
+        <div>
+          <span class="k">Guided tour</span>
+          <p>Walk through what each part of Nexora is for.</p>
+        </div>
+        <a href="#" id="replayTour">Show it again &rarr;</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <header><div><span class="k">Your data</span><h2>Export or delete</h2></div></header>
+    <div class="rows">
+      <div class="row">
+        <div>
+          <span class="k">Download everything</span>
+          <p>One JSON file with your courses, deadlines, marks, grading policies,
+             timetable and study plan.</p>
+        </div>
+        <a href="{{ url_for('account_export') }}">Download &rarr;</a>
+      </div>
+      <div class="row">
+        <div>
+          <span class="k">Delete my account</span>
+          <p>Removes the account and everything attached to it. This cannot be undone,
+             so download your data first if you want to keep it.</p>
+        </div>
+        <button type="button" id="deleteAccount"
+                style="background:none;border:1px solid rgba(201,112,92,.5);color:#C9705C;
+                       border-radius:6px;font:inherit;font-size:13px;padding:7px 12px;
+                       cursor:pointer;white-space:nowrap">Delete&hellip;</button>
+      </div>
     </div>
   </section>
 
@@ -76,4 +109,41 @@
     locked out, <a href="{{ url_for('forgot_password') }}" style="color:var(--amber)">reset your password</a>.
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  "use strict";
+  // Arming the tour is a server-side flag, so it also comes back on the
+  // student's other devices rather than only in this browser.
+  document.getElementById('replayTour').addEventListener('click', async e => {
+    e.preventDefault();
+    try { await fetch('/api/tour', { method: 'DELETE' }); } catch (_) {}
+    location.href = '{{ url_for('home') }}';
+  });
+
+  // Irreversible, so it asks for the password and for the word: a session left
+  // open on a shared library machine must not be enough to wipe someone's term.
+  document.getElementById('deleteAccount').addEventListener('click', async () => {
+    const password = prompt('This deletes your account and everything in it, permanently.
+
+Enter your password to confirm:');
+    if (!password) return;
+    const word = prompt('Last check. Type DELETE to confirm:');
+    if ((word || '').trim().toUpperCase() !== 'DELETE') return;
+    try {
+      const res = await fetch('/api/account', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password, confirm: word }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(data.error || 'Nothing was deleted.'); return; }
+      location.href = '/';
+    } catch (_) {
+      alert('Could not reach Nexora. Nothing was deleted.');
+    }
+  });
+})();
+</script>
 {% endblock %}

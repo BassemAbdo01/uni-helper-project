@@ -108,10 +108,15 @@
   <h2>Deleting your data</h2>
   <p>
     Removing a course from Nexora deletes its imported content, grades, outline analysis,
-    and tasks. Uninstalling the extension stops all reading immediately. To delete your
-    account and everything in it, ask through the
-    {% if contact_email %}<a href="mailto:{{ contact_email }}">{{ contact_email }}</a>{% else %}<a href="{{ url_for('support') }}">help page</a>{% endif %}
-    and it will be removed.
+    and tasks. Uninstalling the extension stops all reading immediately.
+  </p>
+  <p>
+    To delete your account and everything in it, open
+    <strong>Profile &rarr; Export or delete</strong>. It happens immediately, it is not
+    a request queued for someone to action, and it cannot be undone. From the same place
+    you can first download everything Nexora holds about you as a single file. If you
+    would rather ask a person, write to
+    {% if contact_email %}<a href="mailto:{{ contact_email }}">{{ contact_email }}</a>{% else %}the <a href="{{ url_for('support') }}">help page</a>{% endif %}.
   </p>
 
   <h2>What Nexora never does</h2>

@@ -21,14 +21,15 @@
     <a class="brand" href="{{ url_for('landing') }}"><i></i>Nexora</a>
 
     <nav class="railnav" aria-label="Sections">
-      <a {% if nav == 'home' %}class="on" aria-current="page"{% endif %} href="{{ url_for('home') }}"><b></b>Dashboard</a>
-      <a {% if nav == 'calendar_page' %}class="on" aria-current="page"{% endif %} href="{{ url_for('calendar_page') }}"><b></b>Calendar</a>
-      <a {% if nav == 'grade_calculator' %}class="on" aria-current="page"{% endif %} href="{{ url_for('grade_calculator') }}"><b></b>Grade calculator</a>
-      <a {% if nav == 'study_room' %}class="on" aria-current="page"{% endif %} href="{{ url_for('study_room') }}"><b></b>Study room</a>
-      <a {% if nav == 'connect_brightspace' %}class="on" aria-current="page"{% endif %} href="{{ url_for('connect_brightspace') }}"><b></b>Brightspace</a>
-      <a {% if nav == 'connect_canvas' %}class="on" aria-current="page"{% endif %} href="{{ url_for('connect_canvas') }}"><b></b>Canvas</a>
-      <a {% if nav == 'settings' %}class="on" aria-current="page"{% endif %} href="{{ url_for('settings') }}"><b></b>Settings</a>
-      <a {% if nav == 'feedback' %}class="on" aria-current="page"{% endif %} href="{{ url_for('feedback') }}"><b></b>Feedback</a>
+      <a data-tour="nav-dashboard" {% if nav == 'home' %}class="on" aria-current="page"{% endif %} href="{{ url_for('home') }}"><b></b>Dashboard</a>
+      <a data-tour="nav-calendar" {% if nav == 'calendar_page' %}class="on" aria-current="page"{% endif %} href="{{ url_for('calendar_page') }}"><b></b>Calendar</a>
+      <a data-tour="nav-grades" {% if nav == 'grade_calculator' %}class="on" aria-current="page"{% endif %} href="{{ url_for('grade_calculator') }}"><b></b>Grade calculator</a>
+      <a data-tour="nav-plan" {% if nav == 'study_plan_page' %}class="on" aria-current="page"{% endif %} href="{{ url_for('study_plan_page') }}"><b></b>Study plan</a>
+      <a data-tour="nav-study" {% if nav == 'study_room' %}class="on" aria-current="page"{% endif %} href="{{ url_for('study_room') }}"><b></b>Study room</a>
+      <a data-tour="nav-brightspace" {% if nav == 'connect_brightspace' %}class="on" aria-current="page"{% endif %} href="{{ url_for('connect_brightspace') }}"><b></b>Brightspace</a>
+      <a data-tour="nav-canvas" {% if nav == 'connect_canvas' %}class="on" aria-current="page"{% endif %} href="{{ url_for('connect_canvas') }}"><b></b>Canvas</a>
+      <a data-tour="nav-settings" {% if nav == 'settings' %}class="on" aria-current="page"{% endif %} href="{{ url_for('settings') }}"><b></b>Settings</a>
+      <a data-tour="nav-feedback" {% if nav == 'feedback' %}class="on" aria-current="page"{% endif %} href="{{ url_for('feedback') }}"><b></b>Feedback</a>
     </nav>
 
     <div class="railcap">

@@ -1,0 +1,258 @@
+{% extends "auth_base.html" %}
+{% block title %}What do I need on the final? — Nexora{% endblock %}
+{% block body %}
+<style>
+.tool{max-width:70ch;text-align:left;width:100%}
+.tool h1{font-family:"Fraunces",Georgia,serif;font-weight:300;font-size:2.1rem;
+  line-height:1.15;margin:0 0 10px;letter-spacing:-.01em}
+.tool h1 em{font-style:italic;color:var(--amber)}
+.tool .lede{color:var(--fg-2);font-size:15px;line-height:1.65;margin:0 0 26px}
+.tool label{display:block;font-family:"JetBrains Mono",monospace;font-size:9px;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--fg-3);margin:0 0 7px}
+.tool textarea{width:100%;min-height:150px;background:var(--surface-2);
+  border:1px solid var(--line-2);color:var(--fg);border-radius:8px;padding:13px 14px;
+  font:inherit;font-size:14px;line-height:1.55;resize:vertical}
+.tool textarea:focus{outline:none;border-color:var(--amber)}
+.tool input[type=file]{width:100%;padding:11px 13px;border-radius:8px;
+  border:1px dashed var(--line-2);background:var(--surface-2);color:var(--fg-2);
+  font:inherit;font-size:13px}
+.tool input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;
+  border-radius:5px;border:1px solid var(--line-2);background:var(--surface);
+  color:var(--fg);font:inherit;font-size:12.5px;cursor:pointer}
+.or{text-align:center;color:var(--fg-3);font-size:12px;margin:14px 0;
+  font-family:"JetBrains Mono",monospace;letter-spacing:.14em}
+.go{width:100%;margin-top:16px;padding:13px;border-radius:8px;border:0;
+  background:var(--amber);color:#140F09;font:inherit;font-weight:600;font-size:15px;
+  cursor:pointer}
+.go:hover:not(:disabled){filter:brightness(1.06)}
+.go:disabled{opacity:.5;cursor:default}
+.msg{margin-top:14px;font-size:13.5px;line-height:1.6;color:var(--fg-2);min-height:1.2em}
+.msg.bad{color:#C9705C}
+
+.out{margin-top:30px;display:none}
+.out.on{display:block}
+.out h2{font-family:"Fraunces",Georgia,serif;font-weight:400;font-size:1.3rem;margin:0 0 4px}
+.out .sub{color:var(--fg-3);font-size:12.5px;margin:0 0 18px;
+  font-family:"JetBrains Mono",monospace;letter-spacing:.04em}
+.rows{border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.r{display:grid;grid-template-columns:minmax(0,1fr) 96px 108px;gap:12px;align-items:center;
+  padding:12px 14px;background:var(--surface);border-bottom:1px solid var(--line)}
+.r:last-child{border-bottom:0}
+.r .nm{font-size:14px;font-weight:500;min-width:0}
+.r .nm small{display:block;color:var(--fg-3);font-size:11.5px;font-weight:400;margin-top:2px}
+.r .wt{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--amber);text-align:right}
+.r input{width:100%;background:var(--surface-2);border:1px solid var(--line-2);
+  color:var(--fg);border-radius:6px;padding:7px 9px;font:inherit;font-size:13px;text-align:center}
+.r input:focus{outline:none;border-color:var(--amber)}
+.rhead{display:grid;grid-template-columns:minmax(0,1fr) 96px 108px;gap:12px;
+  padding:0 14px 8px;font-family:"JetBrains Mono",monospace;font-size:9px;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--fg-3)}
+.rhead span:nth-child(2){text-align:right}
+.rhead span:nth-child(3){text-align:center}
+
+.verdict{margin-top:20px;padding:18px 20px;border-radius:11px;background:var(--surface-2);
+  border:1px solid var(--line-2)}
+.verdict .big{font-family:"Fraunces",Georgia,serif;font-size:2rem;line-height:1.1;
+  margin:0 0 6px}
+.verdict p{margin:0;color:var(--fg-2);font-size:13.5px;line-height:1.6}
+.rules{margin:18px 0 0;padding:0;list-style:none}
+.rules li{padding:10px 12px;background:var(--surface);border:1px solid var(--line);
+  border-radius:7px;margin-bottom:7px;font-size:13px;color:var(--fg-2);line-height:1.55}
+.caveat{margin-top:16px;font-size:12px;color:var(--fg-3);line-height:1.55}
+
+.save{margin-top:26px;padding:20px;border-radius:11px;
+  background:linear-gradient(160deg,var(--surface-2),var(--surface));
+  border:1px solid var(--line-2)}
+.save h3{font-family:"Fraunces",Georgia,serif;font-weight:400;font-size:1.15rem;margin:0 0 6px}
+.save p{margin:0 0 14px;color:var(--fg-2);font-size:13.5px;line-height:1.6}
+.save a{display:inline-block;padding:11px 18px;border-radius:8px;background:var(--amber);
+  color:#140F09;font-weight:600;text-decoration:none;font-size:14px}
+.save a:hover{filter:brightness(1.06)}
+.save small{display:block;margin-top:11px;color:var(--fg-3);font-size:12px}
+</style>
+
+<div class="tool">
+  <h1>What do I <em>actually</em> need on the final?</h1>
+  <p class="lede">
+    Paste your course outline. Nexora reads the official grading scheme out of it —
+    every component, its weight, and the pass rules most students never notice —
+    and works out where you stand. No account, nothing saved, about thirty seconds.
+  </p>
+
+  <div>
+    <label for="outline">Paste your outline, or just the grading section</label>
+    <textarea id="outline" placeholder="Lecture 60%, Laboratory 40%. In-class worksheets (best 5 of 8) 10, Unit tests (3 x 10) 30, Final exam 20…"></textarea>
+  </div>
+
+  <p class="or">— or —</p>
+
+  <div>
+    <label for="file">Upload it (PDF, DOCX or a screenshot)</label>
+    <input id="file" type="file" multiple
+           accept=".pdf,.docx,.png,.jpg,.jpeg,.webp,.txt"
+           aria-label="Your course outline file">
+  </div>
+
+  <button class="go" id="go" type="button">Read my outline</button>
+  <p class="msg" id="msg" role="status"></p>
+
+  <div class="out" id="out">
+    <h2>Your grading scheme</h2>
+    <p class="sub" id="sub"></p>
+
+    <div class="rhead"><span>Assessment</span><span>Weight</span><span>Your mark %</span></div>
+    <div class="rows" id="rows"></div>
+
+    <div class="verdict">
+      <p class="big" id="standing">—</p>
+      <p id="verdictText">Enter the marks you have so far.</p>
+    </div>
+
+    <ul class="rules" id="rules"></ul>
+    <p class="caveat" id="caveat"></p>
+
+    <div class="save">
+      <h3>Keep this</h3>
+      <p>
+        Make an account and Nexora saves this course, tracks every mark, connects to
+        your Brightspace or Canvas so deadlines arrive on their own, and builds a
+        study plan around your timetable. Free for {{ trial_days }} days, no card.
+      </p>
+      <a href="{{ url_for('signup') }}">Create my account</a>
+      <small>Your outline is not stored unless you do.</small>
+    </div>
+  </div>
+
+  <p style="margin-top:30px;font-size:13px;color:var(--fg-3)">
+    <a href="{{ url_for('landing') }}" style="color:var(--amber)">&larr; What Nexora is</a>
+  </p>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  let components = [];
+
+  const say = (text, bad) => { $('msg').className = bad ? 'msg bad' : 'msg'; $('msg').textContent = text; };
+
+  // Bonus weight is additive: it lifts a mark and is never owed. Counting it
+  // as outstanding work told a student they had 3% of the course left when
+  // they had finished, and counting an unearned one in the denominator turned
+  // a perfect term into 97%. The server draws the same line in _is_bonus_row.
+  const isBonus = c => /bonus|extra\s*credit/i.test(`${c.name || ''} ${c.category || ''}`);
+
+  function recalc() {
+    let earned = 0, graded = 0, total = 0;
+    for (const c of components) {
+      const bonus = isBonus(c);
+      if (!bonus) total += c.weight;
+      if (c.mark === '' || c.mark === null || isNaN(Number(c.mark))) continue;
+      const pct = Math.max(0, Math.min(100, Number(c.mark)));
+      earned += pct / 100 * c.weight;
+      if (!bonus) graded += c.weight;
+    }
+    const standing = graded > 0 ? earned / graded * 100 : null;
+    const left = Math.max(0, total - graded);
+    $('standing').textContent = standing === null ? '—' : `${standing.toFixed(1)}%`;
+    if (standing === null) {
+      $('verdictText').textContent = 'Enter the marks you have so far.';
+      return;
+    }
+    if (left <= 0.5) {
+      $('verdictText').textContent = `Every assessment is marked. That is your final standing across ${total.toFixed(0)}% of the course.`;
+      return;
+    }
+    // What is needed on everything still outstanding, for a few useful targets.
+    const need = target => ((target - earned) / left * 100);
+    const bits = [50, 60, 70, 80].map(t => {
+      const n = need(t);
+      if (n <= 0) return `${t}% is already safe`;
+      if (n > 100) return `${t}% is out of reach`;
+      return `${n.toFixed(0)}% for ${t}%`;
+    });
+    $('verdictText').textContent =
+      `You are averaging ${standing.toFixed(1)}% across the ${graded.toFixed(0)}% of the course that is marked. `
+      + `On the remaining ${left.toFixed(0)}% you need: ` + bits.join(' · ') + '.';
+  }
+
+  function render(data) {
+    components = data.components.map(c => ({ ...c, mark: '' }));
+    const rows = document.createDocumentFragment();
+    components.forEach((c, i) => {
+      const row = document.createElement('div');
+      row.className = 'r';
+      const name = document.createElement('div');
+      name.className = 'nm';
+      // Straight from a model reading an uploaded document, so text only.
+      name.textContent = c.name;
+      if (c.notes) {
+        const note = document.createElement('small');
+        note.textContent = c.notes;
+        name.append(note);
+      }
+      const weight = document.createElement('div');
+      weight.className = 'wt';
+      weight.textContent = `${c.weight}%`;
+      const box = document.createElement('input');
+      box.type = 'number'; box.min = '0'; box.max = '100'; box.step = 'any';
+      box.setAttribute('aria-label', `Your mark for ${c.name}, percent`);
+      box.oninput = e => { components[i].mark = e.target.value; recalc(); };
+      row.append(name, weight, box);
+      rows.append(row);
+    });
+    $('rows').replaceChildren(rows);
+
+    const bonusWeight = components.filter(isBonus).reduce((n, c) => n + c.weight, 0);
+    const total = components.reduce((n, c) => n + (isBonus(c) ? 0 : c.weight), 0);
+    $('sub').textContent = `${components.length} assessments · ${total.toFixed(0)}% total`
+      + (bonusWeight ? `, plus ${bonusWeight.toFixed(0)}% of bonus on top` : '')
+      + (!bonusWeight && Math.abs(total - 100) > 0.5 ? ' — check this against your outline' : '')
+      + (data.options && data.options.length ? ` · ${data.options.length} alternative schemes detected` : '');
+
+    const rules = document.createDocumentFragment();
+    for (const rule of (data.rules || []).concat(data.ambiguities || [])) {
+      const li = document.createElement('li');
+      li.textContent = rule;
+      rules.append(li);
+    }
+    $('rules').replaceChildren(rules);
+    $('caveat').textContent = data.notice || '';
+    $('out').classList.add('on');
+    recalc();
+    $('out').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  $('go').onclick = async () => {
+    const files = [...$('file').files];
+    const text = $('outline').value.trim();
+    if (!files.length && text.length < 60) {
+      return say('Paste the grading section of your outline, or choose a file.', true);
+    }
+    $('go').disabled = true;
+    say('Reading your outline…');
+    try {
+      let res;
+      if (files.length) {
+        const form = new FormData();
+        files.forEach(f => form.append('files', f));
+        res = await fetch('/api/public/analyze-outline', { method: 'POST', body: form });
+      } else {
+        res = await fetch('/api/public/analyze-outline', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { say(data.error || 'That did not work.', true); return; }
+      say('');
+      render(data);
+    } catch (_) {
+      say('Could not reach Nexora. Check your connection and try again.', true);
+    } finally {
+      $('go').disabled = false;
+    }
+  };
+})();
+</script>
+{% endblock %}

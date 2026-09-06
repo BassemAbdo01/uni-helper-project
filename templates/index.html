@@ -48,6 +48,47 @@
 .cmenu a:hover,.cmenu button:hover{background:var(--surface);color:var(--fg)}
 .cmenu button{color:var(--red)}
 
+/* ---- first-run tour ----
+   A spotlight rather than a modal walkthrough: the student sees the real page
+   with one part of it lit, which is the only way "this is your courses" means
+   anything. The ring is a huge box-shadow on a positioned frame, so it needs
+   no clip-path and no second canvas. */
+#tour[hidden]{display:none}
+/* No transition on the geometry, on purpose. Animating top/left/width/height
+   made the spotlight's *used* position depend on the animation timeline
+   advancing; where it does not (a throttled or non-compositing tab), the
+   transitions sit at time 0 and the ring stays wherever it started while the
+   card talks about something else. Snapping is not worse, and it cannot break. */
+#tourRing{position:fixed;z-index:80;border-radius:10px;pointer-events:none;
+  box-shadow:0 0 0 9999px rgba(9,8,7,.72),0 0 0 2px var(--amber) inset}
+#tourRing.center{box-shadow:0 0 0 9999px rgba(9,8,7,.78)}
+#tourCard{position:fixed;z-index:81;width:min(340px,calc(100vw - 28px));
+  background:var(--surface);border:1px solid var(--line-2);border-radius:11px;
+  padding:17px 18px 15px;box-shadow:0 24px 60px #00000070}
+#tourCard .step{font-family:var(--mono);font-size:9px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--amber);display:block;margin-bottom:7px}
+#tourCard h3{font-family:var(--serif);font-weight:400;font-size:1.16rem;margin:0 0 6px}
+#tourCard p{color:var(--fg-2);font-size:13.5px;line-height:1.6;margin:0}
+#tourCard .acts{display:flex;align-items:center;gap:8px;margin-top:15px}
+#tourCard .acts .spacer{flex:1}
+#tourCard button{border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);
+  color:var(--fg-2);font:inherit;font-size:13px;padding:8px 13px;cursor:pointer}
+#tourCard button:hover{border-color:var(--fg-3);color:var(--fg)}
+#tourCard button.primary{background:var(--amber);border-color:var(--amber);color:#140F09;font-weight:600}
+#tourCard button.primary:hover{filter:brightness(1.06);color:#140F09}
+#tourCard button.skip{background:none;border:0;color:var(--fg-3);padding:8px 4px}
+#tourCard button.skip:hover{color:var(--fg-2);text-decoration:underline}
+#tourDots{display:flex;gap:5px;align-items:center}
+#tourDots i{width:5px;height:5px;border-radius:50%;background:var(--line-2);display:block}
+#tourDots i.on{background:var(--amber)}
+/* The space after the brace matters: "){#" opens a Jinja comment, which
+   swallowed the rest of this template as far as the next "#}". */
+@media (max-width:900px){
+  /* The rail collapses on a phone, so steps that point into it have nothing to
+     point at; those fall back to a centred card. */
+  #tourCard{left:50%!important;top:auto!important;bottom:16px;transform:translateX(-50%)}
+}
+
 .termbar{display:flex;align-items:center;gap:12px}
 .termpick{background:var(--surface-2);border:1px solid var(--line);color:var(--fg-2);
   border-radius:999px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer}
@@ -286,6 +327,24 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
     <a href="{{ url_for('profile') }}">Profile</a>
   </div>
 </dialog>
+{% if show_tour %}
+<div id="tour" role="dialog" aria-modal="true" aria-labelledby="tourTitle" hidden>
+  <div id="tourRing"></div>
+  <div id="tourCard">
+    <span class="step" id="tourStep"></span>
+    <h3 id="tourTitle"></h3>
+    <p id="tourBody"></p>
+    <div class="acts">
+      <div id="tourDots" aria-hidden="true"></div>
+      <span class="spacer"></span>
+      <button type="button" class="skip" id="tourSkip">Skip</button>
+      <button type="button" id="tourBack">Back</button>
+      <button type="button" class="primary" id="tourNext">Next</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="toast" id="toast" role="status">
   <span id="toastText"></span>
   <button type="button" id="toastUndo">Undo</button>
@@ -301,6 +360,139 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
   // are never safe to concatenate into markup.
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+  /* ---- the first-run tour ----
+     Ordered by what a new account actually needs, not by what is on screen:
+     connect a source, then the grading scale it needs before it can read an
+     outline, and only then the parts that have nothing in them yet. A step
+     whose target is missing is skipped rather than pointing at nothing --
+     which is the normal case on a brand-new account, where the task and
+     course cards are empty states. */
+  const tour = $('#tour');
+  if (tour) {
+    const STEPS = [
+      { title: 'Welcome to Nexora',
+        body: 'This is your whole term in one place — deadlines, courses, grades. Two minutes and it is set up. You can stop at any point.' },
+      { at: 'nav-brightspace',
+        title: 'Start by connecting your courses',
+        body: 'Nexora reads your courses, deadlines and announcements from Brightspace or Canvas. Nothing else here does much until this is done.' },
+      { at: 'nav-settings',
+        title: 'Then save your grading scale',
+        body: 'Your university\u2019s letter bands — what percent counts as a C-. Nexora needs it before it can read a course outline, and it only has to be done once.' },
+      { sel: '#tasks',
+        title: 'What to do first',
+        body: 'Everything due, soonest at the top. Tick one off and it disappears — with an Undo, in case that was the wrong one.' },
+      { sel: '#courses',
+        title: 'Your courses, by term',
+        body: 'Nexora opens on the term you are in. The dropdown up here switches to any other term you have imported.' },
+      { at: 'nav-grades',
+        title: 'Grades and outlines live here',
+        body: 'Pick a course and you get its official weighting, its pass rules, and every mark you have entered — so you always know where you stand.' },
+      { at: 'nav-calendar',
+        title: 'Your calendar',
+        body: 'Every deadline laid out by day. Add your own midterms and exams, and subscribe to it from Google Calendar.' },
+      { at: 'nav-study',
+        title: 'Study room',
+        body: 'A timer and a quiet place to work, with flashcards and practice questions generated from your own course material.' },
+      { title: 'That is the tour',
+        body: 'Connect Brightspace or Canvas next and the rest fills itself in. You can replay this any time from your profile.',
+        cta: { label: 'Connect my courses', href: '/connect-brightspace' } },
+    ];
+
+    const ring = $('#tourRing'), cardEl = $('#tourCard');
+    let at = 0;
+
+    const targetOf = step => {
+      if (step.at) return document.querySelector(`[data-tour="${step.at}"]`);
+      if (step.sel) return document.querySelector(step.sel);
+      return null;
+    };
+
+    // A step pointing at something this account has not got yet is dropped,
+    // rather than lighting an empty rectangle.
+    const live = STEPS.filter((step, i) => i === 0 || i === STEPS.length - 1 || targetOf(step));
+
+    function place(step) {
+      const target = targetOf(step);
+      const pad = 6;
+      if (!target || getComputedStyle(target).display === 'none' || !target.getBoundingClientRect().width) {
+        ring.className = 'center';
+        ring.style.cssText = 'top:50%;left:50%;width:0;height:0';
+        cardEl.style.top = '';
+        cardEl.style.left = '50%';
+        cardEl.style.transform = 'translate(-50%,-50%)';
+        cardEl.style.top = '50%';
+        return;
+      }
+      // Instant, not smooth: a smooth scroll is asynchronous, so the rect read
+      // on the next line would be the pre-scroll one and the ring would land
+      // next to the thing it is supposed to be lighting.
+      target.scrollIntoView({ block: 'center', behavior: 'auto' });
+      const r = target.getBoundingClientRect();
+      ring.className = '';
+      ring.style.top = `${r.top - pad}px`;
+      ring.style.left = `${r.left - pad}px`;
+      ring.style.width = `${r.width + pad * 2}px`;
+      ring.style.height = `${r.height + pad * 2}px`;
+
+      cardEl.style.transform = '';
+      const card = cardEl.getBoundingClientRect();
+      // Prefer the right of the target, then below it, then wherever fits.
+      let left = r.right + 16;
+      if (left + card.width > innerWidth - 12) left = Math.max(12, r.left);
+      let top = r.top;
+      if (top + card.height > innerHeight - 12) top = Math.max(12, innerHeight - card.height - 12);
+      cardEl.style.left = `${left}px`;
+      cardEl.style.top = `${top}px`;
+    }
+
+    function show(index) {
+      at = Math.max(0, Math.min(live.length - 1, index));
+      const step = live[at];
+      $('#tourStep').textContent = `Step ${at + 1} of ${live.length}`;
+      $('#tourTitle').textContent = step.title;
+      $('#tourBody').textContent = step.body;
+      $('#tourBack').hidden = at === 0;
+      $('#tourNext').textContent = step.cta ? step.cta.label : at === live.length - 1 ? 'Done' : 'Next';
+      $('#tourDots').replaceChildren(...live.map((_, i) => {
+        const dot = document.createElement('i');
+        if (i === at) dot.className = 'on';
+        return dot;
+      }));
+      place(step);
+      $('#tourNext').focus();
+    }
+
+    async function finish(go) {
+      tour.hidden = true;
+      document.body.style.overflow = '';
+      // Marked done on the server whether it was finished or skipped, so it
+      // does not reappear on the next visit or on another device.
+      try { await fetch('/api/tour', { method: 'POST' }); } catch (_) {}
+      if (go) location.href = go;
+    }
+
+    $('#tourNext').addEventListener('click', () => {
+      const step = live[at];
+      if (at === live.length - 1) return finish(step.cta?.href);
+      show(at + 1);
+    });
+    $('#tourBack').addEventListener('click', () => show(at - 1));
+    $('#tourSkip').addEventListener('click', () => finish());
+    addEventListener('keydown', e => {
+      if (tour.hidden) return;
+      if (e.key === 'Escape') { e.preventDefault(); finish(); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); $('#tourNext').click(); }
+      if (e.key === 'ArrowLeft' && at > 0) { e.preventDefault(); show(at - 1); }
+    });
+    const reposition = () => { if (!tour.hidden) place(live[at]); };
+    addEventListener('resize', reposition);
+    addEventListener('scroll', reposition, { passive: true });
+
+    tour.hidden = false;
+    document.body.style.overflow = 'hidden';
+    show(0);
+  }
 
   /* ---- which term is on screen ----
      Importing every term is a legitimate choice; opening on all of them is

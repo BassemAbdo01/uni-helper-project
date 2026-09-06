@@ -1,0 +1,635 @@
+{% extends "app_base.html" %}
+{% set nav_active = 'study_plan_page' %}
+{% block title %}Study plan — Nexora{% endblock %}
+
+{% block head %}
+<style>
+.two{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;align-items:start}
+@media (max-width:1000px){ .two{grid-template-columns:1fr} }
+
+.setup{padding:18px}
+.drop{border:1px dashed var(--line-2);border-radius:9px;padding:16px;background:var(--surface-2)}
+.drop input[type=file]{width:100%;padding:10px 12px;border-radius:6px;border:1px dashed var(--line-2);
+  background:var(--surface);color:var(--fg-2);font:inherit;font-size:13px}
+.drop input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border-radius:4px;
+  border:1px solid var(--line-2);background:var(--surface-3);color:var(--fg);font:inherit;
+  font-size:12.5px;cursor:pointer}
+.hint{color:var(--fg-2);font-size:13px;line-height:1.6;margin:0 0 14px}
+.warn{border-left:2px solid var(--amber);padding:11px 13px;background:var(--surface-2);
+  border-radius:0 7px 7px 0;font-size:12.5px;color:var(--fg-2);line-height:1.55;margin:14px 0 0}
+
+/* ---- the week ---- */
+.week{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);
+  border-radius:9px;overflow:hidden}
+.wrow{display:grid;grid-template-columns:88px minmax(0,1fr);background:var(--surface);min-height:56px}
+.wrow .wd{padding:11px 12px;font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--fg-3);border-right:1px solid var(--line)}
+.wrow .wb{padding:9px 10px;display:flex;flex-wrap:wrap;gap:6px;align-items:flex-start}
+.chip{display:inline-flex;align-items:baseline;gap:7px;padding:6px 9px;border-radius:6px;
+  background:var(--surface-2);border:1px solid var(--line);font-size:12.5px;max-width:100%}
+.chip b{font-weight:500}
+.chip span{font-family:var(--mono);font-size:10px;color:var(--fg-3);letter-spacing:.04em}
+.chip.lab{border-color:rgba(120,146,200,.4)}
+.chip.tutorial{border-color:rgba(127,176,138,.4)}
+.chip button{background:none;border:0;color:var(--fg-3);cursor:pointer;font:inherit;padding:0 0 0 2px}
+.chip button:hover{color:#C9705C}
+.empty-row{color:var(--fg-3);font-size:12.5px;padding:4px 2px}
+
+/* ---- sessions ---- */
+.day{margin-bottom:16px}
+.dayhead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  padding:0 2px 8px}
+.dayhead h3{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--fg-3);margin:0;font-weight:400}
+.dayhead b{font-size:12px;color:var(--fg-3);font-weight:400}
+.sess{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:13px;align-items:start;
+  padding:13px 14px;border:1px solid var(--line);border-radius:9px;background:var(--surface);
+  margin-bottom:7px}
+.sess.done{opacity:.55}
+.sess.done .who{text-decoration:line-through}
+.sess.skipped{opacity:.45;border-style:dashed}
+.sess .when{font-family:var(--mono);font-size:11.5px;color:var(--amber);letter-spacing:.02em;
+  padding-top:2px}
+.sess .when small{display:block;color:var(--fg-3);font-size:10px;margin-top:3px;letter-spacing:.06em}
+.sess .who{display:block;font-size:14px;font-weight:500}
+.sess .what{display:block;color:var(--fg-2);font-size:13px;line-height:1.5;margin-top:4px}
+.sess .why{display:block;color:var(--fg-3);font-family:var(--mono);font-size:10px;margin-top:6px;
+  letter-spacing:.04em}
+.sess .acts{display:flex;flex-direction:column;gap:5px}
+.sess .acts button{border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);
+  color:var(--fg-2);font:inherit;font-size:11.5px;padding:5px 9px;cursor:pointer;white-space:nowrap}
+.sess .acts button:hover{border-color:var(--fg-3);color:var(--fg)}
+.sess .acts button.on{border-color:var(--amber);color:var(--amber)}
+
+.prefs label{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--fg-3);margin:0 0 5px}
+.prefs .field{margin-bottom:13px}
+.prefs input,.prefs select{width:100%;background:var(--surface-2);border:1px solid var(--line-2);
+  color:var(--fg);padding:8px 10px;border-radius:6px;font:inherit;font-size:13px}
+.prefs input:focus,.prefs select:focus{outline:none;border-color:var(--amber)}
+.prefs .pair{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.offdays{display:flex;flex-wrap:wrap;gap:6px}
+.offdays label{display:inline-flex;align-items:center;gap:5px;margin:0;font-family:inherit;
+  font-size:12px;letter-spacing:0;text-transform:none;color:var(--fg-2);
+  border:1px solid var(--line);border-radius:6px;padding:5px 8px;cursor:pointer}
+.offdays label:has(input:checked){border-color:var(--amber);color:var(--fg)}
+.offdays input{width:auto;accent-color:var(--amber)}
+.status{font-size:12.5px;color:var(--fg-2);min-height:1.2em;margin:10px 0 0;line-height:1.5}
+.status.bad{color:#C9705C}
+.status.good{color:#7FB08A}
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="top">
+  <div>
+    <p class="eyebrow">Built around your week</p>
+    <h1>Study plan</h1>
+    <p class="lede">
+      Nexora knows when you are in class, what is due, and what each piece is worth.
+      It puts the hours where they move your grade &mdash; not evenly across courses.
+    </p>
+  </div>
+  <div class="actions">
+    <button class="btn quiet" id="readOutlines" type="button">Read my outlines for topics</button>
+    <button class="btn" id="regen" type="button">Build my plan</button>
+  </div>
+</div>
+
+<div class="two">
+  <div>
+    <section class="card" id="planCard">
+      <header>
+        <div><span class="k">The plan</span><h2>Next two weeks</h2></div>
+        <span class="k" style="margin:0" id="planCount"></span>
+      </header>
+      <div class="body pad" id="planBody"></div>
+    </section>
+
+    <section class="card">
+      <header>
+        <div><span class="k">Your week</span><h2>Timetable</h2></div>
+        <span class="k" style="margin:0" id="blockCount"></span>
+      </header>
+      <div class="body pad setup">
+        <p class="hint" id="timetableHint"></p>
+
+        <div class="drop">
+          <label for="ttFiles" style="display:block;font-family:var(--mono);font-size:9px;
+                 letter-spacing:.14em;text-transform:uppercase;color:var(--fg-3);margin-bottom:7px">
+            Upload your timetable (screenshot, PDF or document)
+          </label>
+          <input id="ttFiles" type="file" multiple
+                 accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.txt,image/png,image/jpeg,image/webp"
+                 aria-label="Your weekly timetable file">
+          <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:11px">
+            <button class="btn sm" id="ttRead" type="button">Read my timetable</button>
+            <button class="btn quiet sm" id="ttManual" type="button">Add a class by hand</button>
+          </div>
+          <p class="status" id="ttStatus" role="status"></p>
+        </div>
+
+        <div id="proposed" hidden style="margin-top:16px">
+          <div class="week" id="proposedWeek"></div>
+          <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:12px">
+            <button class="btn sm" id="ttConfirm" type="button">These are right &mdash; save them</button>
+            <button class="btn quiet sm" id="ttDiscard" type="button">Discard</button>
+          </div>
+          <p class="warn" id="proposedNotice"></p>
+        </div>
+
+        <div class="week" id="week" style="margin-top:16px"></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="card prefs">
+    <header><div><span class="k">Ground rules</span><h2>When you work</h2></div></header>
+    <div class="body pad">
+      <div class="pair">
+        <div class="field">
+          <label for="pEarliest">Not before</label>
+          <input id="pEarliest" type="time">
+        </div>
+        <div class="field">
+          <label for="pLatest">Not after</label>
+          <input id="pLatest" type="time">
+        </div>
+      </div>
+
+      <div class="pair">
+        <div class="field">
+          <label for="pSession">Session length</label>
+          <select id="pSession">
+            <option value="25">25 min</option>
+            <option value="30">30 min</option>
+            <option value="45">45 min</option>
+            <option value="50">50 min</option>
+            <option value="60">60 min</option>
+            <option value="90">90 min</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="pBreak">Break between</label>
+          <select id="pBreak">
+            <option value="0">None</option>
+            <option value="5">5 min</option>
+            <option value="10">10 min</option>
+            <option value="15">15 min</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="pair">
+        <div class="field">
+          <label for="pDaily">Most per day</label>
+          <select id="pDaily">
+            <option value="60">1 hour</option>
+            <option value="120">2 hours</option>
+            <option value="180">3 hours</option>
+            <option value="240">4 hours</option>
+            <option value="300">5 hours</option>
+            <option value="360">6 hours</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="pBuffer">Around a class</label>
+          <select id="pBuffer">
+            <option value="0">No gap</option>
+            <option value="15">15 min</option>
+            <option value="30">30 min</option>
+            <option value="45">45 min</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Days you keep clear</label>
+        <div class="offdays" id="offdays">
+          {% for name in weekdays %}
+            <label><input type="checkbox" value="{{ loop.index0 }}">{{ name[:3] }}</label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <button class="btn quiet sm" id="prefSave" type="button">Save and rebuild</button>
+      <p class="status" id="prefStatus" role="status"></p>
+    </div>
+  </section>
+</div>
+
+<dialog class="sheet" id="classSheet">
+  <form id="classForm">
+    <h2 id="classSheetTitle">Add a class</h2>
+    <div>
+      <label for="cLabel">What is it</label>
+      <input id="cLabel" maxlength="200" placeholder="BIOL 1103 Lecture" required>
+    </div>
+    <div class="pair">
+      <div>
+        <label for="cDay">Day</label>
+        <select id="cDay">
+          {% for name in weekdays %}<option value="{{ loop.index0 }}">{{ name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="cKind">Type</label>
+        <select id="cKind">
+          <option value="lecture">Lecture</option>
+          <option value="lab">Lab</option>
+          <option value="tutorial">Tutorial</option>
+          <option value="seminar">Seminar</option>
+          <option value="work">Work shift</option>
+          <option value="commute">Commute</option>
+          <option value="other">Something else</option>
+        </select>
+      </div>
+    </div>
+    <div class="pair">
+      <div>
+        <label for="cStart">Starts</label>
+        <input id="cStart" type="time" required>
+      </div>
+      <div>
+        <label for="cEnd">Ends</label>
+        <input id="cEnd" type="time" required>
+      </div>
+    </div>
+    <div class="pair">
+      <div>
+        <label for="cCourse">Course</label>
+        <select id="cCourse">
+          <option value="">No course</option>
+          {% for code in courses %}<option value="{{ code }}">{{ code }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="cWhere">Where</label>
+        <input id="cWhere" maxlength="255" placeholder="Southam Hall">
+      </div>
+    </div>
+    <p class="err" id="cError" role="alert"></p>
+    <div class="row">
+      <span class="spacer"></span>
+      <button type="button" id="cCancel">Cancel</button>
+      <button type="submit" class="primary" id="cSave">Save</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<style>
+/* The editor dialog borrows the calendar's shape; kept here rather than in the
+   shared sheet because only these two pages have one. */
+dialog.sheet{border:1px solid var(--line-2);border-radius:12px;background:var(--surface);
+  color:var(--fg);padding:0;width:min(440px,calc(100vw - 32px));box-shadow:0 24px 70px #00000066}
+dialog.sheet::backdrop{background:#0B0908cc}
+.sheet form{padding:20px 22px 18px;display:grid;gap:13px}
+.sheet h2{font-family:var(--serif);font-weight:400;font-size:1.25rem;margin:0}
+.sheet label{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--fg-3);margin-bottom:5px}
+.sheet input,.sheet select{width:100%;background:var(--surface-2);border:1px solid var(--line-2);
+  color:var(--fg);padding:9px 11px;border-radius:6px;font:inherit;font-size:13.5px}
+.sheet input:focus,.sheet select:focus{outline:none;border-color:var(--amber)}
+.sheet .pair{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.sheet .row{display:flex;gap:9px;align-items:center;margin-top:4px}
+.sheet .row .spacer{flex:1}
+.sheet button{border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);
+  color:var(--fg-2);font:inherit;font-size:13px;padding:9px 14px;cursor:pointer}
+.sheet button:hover{border-color:var(--fg-3);color:var(--fg)}
+.sheet button.primary{background:var(--amber);border-color:var(--amber);color:#140F09;font-weight:600}
+.sheet .err{color:#C9705C;font-size:12.5px;min-height:1em}
+</style>
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const DAYS = {{ weekdays|tojson }};
+
+  // Everything that reaches the DOM here came out of a timetable file or an
+  // LMS, so it is set as text and never concatenated into markup.
+  let blocks = {{ blocks|tojson }};
+  let sessions = {{ sessions|tojson }};
+  let prefs = {{ preferences|tojson }};
+  let proposed = [];
+
+  const clock = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const setStatus = (el, text, kind = '') => { el.className = `status ${kind}`; el.textContent = text; };
+
+  async function call(url, options) {
+    const res = await fetch(url, options);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'That did not work.');
+    return data;
+  }
+
+  /* ---------------- the timetable ---------------- */
+  function weekInto(host, list, editable) {
+    const frag = document.createDocumentFragment();
+    DAYS.forEach((name, index) => {
+      const row = document.createElement('div');
+      row.className = 'wrow';
+      const label = document.createElement('div');
+      label.className = 'wd';
+      label.textContent = name.slice(0, 3);
+      const body = document.createElement('div');
+      body.className = 'wb';
+      const mine = list.filter(b => Number(b.weekday) === index)
+                       .sort((a, b) => a.start - b.start);
+      if (!mine.length) {
+        const none = document.createElement('span');
+        none.className = 'empty-row';
+        none.textContent = 'Free';
+        body.append(none);
+      }
+      for (const block of mine) {
+        const chip = document.createElement('span');
+        chip.className = `chip ${block.kind || ''}`;
+        const who = document.createElement('b');
+        who.textContent = block.label;
+        const when = document.createElement('span');
+        when.textContent = `${block.start_label || clock(block.start)}–${block.end_label || clock(block.end)}`
+          + (block.location ? ` · ${block.location}` : '');
+        chip.append(who, when);
+        if (editable) {
+          const drop = document.createElement('button');
+          drop.type = 'button';
+          drop.textContent = '×';
+          drop.setAttribute('aria-label', `Remove ${block.label}`);
+          drop.onclick = async () => {
+            try {
+              await call(`/api/timetable/${encodeURIComponent(block.id)}`, { method: 'DELETE' });
+              blocks = blocks.filter(b => b.id !== block.id);
+              renderTimetable();
+            } catch (err) { setStatus($('ttStatus'), err.message, 'bad'); }
+          };
+          chip.append(drop);
+        }
+        body.append(chip);
+      }
+      row.append(label, body);
+      frag.append(row);
+    });
+    host.replaceChildren(frag);
+  }
+
+  function renderTimetable() {
+    weekInto($('week'), blocks, true);
+    $('blockCount').textContent = blocks.length
+      ? `${blocks.length} class${blocks.length === 1 ? '' : 'es'}`
+      : 'nothing yet';
+    $('timetableHint').textContent = blocks.length
+      ? 'Nexora plans around these. Remove anything that has changed, and add work shifts or a commute too — they block study time exactly the same way.'
+      : 'Upload your timetable and Nexora will read the classes out of it. Check them before saving: a wrong class time quietly moves every study block for the rest of term.';
+  }
+
+  $('ttRead').onclick = async () => {
+    const files = [...$('ttFiles').files];
+    if (!files.length) return setStatus($('ttStatus'), 'Choose your timetable file first.', 'bad');
+    const form = new FormData();
+    files.forEach(f => form.append('files', f));
+    setStatus($('ttStatus'), 'Reading your timetable…');
+    $('ttRead').disabled = true;
+    try {
+      const data = await call('/api/timetable/analyze', { method: 'POST', body: form });
+      proposed = data.blocks || [];
+      weekInto($('proposedWeek'), proposed, false);
+      $('proposedNotice').textContent = data.notice || '';
+      $('proposed').hidden = false;
+      setStatus($('ttStatus'), `Found ${proposed.length} class${proposed.length === 1 ? '' : 'es'}. Check them below.`, 'good');
+    } catch (err) {
+      setStatus($('ttStatus'), err.message, 'bad');
+    } finally {
+      $('ttRead').disabled = false;
+    }
+  };
+
+  $('ttDiscard').onclick = () => { proposed = []; $('proposed').hidden = true; setStatus($('ttStatus'), ''); };
+
+  $('ttConfirm').onclick = async () => {
+    if (!proposed.length) return;
+    try {
+      const data = await call('/api/timetable', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blocks: proposed, replace: true }),
+      });
+      blocks = data.blocks || [];
+      proposed = [];
+      $('proposed').hidden = true;
+      renderTimetable();
+      setStatus($('ttStatus'), 'Saved. Building your plan…', 'good');
+      await regenerate();
+    } catch (err) { setStatus($('ttStatus'), err.message, 'bad'); }
+  };
+
+  /* ---------------- one class by hand ---------------- */
+  const sheet = $('classSheet');
+  $('ttManual').onclick = () => {
+    $('cError').textContent = '';
+    $('classForm').reset();
+    $('cStart').value = '09:00';
+    $('cEnd').value = '10:00';
+    sheet.showModal();
+    $('cLabel').focus();
+  };
+  $('cCancel').onclick = () => sheet.close();
+  $('classForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    try {
+      const data = await call('/api/timetable', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: $('cLabel').value, weekday: $('cDay').value, start: $('cStart').value,
+          end: $('cEnd').value, kind: $('cKind').value, course: $('cCourse').value,
+          location: $('cWhere').value,
+        }),
+      });
+      blocks.push(data.block);
+      renderTimetable();
+      sheet.close();
+    } catch (err) { $('cError').textContent = err.message; }
+  });
+
+  /* ---------------- the plan ---------------- */
+  function renderPlan() {
+    const host = $('planBody');
+    if (!sessions.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      const head = document.createElement('strong');
+      head.textContent = blocks.length ? 'No plan yet' : 'Add your timetable first';
+      empty.append(head, document.createTextNode(blocks.length
+        ? 'Press "Build my plan" and Nexora will lay out the next two weeks.'
+        : 'Nexora needs to know when you are in class before it can find your free time.'));
+      host.replaceChildren(empty);
+      $('planCount').textContent = '';
+      return;
+    }
+
+    const byDay = new Map();
+    for (const s of sessions) {
+      if (!byDay.has(s.date)) byDay.set(s.date, []);
+      byDay.get(s.date).push(s);
+    }
+    const frag = document.createDocumentFragment();
+    for (const [iso, list] of byDay) {
+      const day = document.createElement('div');
+      day.className = 'day';
+      const head = document.createElement('div');
+      head.className = 'dayhead';
+      const when = document.createElement('h3');
+      const dayDate = new Date(iso + 'T00:00:00');
+      when.textContent = iso === {{ today_iso|tojson }}
+        ? `Today · ${dayDate.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}`
+        : dayDate.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+      const total = document.createElement('b');
+      const minutes = list.reduce((n, s) => n + s.minutes, 0);
+      total.textContent = `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
+      head.append(when, total);
+      day.append(head);
+
+      for (const s of list) {
+        const row = document.createElement('div');
+        row.className = `sess ${s.state}`;
+        const when2 = document.createElement('div');
+        when2.className = 'when';
+        when2.textContent = `${s.start_label}`;
+        const dur = document.createElement('small');
+        dur.textContent = `${s.minutes} min`;
+        when2.append(dur);
+
+        const mid = document.createElement('div');
+        const who = document.createElement('span');
+        who.className = 'who';
+        who.textContent = s.course && s.course !== 'OTHER' ? `${s.course} · ${s.title}` : s.title;
+        const what = document.createElement('span');
+        what.className = 'what';
+        what.textContent = s.focus;
+        const why = document.createElement('span');
+        why.className = 'why';
+        why.textContent = s.reason;
+        mid.append(who, what, why);
+
+        const acts = document.createElement('div');
+        acts.className = 'acts';
+        for (const [state, label] of [['done', 'Done'], ['skipped', 'Skip']]) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = label;
+          if (s.state === state) button.classList.add('on');
+          button.onclick = async () => {
+            const next = s.state === state ? 'planned' : state;
+            try {
+              const data = await call(`/api/study-plan/${encodeURIComponent(s.id)}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ state: next }),
+              });
+              Object.assign(s, data.session);
+              renderPlan();
+            } catch (_) { /* the row simply stays as it was */ }
+          };
+          acts.append(button);
+        }
+        row.append(when2, mid, acts);
+        day.append(row);
+      }
+      frag.append(day);
+    }
+    host.replaceChildren(frag);
+    const hours = sessions.reduce((n, s) => n + s.minutes, 0) / 60;
+    const left = sessions.filter(s => s.state === 'planned').length;
+    $('planCount').textContent = `${hours.toFixed(1)}h planned · ${left} to go`;
+  }
+
+  async function regenerate() {
+    $('regen').disabled = true;
+    $('regen').textContent = 'Building…';
+    try {
+      const data = await call('/api/study-plan/generate', { method: 'POST' });
+      sessions = data.sessions || [];
+      renderPlan();
+      if (!sessions.length && data.reason) setStatus($('prefStatus'), data.reason, 'bad');
+      else setStatus($('prefStatus'), '');
+    } catch (err) {
+      setStatus($('prefStatus'), err.message, 'bad');
+    } finally {
+      $('regen').disabled = false;
+      $('regen').textContent = 'Rebuild my plan';
+    }
+  }
+  $('regen').onclick = regenerate;
+
+  /* ---- the outlines' own words ----
+     The one part of this page that costs a Gemini call, which is why it is a
+     separate button and cached afterwards: the topics an assessment covers do
+     not change between two rebuilds of the same week. */
+  $('readOutlines').onclick = async () => {
+    const button = $('readOutlines');
+    button.disabled = true;
+    const was = button.textContent;
+    button.textContent = 'Reading…';
+    setStatus($('prefStatus'), 'Reading your course outlines for what each assessment covers…');
+    try {
+      const data = await call('/api/study-plan/brief', { method: 'POST' });
+      const total = (data.read || []).reduce((n, r) => n + r.assessments, 0);
+      setStatus($('prefStatus'),
+        `Read ${data.read.length} outline${data.read.length === 1 ? '' : 's'} · ${total} assessments now name their topics.`
+        + (data.notice ? ` ${data.notice}` : ''), 'good');
+      await regenerate();
+    } catch (err) {
+      setStatus($('prefStatus'), err.message, 'bad');
+    } finally {
+      button.disabled = false;
+      button.textContent = was;
+    }
+  };
+
+  /* ---------------- ground rules ---------------- */
+  function fillPrefs() {
+    $('pEarliest').value = clock(prefs.earliest_min);
+    $('pLatest').value = clock(prefs.latest_min);
+    for (const [id, value] of [['pSession', prefs.session_min], ['pBreak', prefs.break_min],
+                               ['pDaily', prefs.max_daily_min], ['pBuffer', prefs.buffer_min]]) {
+      const select = $(id);
+      select.value = [...select.options].some(o => Number(o.value) === Number(value))
+        ? String(value) : select.options[Math.floor(select.options.length / 2)].value;
+    }
+    for (const box of $('offdays').querySelectorAll('input')) {
+      box.checked = prefs.days_off.includes(Number(box.value));
+    }
+  }
+
+  const minutesOf = value => {
+    const [h, m] = String(value || '').split(':');
+    return Number(h) * 60 + Number(m || 0);
+  };
+
+  $('prefSave').onclick = async () => {
+    setStatus($('prefStatus'), 'Saving…');
+    try {
+      const data = await call('/api/study-preferences', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          earliest_min: minutesOf($('pEarliest').value),
+          latest_min: minutesOf($('pLatest').value),
+          session_min: Number($('pSession').value),
+          break_min: Number($('pBreak').value),
+          max_daily_min: Number($('pDaily').value),
+          buffer_min: Number($('pBuffer').value),
+          days_off: [...$('offdays').querySelectorAll('input:checked')].map(b => Number(b.value)),
+        }),
+      });
+      prefs = data.preferences;
+      fillPrefs();
+      await regenerate();
+    } catch (err) { setStatus($('prefStatus'), err.message, 'bad'); }
+  };
+
+  fillPrefs();
+  renderTimetable();
+  renderPlan();
+  if (sessions.length) $('regen').textContent = 'Rebuild my plan';
+})();
+</script>
+{% endblock %}
