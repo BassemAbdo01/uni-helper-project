@@ -34,6 +34,10 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .result.pass{border-color:rgba(127,176,138,.45)}
 .result.pass .pct{color:var(--green)}
 .result.fail{border-color:rgba(201,112,92,.45)}
+/* With nothing entered, a result readout showing "—" is not a result. It sat
+   above the component list's own empty state, so the page opened with two
+   empty states stacked and read as two broken things. */
+.result[hidden]{display:none}
 .result.fail .pct{color:var(--red)}
 .result.empty .pct,.result.empty .letter{color:var(--fg-3)}
 
@@ -98,6 +102,13 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .alert.show{display:block}
 .meta{display:none;margin-top:16px}
 .meta.show{display:block}
+/* #courseState is toggled with el.hidden, not a class -- and it shipped with
+   `show` already on it, so `.meta.show{display:block}` out-ranked [hidden] and
+   left an empty bordered box sitting under the course picker for ever. The id
+   beats .meta.show, and the [hidden] rule beats the id. #analysisMeta still
+   uses the class, which is why both mechanisms have to keep working. */
+#courseState{display:block;margin-top:16px}
+#courseState[hidden]{display:none}
 
 /* ---- course mode ---- */
 #coursePick{width:100%;background:var(--surface-2);border:1px solid var(--line-2);color:var(--fg);
@@ -153,14 +164,21 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       <label for="coursePick">Your courses</label>
       <select id="coursePick">
         <option value="">Any outline — nothing saved</option>
-        {% for c in courses %}
-          <option value="{{ c.code }}"{% if c.code == requested_course %} selected{% endif %}>
-            {{ c.code }}{% if c.name and c.name != c.code %} — {{ c.name|truncate(48) }}{% endif %}{% if c.term %} ({{ c.term }}){% endif %}{% if not c.analyzed %} · outline not read yet{% endif %}
-          </option>
+        {# Grouped by term, this semester first. A flat list of every course a
+           student has ever taken is unusable by second year. The term is the
+           group heading, so it is not repeated on every row. #}
+        {% for group in course_groups %}
+          <optgroup label="{{ group.label }}">
+            {% for c in group.courses %}
+              <option value="{{ c.code }}"{% if c.code == requested_course %} selected{% endif %}>
+                {{ c.code }}{% if c.name and c.name != c.code %} — {{ c.name|truncate(44) }}{% endif %}{% if not c.analyzed %} · outline not read yet{% endif %}
+              </option>
+            {% endfor %}
+          </optgroup>
         {% endfor %}
       </select>
     </div>
-    <p class="note meta show" id="courseState" hidden></p>
+    <p class="note" id="courseState" hidden></p>
   </div>
 </section>
 
@@ -679,8 +697,12 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       const empty = document.createElement('div');
       empty.className = 'empty';
       const head = document.createElement('strong');
-      head.textContent = 'No assessments yet';
-      empty.append(head, document.createTextNode('Analyze an outline, or add one by hand.'));
+      // The standing panel directly above already says "Nothing entered yet"
+      // and what to do about it. Two empty states stacked on one screen read
+      // as two things being broken rather than one thing not started.
+      head.textContent = 'No assessments here yet';
+      empty.append(head, document.createTextNode(
+        'Upload the outline above and Nexora fills this in, or use + Add item.'));
       box.replaceChildren(empty);
       calculate();
       return;
@@ -721,6 +743,9 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 
   function calculate() {
     document.querySelectorAll('#components .comp').forEach(el => el.refresh && el.refresh());
+
+    // Nothing to report a standing for until there is at least one assessment.
+    $('result').hidden = !components.length;
 
     const t = totals();
 
@@ -785,8 +810,19 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       return;
     }
     if (t.remainingWeight <= 0) {
+      // "Nothing left to need" on its own ignored the number the student had
+      // just typed, so it read as the box not working. Answer the question they
+      // asked: is the target still possible, yes or no.
+      const finished = t.gradedWeight > 0 ? t.earnedPoints / t.gradedWeight * 100 : 0;
       say('Everything is marked, so there is nothing left to need. You finished at ',
-          bold(`${(t.gradedWeight > 0 ? t.earnedPoints / t.gradedWeight * 100 : 0).toFixed(2)}%`), '.');
+          bold(`${finished.toFixed(2)}%`), '.');
+      if (target > finished + 0.005) {
+        el.className = 'answer bad';
+        say(' ', bold(`${target}%`), ' is no longer reachable — every assessment is in.');
+      } else if (target > 0) {
+        el.className = 'answer good';
+        say(' That is at or above your ', bold(`${target}%`), ' target.');
+      }
       return;
     }
 

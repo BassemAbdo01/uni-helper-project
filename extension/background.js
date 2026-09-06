@@ -115,6 +115,55 @@ async function resumeSyncIfDropped() {
   catch (_) { /* setStatus in runSyncAllCourses has already recorded why */ }
 }
 
+// Chrome tears the popup down the instant the permission prompt appears, so the
+// `await chrome.permissions.request(...)` in popup.js never resumes. The
+// student pressed Allow, saw nothing happen, and had to open the popup and
+// press Import a second time -- on the very first thing anyone does with this
+// extension. The popup writes down what it was about to do; this finishes it.
+const PENDING_IMPORT_MS = 5 * 60 * 1000;
+
+chrome.permissions.onAdded.addListener(added => {
+  finishPendingImport(added).catch(() => {});
+});
+
+async function finishPendingImport(added) {
+  const { pendingImport } = await chrome.storage.local.get('pendingImport');
+  if (!pendingImport?.origin) return;
+  if (Date.now() - Number(pendingImport.at || 0) > PENDING_IMPORT_MS) {
+    await chrome.storage.local.remove('pendingImport');
+    return;
+  }
+  // Only act on the grant we actually asked for. Chrome fires this for any
+  // permission the student adds, including from the extensions page.
+  const origins = added?.origins || [];
+  if (origins.length && !origins.some(o => String(o).startsWith(pendingImport.origin))) return;
+
+  // Claim it before doing anything: on the platforms where the popup survives
+  // the prompt, it is racing us, and two concurrent runs would walk every
+  // course twice against the university's servers.
+  await chrome.storage.local.remove('pendingImport');
+  const { syncStatus } = await chrome.storage.local.get('syncStatus');
+  if (syncStatus?.running) return;
+
+  holdWorkerAwake();
+  try {
+    if (pendingImport.kind === 'canvas') {
+      await setStatus({ running: true, phase: 'finding-courses', error: '' });
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      await syncCanvasThroughSession(tab);
+      return;
+    }
+    await chrome.storage.sync.set({ brightspaceOrigin: pendingImport.origin });
+    await setStatus({ running: true, phase: 'finding-courses', error: '' });
+    await discoverCourses();
+    await syncAllCourses('permission-granted');
+  } catch (error) {
+    await setStatus({ running: false, phase: 'error', error: error?.message || String(error) });
+  } finally {
+    releaseWorker();
+  }
+}
+
 async function notify(title, message) {
   // The popup is usually gone by the time a sync finishes; without this the
   // student has no way to know it worked.

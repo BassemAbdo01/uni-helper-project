@@ -274,16 +274,28 @@ $('go').onclick = async () => {
     // Chrome only grants an optional permission from a user gesture, which is
     // this click.
     if (state.needsPermission && state.origin) {
+      // Same as the Brightspace path: the prompt closes this popup, so the
+      // worker has to be able to finish without it.
+      await chrome.storage.local.set({
+        pendingImport: { kind: 'canvas', origin: state.origin, at: Date.now() }
+      });
+      busy(true);
+      say('Waiting for Chrome to grant access to your Canvas…');
       let granted = false;
       try { granted = await chrome.permissions.request({ origins: [`${state.origin}/*`] }); }
       catch (error) {
+        await chrome.storage.local.remove('pendingImport');
+        busy(false);
         say(`Chrome refused the permission request: ${error?.message || error}`, 'bad');
         return;
       }
       if (!granted) {
+        await chrome.storage.local.remove('pendingImport');
+        busy(false);
         say('Without permission for that page Nexora cannot read your Canvas.', 'bad');
         return;
       }
+      await chrome.storage.local.remove('pendingImport');
     }
 
     busy(true);
@@ -320,17 +332,33 @@ $('go').onclick = async () => {
   // Asking for the university's domain has to happen on this click: Chrome
   // only grants an optional permission from a user gesture.
   if (state.needsPermission && state.origin) {
+    // Chrome usually destroys this popup the moment the prompt appears, so the
+    // line after the await may never run. Write the intent down first and the
+    // service worker's permissions.onAdded finishes the import -- otherwise
+    // pressing Allow appeared to do nothing at all.
+    await chrome.storage.local.set({
+      pendingImport: { kind: 'brightspace', origin: state.origin, at: Date.now() }
+    });
+    busy(true);
+    say('Waiting for Chrome to grant access to your university…');
     let granted = false;
     try {
       granted = await chrome.permissions.request({ origins: [`${state.origin}/*`] });
     } catch (error) {
+      await chrome.storage.local.remove('pendingImport');
+      busy(false);
       say(`Chrome refused the permission request: ${error?.message || error}`, 'bad');
       return;
     }
     if (!granted) {
+      await chrome.storage.local.remove('pendingImport');
+      busy(false);
       say('Without permission for that page Nexora cannot read your courses.', 'bad');
       return;
     }
+    // This popup survived, so take the job back off the worker and run it here
+    // where the student can watch it.
+    await chrome.storage.local.remove('pendingImport');
     await chrome.runtime.sendMessage({ type: 'NEXORA_SET_ORIGIN', origin: state.origin });
   }
 

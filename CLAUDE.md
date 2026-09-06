@@ -362,6 +362,32 @@ is read as a percentage by `_parse_mark_entry` -- correct for the single-field
 entry it was built for, wrong for the two boxes here, where 4 out of 20 was
 stored as 4%.
 
+**"Final Lab Exam" is not the final exam.** `final` matches it, and BIOL 1103
+has both. Every matching row was excluded from the term-work total and the last
+one won the `final_row` slot, so the required-final solver worked against the
+12% lab exam while treating the 20% final as unmarked and assuming 100% on it.
+`_pick_final_row(rows)` now chooses once, up front, by score — exact "Final
+Exam" beats "final exam" without "lab", beats "final" without "lab", beats
+anything else with "final" in it — with ties going to the heavier component,
+and `is_final` is then identity against that choice rather than a regex per
+row. A course with a lecture final and a lab final is ordinary; only one of
+them is what "what do I need on the final" means.
+
+`_evaluate_option` still has the same blind spot on the multi-option path
+(`'final' in source.lower()` applies the hypothetical mark to every component
+containing the word). Left alone deliberately — that path carries eligibility
+and selection rules, and there is no corpus case for two finals inside an
+alternative scheme.
+
+**A required mark above 100% is not advice.** The panel printed "You need
+158.33% on the final exam" — the right answer to the wrong question, and the
+student reported it as the page being broken. `_compute_official_result` now
+also returns `max_with_perfect_final`, so both front ends can say "91% is out
+of reach; even 100% on the final finishes at 79%". The grade calculator had the
+mirror-image failure: with everything marked it said "nothing left to need" and
+ignored the target just typed, so the box looked dead. It answers the target
+now, reachable or not.
+
 The course workspace still owns the same data and is untouched, on Bassem's
 call: it is the riskiest file in the repo and this change is about where
 things live, not how they are calculated. Remove its outline/grades tabs only
@@ -498,9 +524,33 @@ Selectors in the shared sheet use `:where()` so page rules can override them. A
 chain of `:not()` raises specificity and silently out-ranks the page — that is
 why the grade calculator's readonly field once rendered as a white browser box.
 
+**A class that sets `display` out-ranks `[hidden]`.** `#courseState` shipped as
+`class="note meta show" hidden`, and `.meta.show{display:block}` beat the
+attribute, so an empty bordered box sat under the course picker for ever. The
+element is toggled with `el.hidden` while its sibling `#analysisMeta` uses the
+class, so both mechanisms have to keep working: the id rule carries the display
+and `#courseState[hidden]` out-ranks it. When an element is toggled with
+`el.hidden`, never give it a class that sets `display`.
+
+**Two empty states on one screen read as two broken things.** The calculator
+opened with a result panel showing "—" above the component list's own "No
+assessments yet". The result panel is hidden until there is something to report.
+
 The palette is a single neutral ramp. Cards must be visibly lighter than the page
 behind them; the first pass sat everything within nine points of black and had to
 be lifted wholesale.
+
+## One definition of what term a course is in
+
+`_term_meta`, `_term_label`, `_term_sort_key` and `_current_term_label` are
+module-level. `_term_meta` was a closure inside `home()`, so the grade
+calculator listed every course a student had ever taken in one flat dropdown —
+thirty-three rows by third year, with no way to find this semester's. The picker
+renders `<optgroup>`s now, newest term first with the current term promoted to
+the top, and the term is the group heading rather than a suffix on every row.
+
+Two screens grouping courses by different rules is the same class of bug as two
+screens disagreeing about a grade. Keep one definition.
 
 ## The two LMS integrations
 
@@ -567,6 +617,14 @@ the student grants for their own origin.
 - **Course discovery uses the enrolments API, not the DOM.** The My Courses
   widget renders one term tab at a time, so scraping returns whichever term
   happens to be mounted. The DOM is merged in for images and as a fallback.
+- **The permission prompt destroys the popup.** `await
+  chrome.permissions.request(...)` never resumes: the student pressed Allow, saw
+  nothing happen, and had to reopen the popup and press Import again — on the
+  first thing anyone ever does with this extension. The popup writes
+  `pendingImport` to storage *before* asking, and the worker's
+  `chrome.permissions.onAdded` finishes the job; whichever side gets there first
+  removes the key, so a popup that does survive cannot start a second run. The
+  popup already renders a `running` state, so reopening it shows progress.
 - **A Manifest V3 worker is collected after ~30s without an event**, and a sync
   runs for minutes. `holdWorkerAwake()` / `releaseWorker()` bracket long work;
   without them, clicking away kills the sync mid-run.

@@ -260,6 +260,48 @@ login_manager.login_view = "login"
 AUTO_SYNC_MINUTES = 30
 
 
+# Which academic term a course belongs to, and how terms sort. Brightspace
+# terms arrive human-readable ("Winter 2026") or as D2L codes ("2026.10").
+# This lived inside home() and the grade calculator then listed every course a
+# student had ever taken in one flat dropdown -- thirty-one rows for a full
+# degree, with no way to find this semester's. Two screens grouping courses by
+# different rules is the same class of bug as two screens disagreeing about a
+# grade, so there is one definition.
+_TERM_RANK = {"winter": 1, "spring": 2, "summer": 2, "fall": 3, "autumn": 3, "other": 4}
+
+
+def _term_meta(value):
+    """(season, year) for a term string; ("Other", 0) when it says nothing."""
+    raw = str(value or "").strip()
+    m = re.search(r"(?i)\b(winter|spring|summer|fall|autumn)\s*(20\d{2})\b", raw)
+    if m:
+        return m.group(1).title().replace("Autumn", "Fall"), int(m.group(2))
+    m = re.search(r"(?i)\b(20\d{2})[._ -]?(10|20|30)\b", raw)
+    if m:
+        return {"10": "Winter", "20": "Summer", "30": "Fall"}.get(m.group(2), "Other"), int(m.group(1))
+    return "Other", 0
+
+
+def _term_label(value):
+    season, year = _term_meta(value)
+    return f"{season} {year}" if year else "Other courses"
+
+
+def _term_sort_key(value):
+    """Newest term first. Sort a list of labels with reverse=True."""
+    season, year = _term_meta(value)
+    return (year, _TERM_RANK.get(season.lower(), 4))
+
+
+def _current_term_label(today=None):
+    """September is Fall, January is Winter -- the date decides, never whichever
+    group happens to sort first, or an early Winter enrolment made in November
+    takes the page over."""
+    today = today or date.today()
+    season = "Winter" if today.month <= 4 else "Summer" if today.month <= 8 else "Fall"
+    return f"{season} {today.year}"
+
+
 # ============================
 # Database Models
 # ============================
@@ -3531,18 +3573,7 @@ def home():
 
     # Group courses by academic term. Brightspace terms may be human-readable
     # ("Winter 2026") or D2L-style codes ("2026.10", "2026.20", "2026.30").
-    term_rank={"winter":1,"spring":2,"summer":2,"fall":3,"autumn":3,"other":4}
-    def _term_meta(value):
-        raw=str(value or "").strip()
-        m=re.search(r"(?i)\b(winter|spring|summer|fall|autumn)\s*(20\d{2})\b",raw)
-        if m:
-            season=m.group(1).title().replace("Autumn","Fall")
-            return season,int(m.group(2))
-        m=re.search(r"(?i)\b(20\d{2})[._ -]?(10|20|30)\b",raw)
-        if m:
-            season={"10":"Winter","20":"Summer","30":"Fall"}.get(m.group(2),"Other")
-            return season,int(m.group(1))
-        return "Other",0
+    term_rank=_TERM_RANK
     grouped_courses={}
     for card in course_cards:
         season,year=_term_meta(card.get("term") or card.get("title") or "")
@@ -3555,8 +3586,7 @@ def home():
     # the picker. September is Fall, January is Winter -- the date decides, not
     # whichever group happens to sort first, because a future term (an early
     # Winter enrolment made in November) would otherwise take the page over.
-    current_season="Winter" if today.month<=4 else "Summer" if today.month<=8 else "Fall"
-    current_term_label=f"{current_season} {today.year}"
+    current_term_label=_current_term_label(today)
     if not any(g["label"]==current_term_label for g in course_groups):
         current_term_label=course_groups[0]["label"] if course_groups else ""
 
@@ -5758,6 +5788,46 @@ def _fail_letter(user_id):
     scale=profile.get("scale") or []
     return scale[-1]["letter"] if scale else "F"
 
+def _pick_final_row(rows):
+    """Which saved mark is *the* final exam, for the required-final solver.
+
+    `\bfinal\b` also matches "Final Lab Exam", and BIOL 1103 has both. Every row
+    that matched was excluded from the term-work total and the last one won the
+    `final_row` slot, so the solver worked against the 12% lab exam while
+    treating the 20% final as unmarked and assuming 100% on it. The student was
+    told they needed 158.33% on the final for a target that was in fact
+    unreachable for a different reason. One name, one meaning: score the
+    candidates and take the best.
+
+    A course with two finals is real (a lecture final and a lab final), and the
+    lecture one is what "what do I need on the final" means. Nothing here
+    guesses when there is no candidate -- it returns None and the caller simply
+    offers no required-final figure.
+    """
+    best = None
+    best_score = 0
+    for row in rows:
+        name = str(row.name or "")
+        if not re.search(r"\bfinal\b", name, re.I):
+            continue
+        lowered = name.lower()
+        if re.fullmatch(r"\s*final\s+exam(ination)?\s*", lowered):
+            score = 4
+        elif "final exam" in lowered and "lab" not in lowered:
+            score = 3
+        elif "lab" not in lowered:
+            score = 2
+        else:
+            score = 1
+        # A tie goes to the heavier component: between two rows that read
+        # equally like "the final", the one worth more of the course is the one
+        # a student is asking about.
+        if score > best_score or (score == best_score and best is not None
+                                  and float(row.weight or 0) > float(best.weight or 0)):
+            best, best_score = row, score
+    return best
+
+
 def _is_bonus_row(row):
     """Bonus and extra-credit weight is additive, so it never sits below the line.
 
@@ -5864,14 +5934,16 @@ def _compute_official_result(user_id, course, target=50.0, assumed_other_average
     # None and the whole result panel stuck on INCOMPLETE. A bonus is additive:
     # it belongs in the numerator only.
     scheme_total=sum(max(0.0,float(r.weight or 0)) for r in rows if not _is_bonus_row(r)) or float(analysis.get('total_weight') or 100)
-    earned=0.0; completed_weight=0.0; base_completed=0.0; final_row=None
+    earned=0.0; completed_weight=0.0; base_completed=0.0
     # Separate the final from all other work. Current standing uses every saved
     # mark, but the What-do-I-need solver intentionally ignores a saved final
     # so students can run a hypothetical target at any time.
     nonfinal_earned=0.0; nonfinal_completed_weight=0.0
+    # Decided once, up front. Testing each row against a regex made every row
+    # containing the word "final" the final exam -- see _pick_final_row.
+    final_row=_pick_final_row(rows)
     for r in rows:
-        is_final=bool(re.search(r'\bfinal(?:\s+(?:exam|examination))?\b',r.name or '',re.I))
-        if is_final: final_row=r
+        is_final=(r is final_row)
         if r.score is not None and r.weight>0:
             contribution=(_row_percent(r)/100)*float(r.weight)
             is_bonus=_is_bonus_row(r)
@@ -5888,10 +5960,17 @@ def _compute_official_result(user_id, course, target=50.0, assumed_other_average
     current_on_completed=earned/base_completed*100 if base_completed else 0
     official_grade=earned/scheme_total*100 if remaining<=0 and scheme_total else None
     pass_ok,rule_results=_evaluate_pass_rules(analysis,row_map,official_grade)
-    required_final=None
+    required_final=None; max_with_perfect_final=None
     if final_row and final_row.weight>0:
         other_unfinished=max(0.0, scheme_total - nonfinal_completed_weight - float(final_row.weight))
         assumed=max(0.0,min(100.0,float(assumed_other_average or 100)))
+        # Where the course lands if the final is perfect. Without this the panel
+        # had no way to say a target is unreachable and printed "you need
+        # 158.33% on the final exam" -- arithmetically the right answer to the
+        # wrong question, and it reads as the page being broken.
+        if scheme_total:
+            max_with_perfect_final=(nonfinal_earned+(assumed/100)*other_unfinished
+                                    +float(final_row.weight))/scheme_total*100
         required_final=(normalized_target-nonfinal_earned-(assumed/100)*other_unfinished)/float(final_row.weight)*100
         final_min=analysis.get('final_minimum',profile.final_minimum if profile else None)
         if final_min is not None: required_final=max(required_final,float(final_min))
@@ -5899,7 +5978,7 @@ def _compute_official_result(user_id, course, target=50.0, assumed_other_average
     official_status='INCOMPLETE' if official_grade is None else ('PASS' if pass_ok and decorated['course_letter_rules_passed'] else 'FAIL')
     if official_status=='FAIL':
         decorated['letter_grade']=_fail_letter(user_id)
-    return {'mode':'single_scheme','target':target,'official_grade':official_grade,'official_status':official_status,'pass_rules':rule_results,'earned_course_points':round(earned,2),'completed_weight':round(completed_weight,2),'remaining_weight':round(remaining,2),'current_on_completed':round(current_on_completed,2),'needed_average':None if needed_average is None else round(needed_average,2),'required_final':None if required_final is None else round(required_final,2),'best_possible':round((earned+remaining)/scheme_total*100,2) if scheme_total else 0,'worst_possible':round(earned/scheme_total*100,2) if scheme_total else 0,**decorated}, None
+    return {'mode':'single_scheme','target':target,'official_grade':official_grade,'official_status':official_status,'pass_rules':rule_results,'earned_course_points':round(earned,2),'completed_weight':round(completed_weight,2),'remaining_weight':round(remaining,2),'current_on_completed':round(current_on_completed,2),'needed_average':None if needed_average is None else round(needed_average,2),'required_final':None if required_final is None else round(required_final,2),'max_with_perfect_final':None if max_with_perfect_final is None else round(max_with_perfect_final,2),'best_possible':round((earned+remaining)/scheme_total*100,2) if scheme_total else 0,'worst_possible':round(earned/scheme_total*100,2) if scheme_total else 0,**decorated}, None
 
 
 @app.route("/api/course/<course_code>/grade-outcomes", methods=["POST"])
@@ -7957,6 +8036,21 @@ def grade_calculator():
             "confirmed": confirmed,
         })
 
+    # Grouped for the picker, newest term first, and the current term first of
+    # all. A flat list of every course a student has ever taken is unusable by
+    # second year -- the template renders these as <optgroup>s.
+    for course in courses:
+        course["term_label"] = _term_label(course["term"])
+    current_label = _current_term_label()
+    course_terms = sorted({c["term_label"] for c in courses},
+                          key=_term_sort_key, reverse=True)
+    if current_label in course_terms:
+        course_terms.remove(current_label)
+        course_terms.insert(0, current_label)
+    course_groups = [{"label": label,
+                      "courses": [c for c in courses if c["term_label"] == label]}
+                     for label in course_terms]
+
     requested = _normalize_course_code(request.args.get("course", "") or "")
     if requested and not any(c["code"] == requested for c in courses):
         requested = ""
@@ -7965,7 +8059,8 @@ def grade_calculator():
     # student's own scale rather than a hardcoded one.
     return render_template("grade_calculator.html",
                            grading_scale=_get_user_grading_scale(user_id),
-                           courses=courses, requested_course=requested)
+                           courses=courses, course_groups=course_groups,
+                           requested_course=requested)
 
 
 @app.route("/api/analyze-outline", methods=["POST"])
