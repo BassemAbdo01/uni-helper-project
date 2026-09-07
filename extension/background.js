@@ -12,6 +12,12 @@ const DEFAULT_ORIGIN = '';
 const DEFAULT_API_BASE = 'https://uni-helper-project.onrender.com';
 
 const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+// An IANA name like "America/Toronto", or '' where Intl is unavailable. The
+// server validates it and ignores anything it cannot resolve.
+const browserTimezone = () => {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
+  catch (_) { return ''; }
+};
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function getConfig() {
@@ -765,6 +771,11 @@ async function runSyncAllCourses(trigger = 'manual') {
           items,
           course: course.code,
           replace_courses: replaceCourses,
+          // The browser knows the student's timezone and this request usually
+          // arrives before they have opened a Nexora page. Without it the
+          // first import -- the one that creates every deadline -- was dated
+          // in UTC, and an 11:59 PM deadline landed on the following day.
+          timezone: browserTimezone(),
           scan_meta: { method: scan.method, complete: trustworthy, diagnostics: scan.diagnostics || {}, trigger }
         }
       });

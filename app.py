@@ -14,7 +14,8 @@ import smtplib
 from email.message import EmailMessage
 import zipfile
 import base64
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta, date, timezone
+from zoneinfo import ZoneInfo
 import calendar as calendar_module
 from functools import wraps
 from uuid import uuid4
@@ -196,7 +197,34 @@ PRICE_LABEL = os.environ.get("PRICE_LABEL", "").strip()
 # How many structurally different outlines evals/outline_corpus.py covers. The
 # landing page quotes it as proof, so it lives beside the other public-facing
 # numbers rather than being typed into the template and left to rot.
-OUTLINE_CORPUS_CASES = 15
+# The public Chrome Web Store listing. Unset until the item id is known, and
+# the connect page then explains how to install rather than linking nowhere --
+# a dead "Install" button is worse than a sentence.
+EXTENSION_URL = os.environ.get("EXTENSION_URL", "").strip()
+
+# Used only until a student's browser reports their own zone. UTC is the honest
+# default: it is what every date meant before User.timezone existed.
+DEFAULT_TIMEZONE = os.environ.get("DEFAULT_TIMEZONE", "UTC").strip() or "UTC"
+
+# A shortlist for the Settings picker, not a limit: the page adds whatever the
+# browser reports if it is not here, and /api/timezone accepts any IANA name
+# zoneinfo can resolve. Ordered west to east across the places students are.
+COMMON_TIMEZONES = [
+    "America/Vancouver", "America/Edmonton", "America/Winnipeg", "America/Toronto",
+    "America/Halifax", "America/St_Johns", "America/New_York", "America/Chicago",
+    "America/Denver", "America/Los_Angeles", "America/Mexico_City",
+    "America/Bogota", "America/Sao_Paulo", "Europe/London", "Europe/Dublin",
+    "Europe/Lisbon", "Europe/Paris", "Europe/Berlin", "Europe/Madrid",
+    "Europe/Rome", "Europe/Athens", "Europe/Istanbul", "Europe/Moscow",
+    "Africa/Lagos", "Africa/Cairo", "Africa/Nairobi", "Africa/Johannesburg",
+    "Asia/Jerusalem", "Asia/Riyadh", "Asia/Dubai", "Asia/Karachi",
+    "Asia/Kolkata", "Asia/Dhaka", "Asia/Bangkok", "Asia/Shanghai",
+    "Asia/Hong_Kong", "Asia/Singapore", "Asia/Seoul", "Asia/Tokyo",
+    "Australia/Perth", "Australia/Adelaide", "Australia/Sydney",
+    "Pacific/Auckland", "UTC",
+]
+
+OUTLINE_CORPUS_CASES = 16
 
 PUBLIC_ANALYSES_PER_DAY = int(os.environ.get("PUBLIC_ANALYSES_PER_DAY", "150"))
 PUBLIC_ANALYSES_PER_IP = os.environ.get("PUBLIC_ANALYSES_PER_IP", "3 per day")
@@ -336,6 +364,12 @@ class User(db.Model, UserMixin):
     referred_by = db.Column(db.String(12), default="")
     referral_months = db.Column(db.Integer, default=0)
     referral_credited = db.Column(db.Boolean, default=False)
+    # The student's own timezone, as an IANA name ("America/Toronto"), captured
+    # from the browser. Without it every deadline was dated in UTC, and a
+    # Brightspace due date of 11:59 PM Eastern -- the commonest deadline in a
+    # university -- is 03:59Z the NEXT DAY. The calendar showed it a day late,
+    # which is the one failure that makes a student miss the work.
+    timezone = db.Column(db.String(64), default="")
     # So the "your month is nearly up" email is sent once, not on every visit.
     trial_notice_sent = db.Column(db.String(20), default="")
 
@@ -365,6 +399,12 @@ class Task(db.Model):
     source_uid = db.Column(db.String(255), default="")
     source_hash = db.Column(db.String(64), default="")
     source_updated = db.Column(db.String(80), default="")
+    # The instant the LMS actually gave, kept verbatim. `due_raw` is a calendar
+    # day derived from it in the student's timezone, and a derived value alone
+    # cannot be re-derived: when the zone was wrong, every date was wrong and
+    # unrepairable without re-fetching from the university. Storing this makes
+    # a timezone change a local recomputation -- see _recompute_task_dates.
+    source_due_at = db.Column(db.String(40), default="")
     sync_state = db.Column(db.String(30), default="active")
     last_seen_sync = db.Column(db.String(40), default="")
     completed = db.Column(db.Boolean, default=False)
@@ -495,6 +535,14 @@ class ClassBlock(db.Model):
     end_min = db.Column(db.Integer, default=0)
     location = db.Column(db.String(255), default="")
     kind = db.Column(db.String(30), default="lecture")
+    # Biweekly labs are ordinary, and a weekly-only model is wrong both ways:
+    # entered as weekly it steals study time on the off weeks, and left out
+    # entirely the planner schedules straight over the lab. 'weekly' | 'biweekly'.
+    repeat = db.Column(db.String(16), default="weekly")
+    # A date the block DOES fall on. Deliberately not "odd or even weeks":
+    # whose numbering -- ISO, the term's, the department's? A student can
+    # always answer "when is your next lab", and that is unambiguous.
+    anchor_date = db.Column(db.String(10), default="")
     source = db.Column(db.String(20), default="manual")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -515,6 +563,14 @@ class StudyPreference(db.Model):
     days_off = db.Column(db.String(20), default="")
     # Minutes to leave either side of a class, for getting there and back.
     buffer_min = db.Column(db.Integer, default=15)
+    # What the plan is FOR. 'all' schedules every piece of coursework, which
+    # buries revision under pre-lab quizzes and milestones -- a 2% quiz took a
+    # block while a 30% midterm waited. 'exams' plans only tests, midterms and
+    # finals, which is what a student asking "how do I organise my studying"
+    # actually means.
+    focus = db.Column(db.String(20), default="all")
+    # Course codes to plan for, comma-separated. Empty means all of them.
+    focus_courses = db.Column(db.String(400), default="")
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -631,6 +687,7 @@ def ensure_schema_columns():
             "referral_months": "INTEGER DEFAULT 0",
             "referral_credited": "BOOLEAN DEFAULT FALSE",
             "trial_notice_sent": "VARCHAR(20) DEFAULT ''",
+            "timezone": "VARCHAR(64) DEFAULT ''",
             "calendar_token": "VARCHAR(64) DEFAULT ''",
             "tour_done": "BOOLEAN DEFAULT FALSE",
             "sync_status": "VARCHAR(30) DEFAULT 'never'",
@@ -654,6 +711,9 @@ def ensure_schema_columns():
             "sync_state": "VARCHAR(30) DEFAULT 'active'",
             "last_seen_sync": "VARCHAR(40) DEFAULT ''",
             "completed": "BOOLEAN DEFAULT FALSE",
+            # The instant the LMS gave, so a date can be re-derived without
+            # going back to the university. See _recompute_task_dates.
+            "source_due_at": "VARCHAR(40) DEFAULT ''",
         },
         "grade_entry": {
             "notes": "VARCHAR(255) DEFAULT ''",
@@ -661,6 +721,16 @@ def ensure_schema_columns():
         "course_outline_profile": {
             "study_brief_json": "TEXT DEFAULT ''",
             "brief_built_at": "TIMESTAMP NULL",
+        },
+        "study_preference": {
+            "focus": "VARCHAR(20) DEFAULT 'all'",
+            "focus_courses": "VARCHAR(400) DEFAULT ''",
+        },
+        "class_block": {
+            # Biweekly labs. Existing rows default to 'weekly', which is what
+            # they already meant.
+            "repeat": "VARCHAR(16) DEFAULT 'weekly'",
+            "anchor_date": "VARCHAR(10) DEFAULT ''",
         },
     }
 
@@ -937,6 +1007,123 @@ def save_sync_result(status, message, successful=False):
 # ============================
 # Dates + labels
 # ============================
+def _recompute_task_dates(user):
+    """Re-derive every deadline's calendar day from the instant the LMS gave.
+
+    This is what makes a timezone correction instant and free. Before
+    `source_due_at` existed the day was the only thing stored, so a wrong zone
+    left every date wrong and only a re-fetch from the university could repair
+    it -- which meant telling students to go and press sync, for a mistake that
+    was ours.
+
+    Rows imported before that column existed have nothing to recompute from
+    and are left alone; the next sync rewrites them.
+    """
+    zone = _user_zone(user)
+    changed = 0
+    rows = Task.query.filter_by(user_id=user.id).all()
+    for row in rows:
+        stamp = (row.source_due_at or "").strip()
+        if not stamp:
+            continue
+        # A stamp stored without an offset came from a floating feed time and
+        # is wall-clock; one with an offset is an instant.
+        floating = "+" not in stamp[10:] and "-" not in stamp[10:] and not stamp.endswith("Z")
+        fresh = local_date_iso(stamp, zone, naive_is_utc=not floating)
+        fresh_time = local_time_label(stamp, zone, naive_is_utc=not floating)
+        if fresh and (fresh != (row.due_raw or "") or fresh_time != (row.due_time or "")):
+            row.due_raw = fresh
+            row.due_time = fresh_time
+            changed += 1
+    if changed:
+        db.session.commit()
+    return changed
+
+
+def _user_zone(user=None):
+    """The student's timezone, falling back to the deployment's and then UTC.
+
+    A wrong guess here dates a deadline wrongly, so there is no clever guessing:
+    the browser reports its own IANA zone and that is what gets stored.
+    """
+    name = ""
+    if user is not None:
+        name = (getattr(user, "timezone", "") or "").strip()
+    if not name:
+        name = DEFAULT_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        # An unknown zone name must never take a page down; UTC is what the app
+        # did everywhere before this existed.
+        return timezone.utc
+
+
+def _valid_timezone(name):
+    name = str(name or "").strip()[:64]
+    if not name:
+        return ""
+    try:
+        ZoneInfo(name)
+    except Exception:
+        return ""
+    return name
+
+
+def local_date_iso(value, zone=None, naive_is_utc=True):
+    """The calendar day a source timestamp falls on, in the student's zone.
+
+    `2026-10-16T03:59:00Z` is Wednesday 15 October at 23:59 in Toronto, and
+    dating it the 16th tells a student their work is due tomorrow when it is
+    due tonight. A bare date with no time is already a calendar day and is
+    passed straight through -- shifting it by an offset it never had would
+    move every all-day event.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return text
+    cleaned = text.replace("Z", "+00:00")
+    try:
+        stamp = datetime.fromisoformat(cleaned)
+    except ValueError:
+        m = re.match(r"(\d{4}-\d{2}-\d{2})", text)
+        return m.group(1) if m else ""
+    if stamp.tzinfo is None:
+        if not naive_is_utc:
+            # A "floating" iCalendar time carries no zone and means local
+            # wall-clock. Converting it from UTC pulled an early-morning
+            # deadline back a day: 00:30 became 20:30 the previous evening.
+            return stamp.date().isoformat()
+        # The LMS APIs send UTC, and assuming local for those would shift a
+        # correct date the wrong way.
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.astimezone(zone or timezone.utc).date().isoformat()
+
+
+def local_time_label(value, zone=None, naive_is_utc=True):
+    """The clock time a deadline falls at, in the student's zone, as HH:MM.
+
+    Shown on the calendar so a student can check Nexora against their LMS at a
+    glance. A day that agrees but a time that does not is a bug worth seeing;
+    silence is what let a whole term of dates be wrong by one day.
+    """
+    text = str(value or "").strip()
+    if not text or re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return ""
+    try:
+        stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if stamp.tzinfo is None:
+        if not naive_is_utc:
+            return f"{stamp.hour:02d}:{stamp.minute:02d}"
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    local = stamp.astimezone(zone or timezone.utc)
+    return f"{local.hour:02d}:{local.minute:02d}"
+
+
 def parse_iso_date(s):
     if not s:
         return None
@@ -1042,22 +1229,81 @@ def parse_month_day_year(s):
     return None
 
 
-def get_event_date_iso(event):
-    try:
-        if getattr(event, "begin", None):
-            d = event.begin.date()
-            if isinstance(d, date):
-                return d.isoformat()
-    except Exception:
-        pass
+def _ics_floating_uids(ics_text):
+    """UIDs whose DTSTART carries no zone at all.
 
-    try:
-        if getattr(event, "end", None):
-            d = event.end.date()
+    The `ics` library parses a floating time and labels it UTC, so after
+    parsing it is indistinguishable from a real `...Z`. The raw text is the
+    only place the difference survives, so it is read once, here.
+    """
+    floating = set()
+    uid = ""
+    for line in str(ics_text or "").splitlines():
+        stripped = line.strip()
+        upper = stripped.upper()
+        if upper.startswith("BEGIN:VEVENT"):
+            uid = ""
+        elif upper.startswith("UID:"):
+            uid = stripped[4:].strip()
+        elif upper.startswith("DTSTART"):
+            head, _, value = stripped.partition(":")
+            # Zoned if it ends in Z, names a TZID, or is a date-only VALUE=DATE
+            # (which is a calendar day already and needs no shifting).
+            if not value.strip().upper().endswith("Z") and "TZID" not in head.upper() \
+                    and "VALUE=DATE" not in head.upper():
+                if uid:
+                    floating.add(uid)
+                else:
+                    floating.add(f"__line__{stripped}")
+    return floating
+
+
+def _event_source_stamp(event, floating=False):
+    """The instant the feed gave, verbatim, for later re-derivation."""
+    for attr in ("begin", "end"):
+        try:
+            moment = getattr(event, attr, None)
+            if moment is None:
+                continue
+            stamp = getattr(moment, "datetime", None) or moment
+            if isinstance(stamp, datetime):
+                if floating:
+                    # Store it without an offset, so re-deriving it later knows
+                    # it was wall-clock rather than UTC.
+                    return stamp.replace(tzinfo=None).isoformat()[:40]
+                return stamp.isoformat()[:40]
+        except Exception:
+            continue
+    return ""
+
+
+def get_event_date_iso(event, zone=None, floating=False):
+    """The calendar day this event falls on, in the student's timezone.
+
+    `event.begin.date()` is the UTC day, and a Brightspace deadline of 11:59 PM
+    Eastern is 03:59Z the next morning -- so every late-evening deadline, which
+    is most of them, was dated a day late. A student reading that believes the
+    work is due tomorrow when it is due tonight.
+    """
+    zone = zone or timezone.utc
+    for attr in ("begin", "end"):
+        try:
+            moment = getattr(event, attr, None)
+            if moment is None:
+                continue
+            stamp = getattr(moment, "datetime", None) or moment
+            if isinstance(stamp, datetime):
+                if floating:
+                    # Wall-clock: the day is what the feed wrote, unshifted.
+                    return stamp.replace(tzinfo=None).date().isoformat()
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=timezone.utc)
+                return stamp.astimezone(zone).date().isoformat()
+            d = moment.date() if hasattr(moment, "date") else None
             if isinstance(d, date):
                 return d.isoformat()
-    except Exception:
-        pass
+        except Exception:
+            continue
 
     desc = (getattr(event, "description", "") or "")
     m = DATE_IN_TEXT_REGEX.search(desc)
@@ -1388,6 +1634,8 @@ def import_calendar_string(ics_text, mark_missing=True):
     seen_uids = set()
     counts = {"added": 0, "updated": 0, "unchanged": 0, "removed": 0, "ignored": 0}
 
+    feed_zone = _user_zone(current_user)
+    floating_uids = _ics_floating_uids(ics_text)
     for event in cal.events:
         title = (getattr(event, "name", "") or "").strip()
         if not title:
@@ -1400,7 +1648,11 @@ def import_calendar_string(ics_text, mark_missing=True):
             counts["ignored"] += 1
             continue
 
-        due_raw = get_event_date_iso(event)
+        is_floating = bool(getattr(event, "uid", "") and event.uid in floating_uids)
+        due_raw = get_event_date_iso(event, feed_zone, floating=is_floating)
+        source_stamp = _event_source_stamp(event, floating=is_floating)
+        due_time_label = local_time_label(source_stamp, feed_zone,
+                                          naive_is_utc=not is_floating)
         due_date = parse_iso_date(due_raw)
         if not due_raw or (due_date and due_date < cutoff):
             counts["ignored"] += 1
@@ -1429,6 +1681,10 @@ def import_calendar_string(ics_text, mark_missing=True):
             task.course_full = course_full
             task.course_prefix = cprefix
             task.due_raw = due_raw
+            task.source_due_at = source_stamp
+            # The clock time, so the student can check Nexora against their LMS
+            # rather than taking the day on trust.
+            task.due_time = due_time_label
             task.kind = kind
             task.is_deadline = True
             task.source_hash = source_hash
@@ -1440,7 +1696,9 @@ def import_calendar_string(ics_text, mark_missing=True):
             task = Task(
                 id=uuid4().hex, user_id=current_user.id, group_id=gid, title=title,
                 base_title=base, course_full=course_full, course_prefix=cprefix,
-                due_raw=due_raw, kind=kind, is_deadline=True, source="ics",
+                due_raw=due_raw, source_due_at=source_stamp,
+                due_time=due_time_label,
+                kind=kind, is_deadline=True, source="ics",
                 created_at=now_text, source_uid=source_uid, source_hash=source_hash,
                 source_updated=source_updated, sync_state="active", last_seen_sync=now_text,
             )
@@ -3167,6 +3425,8 @@ def settings():
     # secret URL for a student who never asked for one.
     token=(current_user.calendar_token or "").strip()
     return render_template("settings.html", user=current_user, grading_scale=grading_scale,
+                           timezones=COMMON_TIMEZONES,
+                           current_timezone=(current_user.timezone or "").strip(),
                            calendar_feed_url=url_for("calendar_feed", token=token, _external=True) if token else "")
 
 @app.route("/api/grading-scale", methods=["GET","POST"])
@@ -4311,6 +4571,30 @@ def _days_off(pref):
     return out
 
 
+def _block_occurs_on(block, day):
+    """Whether a recurring commitment actually falls on this date.
+
+    Weeks are compared Monday-to-Monday so the anchor does not have to be on
+    the same weekday as the block -- a student answering "my next lab is
+    Thursday the 17th" for a Thursday lab and one answering with the Monday of
+    that week both get the same schedule.
+
+    A biweekly block with no anchor is treated as happening EVERY week, on
+    purpose. Losing a study slot costs an hour; scheduling revision over a lab
+    the student then misses costs the lab.
+    """
+    if int(block.weekday or 0) != day.weekday():
+        return False
+    if (getattr(block, "repeat", "") or "weekly") != "biweekly":
+        return True
+    anchor = parse_iso_date(getattr(block, "anchor_date", "") or "")
+    if not anchor:
+        return True
+    week_of_day = day - timedelta(days=day.weekday())
+    week_of_anchor = anchor - timedelta(days=anchor.weekday())
+    return ((week_of_day - week_of_anchor).days // 7) % 2 == 0
+
+
 def _free_slots(user_id, pref, start, days):
     """Windows of a day with nothing already in them.
 
@@ -4331,6 +4615,10 @@ def _free_slots(user_id, pref, start, days):
             continue
         busy = []
         for block in by_day.get(day.weekday(), []):
+            # Per date, not per weekday: a biweekly lab is only in the way on
+            # the weeks it actually runs.
+            if not _block_occurs_on(block, day):
+                continue
             busy.append((max(0, int(block.start_min or 0) - buffer_min),
                          min(24 * 60, int(block.end_min or 0) + buffer_min)))
         busy.sort()
@@ -4440,9 +4728,46 @@ def _at_risk_courses(user_id):
     return risky
 
 
-def _study_items(user_id, today=None):
-    """Everything worth spending time on, with a priority and an effort budget."""
+# What counts as an exam when a student says "midterms and finals only". A
+# "test" belongs here: in most courses it is a midterm under another name, and
+# leaving it out would drop the very thing they are worried about.
+_EXAM_KINDS = {"final", "midterm", "exam", "test"}
+
+
+def _known_course_codes(user_id):
+    """Every course code this student actually has, from any source.
+
+    Not just SyncedCourse: a student who connected only the Brightspace
+    calendar feed has deadlines and no course rows, and naming one of those
+    courses was being silently discarded as "unknown" -- so "only MATH" left
+    the plan unchanged and looked broken.
+    """
+    codes = {c.course_code.upper() for c in SyncedCourse.query.filter_by(
+        user_id=user_id).all() if c.course_code}
+    codes |= {t.course_full.upper() for t in Task.query.filter_by(
+        user_id=user_id).with_entities(Task.course_full).distinct() if t.course_full}
+    codes |= {p.course_full.upper() for p in CourseOutlineProfile.query.filter_by(
+        user_id=user_id).with_entities(CourseOutlineProfile.course_full).distinct()
+        if p.course_full}
+    return {c for c in codes if c and c != "OTHER"}
+
+
+def _focus_courses_set(pref):
+    raw = (getattr(pref, "focus_courses", "") or "").strip()
+    return {c.strip().upper() for c in raw.split(",") if c.strip()}
+
+
+def _study_items(user_id, today=None, pref=None):
+    """Everything worth spending time on, with a priority and an effort budget.
+
+    `pref` narrows it. Without that, the plan schedules every deadline a
+    student has, and the small stuff wins on count: a term of pre-lab quizzes
+    and milestones filled the week while the exams that decide the grade got
+    nothing until they were close.
+    """
     today = today or date.today()
+    focus = (getattr(pref, "focus", "") or "all") if pref is not None else "all"
+    only_courses = _focus_courses_set(pref) if pref is not None else set()
     weights = _component_weights(user_id)
     standing = _course_standing(user_id)
     at_risk = _at_risk_courses(user_id)
@@ -4458,6 +4783,10 @@ def _study_items(user_id, today=None):
         kind = card.get("kind") if card.get("kind") in _BASE_EFFORT else None
         kind = kind or _item_kind(title)
         if kind == "event":
+            continue
+        if focus == "exams" and kind not in _EXAM_KINDS:
+            continue
+        if only_courses and course.upper() not in only_courses:
             continue
         weight = _weight_for(title, course, weights)
         hours = _BASE_EFFORT.get(kind, 2.0)
@@ -4566,7 +4895,7 @@ def _build_plan(user_id, today=None, days=None):
     days = days or STUDY_HORIZON_DAYS
     pref = _study_preference(user_id)
     slots = _free_slots(user_id, pref, today, days)
-    items = _study_items(user_id, today)
+    items = _study_items(user_id, today, pref)
     if not items or not slots:
         return []
 
@@ -4681,8 +5010,25 @@ CLASS_KINDS = {"lecture", "lab", "tutorial", "seminar", "work", "commute", "othe
 
 
 def _parse_clock(value):
-    """Minutes from midnight, from anything a timetable writes a time as."""
-    raw = str(value or "").strip().lower().replace(".", ":")
+    """Minutes from midnight, from anything a timetable writes a time as.
+
+    Accepts a real number as minutes-from-midnight, because that is what
+    `/api/timetable/analyze` emits and the confirm step posts straight back.
+    It did not, so every class read out of an uploaded timetable was rejected
+    on save -- and the page still said "Saved. Building your plan...". The
+    upload path had never once worked end to end; only "Add a class by hand"
+    did, because an <input type=time> sends "09:00".
+
+    A numeric STRING stays rejected on purpose: "540" could be 540 minutes or
+    5:40, and guessing wrong moves a class by hours.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        minutes = int(value)
+        return minutes if 0 <= minutes <= 24 * 60 - 1 else None
+    # `str(value or "")` turned 0 into "" -- midnight is a real time.
+    raw = ("" if value is None else str(value)).strip().lower().replace(".", ":")
     if not raw:
         return None
     match = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(a|p)?m?", raw)
@@ -4705,7 +5051,17 @@ def _parse_clock(value):
 
 
 def _parse_weekday(value):
-    raw = str(value or "").strip().lower()
+    """0-6 from a name or a number. Monday is 0, and 0 is falsy.
+
+    `str(value or "")` turned Monday into an empty string, so every Monday
+    class posted as a number was refused with "Choose a day of the week."
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        index = int(value)
+        return index if 0 <= index <= 6 else None
+    raw = ("" if value is None else str(value)).strip().lower()
     if raw.isdigit() and 0 <= int(raw) <= 6:
         return int(raw)
     return _WEEKDAY_INDEX.get(raw[:9]) if raw[:9] in _WEEKDAY_INDEX else _WEEKDAY_INDEX.get(raw[:3])
@@ -4719,6 +5075,8 @@ def _block_json(row):
         "start_label": f"{int(row.start_min or 0) // 60:02d}:{int(row.start_min or 0) % 60:02d}",
         "end_label": f"{int(row.end_min or 0) // 60:02d}:{int(row.end_min or 0) % 60:02d}",
         "location": row.location or "", "kind": row.kind or "lecture",
+        "repeat": getattr(row, "repeat", "") or "weekly",
+        "anchor_date": getattr(row, "anchor_date", "") or "",
         "source": row.source or "manual",
     }
 
@@ -4752,6 +5110,13 @@ def _block_fields(data, partial=False):
     if "kind" in data:
         kind = str(data.get("kind") or "lecture").strip().lower()
         fields["kind"] = kind if kind in CLASS_KINDS else "other"
+    if "repeat" in data:
+        repeat = str(data.get("repeat") or "weekly").strip().lower()
+        fields["repeat"] = "biweekly" if repeat in {"biweekly", "fortnightly",
+                                                    "alternate", "every_other_week"} else "weekly"
+    if "anchor_date" in data or "anchor" in data:
+        raw = str(data.get("anchor_date") or data.get("anchor") or "").strip()[:10]
+        fields["anchor_date"] = raw if parse_iso_date(raw) else ""
 
     start = fields.get("start_min")
     end = fields.get("end_min")
@@ -4776,6 +5141,11 @@ def study_plan_page():
                       if c.course_code and not bool(getattr(c, "is_hidden", False))})
     return render_template(
         "study_plan.html",
+        # With no timetable saved, uploading one is the only thing worth doing
+        # on this page -- and it was the second card, under an empty plan. The
+        # student who asked "where is the study plan option where I add my
+        # timetable" was looking straight at it.
+        has_timetable=bool(blocks),
         blocks=[_block_json(b) for b in blocks],
         sessions=[_session_json(x) for x in sessions],
         preferences={
@@ -4783,6 +5153,8 @@ def study_plan_page():
             "session_min": pref.session_min, "break_min": pref.break_min,
             "max_daily_min": pref.max_daily_min, "buffer_min": pref.buffer_min,
             "days_off": [int(d) for d in str(pref.days_off or "").split(",") if d.strip().isdigit()],
+            "focus": pref.focus or "all",
+            "focus_courses": sorted(_focus_courses_set(pref)),
         },
         courses=courses,
         weekdays=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
@@ -4816,6 +5188,15 @@ def timetable_api():
         db.session.commit()
         rows = ClassBlock.query.filter_by(user_id=current_user.id).order_by(
             ClassBlock.weekday.asc(), ClassBlock.start_min.asc()).all()
+        if not made and skipped:
+            # Reporting ok:true here is what hid the round-trip bug: the page
+            # said "Saved. Building your plan..." over an empty week for as
+            # long as this feature has existed. A save that saved nothing is a
+            # failure and has to read as one.
+            return jsonify({"error": f"None of those {skipped} classes could be saved. "
+                                     "Check the days and times, or add them by hand.",
+                            "skipped": skipped,
+                            "blocks": [_block_json(r) for r in rows]}), 422
         return jsonify({"ok": True, "added": made, "skipped": skipped,
                         "blocks": [_block_json(r) for r in rows]})
 
@@ -4887,7 +5268,8 @@ def timetable_analyze():
 
     schema = {"blocks": [{"label": "BIOL 1103 Lecture", "course": "BIOL1103",
                           "weekday": "monday", "start": "11:35", "end": "12:55",
-                          "location": "Southam Hall", "kind": "lecture"}]}
+                          "location": "Southam Hall", "kind": "lecture",
+                          "repeat": "weekly"}]}
     rules = (
         "Read this university timetable and return every recurring class.\n"
         "1. One entry per day a class meets. A class listed as Monday & Wednesday is TWO entries.\n"
@@ -4897,8 +5279,15 @@ def timetable_analyze():
         "4. course is the course code with no space, e.g. BIOL1103, or \"\" if there is none.\n"
         "5. kind is one of lecture, lab, tutorial, seminar, other.\n"
         "6. Never invent a class, a time or a room. Omit anything you cannot read.\n"
-        "7. Return only classes and other weekly commitments, never one-off events, "
-        "deadlines or holidays."
+        "7. Return only classes and other recurring commitments, never one-off events, "
+        "deadlines or holidays.\n"
+        # Biweekly labs are common and the timetable usually says so in a word.
+        # The planner blocks the wrong weeks without this, either stealing study
+        # time or scheduling over the lab.
+        "8. repeat is \"biweekly\" when the timetable says a class runs every other week, "
+        "on alternating, odd or even weeks, fortnightly, or in a repeating A/B week "
+        "pattern. Otherwise repeat is \"weekly\". Do not guess which specific weeks it "
+        "falls on -- the student confirms that afterwards."
     )
     try:
         parsed = _gemini_json(
@@ -4925,6 +5314,10 @@ def timetable_analyze():
             "weekday": fields["weekday"], "start": fields["start_min"],
             "end": fields["end_min"], "location": fields.get("location", ""),
             "kind": fields.get("kind", "lecture"),
+            # Carried through the confirm step, or a biweekly lab the model
+            # correctly spotted silently becomes a weekly one on save.
+            "repeat": fields.get("repeat", "weekly"),
+            "anchor_date": fields.get("anchor_date", ""),
             "start_label": f"{fields['start_min'] // 60:02d}:{fields['start_min'] % 60:02d}",
             "end_label": f"{fields['end_min'] // 60:02d}:{fields['end_min'] % 60:02d}",
         })
@@ -4961,12 +5354,24 @@ def study_preferences_api():
             if len(clean) >= 7:
                 return jsonify({"error": "Keep at least one day available to study."}), 400
             pref.days_off = ",".join(str(d) for d in clean)
+        if "focus" in data:
+            pref.focus = "exams" if str(data.get("focus") or "").lower() == "exams" else "all"
+        if "focus_courses" in data:
+            wanted = data.get("focus_courses") or []
+            if isinstance(wanted, str):
+                wanted = [c for c in wanted.split(",")]
+            known = _known_course_codes(current_user.id)
+            # Only real courses: an unknown code would silently empty the plan.
+            keep = [str(c).strip().upper() for c in wanted if str(c).strip().upper() in known]
+            pref.focus_courses = ",".join(sorted(set(keep)))[:400]
         db.session.commit()
     return jsonify({"ok": True, "preferences": {
         "earliest_min": pref.earliest_min, "latest_min": pref.latest_min,
         "session_min": pref.session_min, "break_min": pref.break_min,
         "max_daily_min": pref.max_daily_min, "buffer_min": pref.buffer_min,
         "days_off": [int(d) for d in str(pref.days_off or "").split(",") if d.strip().isdigit()],
+        "focus": pref.focus or "all",
+        "focus_courses": sorted(_focus_courses_set(pref)),
     }})
 
 
@@ -5016,6 +5421,102 @@ def study_plan_brief():
                     "notice": last_error if failed else ""})
 
 
+@app.route("/api/study-plan/ask", methods=["POST"])
+@limiter.limit(AI_LIMIT)
+@login_required
+@requires_active
+def study_plan_ask():
+    """Say what you want the plan to be for, in your own words.
+
+    The AI reads the REQUEST; it does not write the schedule. That split is
+    deliberate and is the same rule as the rest of the planner: a plan has to
+    be the same plan when you look at it twice, has to explain why every block
+    is where it is, and must not cost quota to redraw. A model laying out the
+    week directly satisfies none of those. So a sentence becomes settings --
+    what to plan for, which courses, how many days, how long a day -- and the
+    existing arithmetic builds it.
+
+    It answers with what it understood, so a misreading is visible and
+    correctable rather than silently reshaping someone's term.
+    """
+    question = str((request.get_json(silent=True) or {}).get("question") or "").strip()
+    if not question:
+        return jsonify({"error": "Tell Nexora what you want the plan to be for."}), 400
+    if len(question) > 500:
+        return jsonify({"error": "Keep it under 500 characters."}), 400
+
+    pref = _study_preference(current_user.id)
+    codes = sorted(_known_course_codes(current_user.id))
+    schema = {"focus": "all", "courses": [], "days": 14,
+              "max_daily_minutes": 240, "understood": ""}
+    rules = [
+        "Turn a student's request about their study plan into settings.",
+        'focus is "exams" when they want only tests, midterms and finals, otherwise "all".',
+        "courses is the subset of the student's own course codes they named, or [] for all.",
+        "Their courses are: " + (", ".join(codes) or "none imported yet") + ".",
+        "days is how far ahead to plan, 3 to 60, default 14.",
+        "max_daily_minutes is 30 to 720. Keep the current value unless they asked to "
+        f"change it; it is currently {int(pref.max_daily_min or 240)}.",
+        "understood is one short sentence, addressed to the student, saying what you changed.",
+        "Never invent a course code that is not in their list.",
+    ]
+    prompt = (
+        "Return strict JSON matching this schema:\n"
+        + json.dumps(schema, indent=2)
+        + "\n\n" + "\n".join(rules)
+        + "\n\nREQUEST: " + question
+    )
+    try:
+        parsed = _gemini_json("You convert study-plan requests into JSON settings. "
+                              "Output only JSON.", prompt, max_tokens=700)
+    except Exception as exc:
+        app.logger.warning("Study-plan ask failed: %s", exc)
+        message = ("Nexora's AI is at its limit right now. Use the buttons above to "
+                   "pick what the plan is for."
+                   if _looks_like_quota_error(exc) else
+                   "Nexora could not read that. Use the buttons above instead.")
+        return jsonify({"error": message}), 503
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    focus = "exams" if str(parsed.get("focus") or "").lower() == "exams" else "all"
+    wanted = [str(c).strip().upper() for c in (parsed.get("courses") or []) if str(c).strip()]
+    # Only codes the student actually has. A hallucinated course would silently
+    # empty their plan.
+    known = {c.upper() for c in codes}
+    chosen = sorted({c for c in wanted if c in known})
+    try:
+        days = max(3, min(60, int(parsed.get("days") or STUDY_HORIZON_DAYS)))
+    except (TypeError, ValueError):
+        days = STUDY_HORIZON_DAYS
+    try:
+        daily = max(30, min(720, int(parsed.get("max_daily_minutes") or pref.max_daily_min)))
+    except (TypeError, ValueError):
+        daily = int(pref.max_daily_min or 240)
+
+    pref.focus = focus
+    pref.focus_courses = ",".join(chosen)
+    pref.max_daily_min = daily
+    db.session.commit()
+
+    plan = _build_plan(current_user.id, days=days)
+    made = _save_plan(current_user.id, plan)
+    rows = StudySession.query.filter_by(user_id=current_user.id).filter(
+        StudySession.on_date >= date.today().isoformat()).order_by(
+        StudySession.on_date.asc(), StudySession.start_min.asc()).all()
+    return jsonify({
+        "ok": True,
+        "understood": str(parsed.get("understood") or "")[:300],
+        "focus": focus, "courses": chosen, "days": days,
+        "max_daily_minutes": daily,
+        "created": made,
+        "sessions": [_session_json(r) for r in rows],
+        "reason": "" if rows else ("No tests, midterms or finals are coming up in that "
+                                   "window." if focus == "exams" else
+                                   "Nothing is due in that window."),
+    })
+
+
 @app.route("/api/study-plan/generate", methods=["POST"])
 @login_required
 @requires_active
@@ -5026,8 +5527,16 @@ def study_plan_generate():
         # only act on the one that applies to them.
         if not ClassBlock.query.filter_by(user_id=current_user.id).count():
             reason = "Add your timetable first so Nexora knows when you are free."
-        elif not _study_items(current_user.id):
-            reason = "Nothing is due in the next two weeks, so there is nothing to plan. Sync your courses if that looks wrong."
+        elif not _study_items(current_user.id, pref=_study_preference(current_user.id)):
+            pref = _study_preference(current_user.id)
+            if (pref.focus or "all") == "exams":
+                reason = ("No tests, midterms or finals are coming up in this window. "
+                          "Switch the plan back to all coursework, or widen the dates.")
+            elif _focus_courses_set(pref):
+                reason = ("Nothing is due for the courses this plan is limited to. "
+                          "Add a course, or plan for all of them.")
+            else:
+                reason = "Nothing is due in the next two weeks, so there is nothing to plan. Sync your courses if that looks wrong."
         else:
             reason = "Your week has no free time inside your study hours. Widen the hours, or free up a day."
         return jsonify({"ok": True, "created": 0, "sessions": [], "reason": reason})
@@ -5401,14 +5910,20 @@ def _group_state(analysis,row_map,components,final_override=None):
     """
     weights=_component_weight_lookup(analysis)
     known=[_grade_key(n) for n in _scheme_component_names(analysis)]
+    members=_expand_group_members(analysis,components)
+    # Only one member is the final exam. Applying the hypothetical mark to
+    # every member whose name contains "final" gave a group holding both a
+    # lecture final and a lab final two overridden components. See
+    # _final_name_score.
+    final_member=_pick_final_name((n,weights.get(_grade_key(n),0.0)) for n in members)
     values=[]; pending=False; bound=False
-    for name in _expand_group_members(analysis,components):
+    for name in members:
         key=_grade_key(name)
         row=_find_grade_row(row_map,name)
         if row is None and not any(k and key and (key in k or k in key) for k in known):
             continue
         bound=True
-        override=final_override if "final" in str(name).lower() else None
+        override=final_override if (final_member is not None and name==final_member) else None
         pct=_row_percent(row,override)
         if pct is None:
             pending=True
@@ -5618,10 +6133,29 @@ def _compile_pass_rules(parsed):
     return parsed
 
 
+def _component_source_name(comp):
+    """The grade-row name a scheme component refers to.
+
+    Gemini and the local parsers variously call it `source`, `name`,
+    `component` or `label`; normalising in one place is what lets an
+    alternative scheme reuse the student's single saved mark.
+    """
+    return str(comp.get('source') or comp.get('name') or comp.get('component')
+               or comp.get('label') or '').strip()
+
+
 def _evaluate_option(option,row_map,final_override=None,analysis=None):
     points=0.0; missing=[]; details=[]
     analysis=analysis or {}
     virtual=_apply_selection_rules(analysis,row_map)
+    # Exactly one component in this option is the final exam. Testing each
+    # component for the word "final" handed the hypothetical mark to both
+    # "Final Exam" and "Final Lab Exam" at once, so the required-final solver
+    # for an alternative scheme answered a question nobody asked. See
+    # _final_name_score.
+    option_final=_pick_final_name(
+        (_component_source_name(c), c.get('weight'))
+        for c in (option.get('components') or []) if isinstance(c,dict))
     eligibility=option.get('eligibility') or {}
     # An option is often only open to a student who actually sat some number of
     # a group of assessments. The group used to be hardcoded as 'Test 1'..'Test
@@ -5661,13 +6195,7 @@ def _evaluate_option(option,row_map,final_override=None,analysis=None):
             # Gemini/local parsers may call the component field `source`, `name`,
             # `component`, or `label`. Normalize all shapes here so alternative
             # schemes can always reuse the student's single saved mark.
-            source=str(
-                comp.get('source')
-                or comp.get('name')
-                or comp.get('component')
-                or comp.get('label')
-                or ''
-            ).strip()
+            source=_component_source_name(comp)
             virtual_key=re.sub(r'[^a-z0-9]+',' ',source.lower()).strip()
             virtual_match=virtual.get(virtual_key)
             if virtual_match is not None:
@@ -5679,7 +6207,7 @@ def _evaluate_option(option,row_map,final_override=None,analysis=None):
                 pct=virtual_match.get('percent')
             else:
                 r=_find_grade_row(row_map,source)
-                override=final_override if 'final' in source.lower() else None
+                override=final_override if (option_final and source==option_final) else None
                 pct=_row_percent(r,override)
             if pct is None:
                 missing.append(f'{source or "Assessment"} is not entered.')
@@ -5689,7 +6217,7 @@ def _evaluate_option(option,row_map,final_override=None,analysis=None):
                 'name': source if not comp.get('source_group') else (comp.get('name') or 'Tests'),
                 'percent':round(pct,2),'weight':weight,'points':round(contribution,2)
             })
-    return {'option_name':option.get('option_name') or 'Grading option','grade':round(points,2),'eligible':eligible,'complete':not missing,'missing':missing,'details':details}
+    return {'option_name':option.get('option_name') or 'Grading option','grade':round(points,2),'eligible':eligible,'complete':not missing,'missing':missing,'details':details,'final_source':option_final}
 
 
 def _evaluate_pass_rules(analysis,row_map,course_grade,final_override=None):
@@ -5704,6 +6232,9 @@ def _evaluate_pass_rules(analysis,row_map,course_grade,final_override=None):
     check is not a requirement the student has broken.
     """
     results=[]; failed=False
+    # A component_minimum on "Final Lab Exam" is not a rule about the final
+    # exam, and must not be answered with the hypothetical final mark.
+    scheme_final=_scheme_final_name(analysis)
     rules=analysis.get('pass_rules') or []
     if not rules:
         for name,minimum in _outline_rule_minimums(analysis).items():
@@ -5725,7 +6256,7 @@ def _evaluate_pass_rules(analysis,row_map,course_grade,final_override=None):
             continue
         if typ=='component_minimum':
             name=rule.get('component'); row=_find_grade_row(row_map,name)
-            actual=_row_percent(row, final_override if 'final' in str(name).lower() else None)
+            actual=_row_percent(row, final_override if (scheme_final and _names_same_component(name,scheme_final)) else None)
             required=float(rule.get('minimum_percent') or 0)
             if actual is not None: ok=actual>=required
             elif row is None and not _in_scheme(name): note=unmatched
@@ -5788,44 +6319,85 @@ def _fail_letter(user_id):
     scale=profile.get("scale") or []
     return scale[-1]["letter"] if scale else "F"
 
-def _pick_final_row(rows):
-    """Which saved mark is *the* final exam, for the required-final solver.
+def _final_name_score(name):
+    """How much a component name means *the* final exam. 0 means it does not.
 
-    `\bfinal\b` also matches "Final Lab Exam", and BIOL 1103 has both. Every row
-    that matched was excluded from the term-work total and the last one won the
-    `final_row` slot, so the solver worked against the 12% lab exam while
-    treating the 20% final as unmarked and assuming 100% on it. The student was
-    told they needed 158.33% on the final for a target that was in fact
-    unreachable for a different reason. One name, one meaning: score the
-    candidates and take the best.
+    `\bfinal\b` also matches "Final Lab Exam", and BIOL 1103 has both. Wherever
+    that mattered, every matching component was treated as the final at once:
+    the single-scheme solver excluded both from term work and computed against
+    whichever came last, and the alternative-scheme solver applied one
+    hypothetical mark to two different components. A course with a lecture
+    final and a lab final is ordinary; only one of them is what "what do I need
+    on the final" means.
 
-    A course with two finals is real (a lecture final and a lab final), and the
-    lecture one is what "what do I need on the final" means. Nothing here
-    guesses when there is no candidate -- it returns None and the caller simply
-    offers no required-final figure.
+    Four sites need this answer, so there is one definition of it.
+    """
+    text = str(name or "")
+    if not re.search(r"\bfinal\b", text, re.I):
+        return 0
+    lowered = text.lower()
+    if re.fullmatch(r"\s*final\s+exam(ination)?\s*", lowered):
+        return 4
+    if "final exam" in lowered and "lab" not in lowered:
+        return 3
+    if "lab" not in lowered:
+        return 2
+    return 1
+
+
+def _pick_final_name(candidates):
+    """The best "final exam" name from (name, weight) pairs, or None.
+
+    A tie goes to the heavier component: between two names that read equally
+    like the final, the one worth more of the course is the one a student is
+    asking about. Never guesses -- with no candidate the caller simply offers
+    no required-final figure.
     """
     best = None
     best_score = 0
-    for row in rows:
-        name = str(row.name or "")
-        if not re.search(r"\bfinal\b", name, re.I):
+    best_weight = 0.0
+    for name, weight in candidates:
+        score = _final_name_score(name)
+        if not score:
             continue
-        lowered = name.lower()
-        if re.fullmatch(r"\s*final\s+exam(ination)?\s*", lowered):
-            score = 4
-        elif "final exam" in lowered and "lab" not in lowered:
-            score = 3
-        elif "lab" not in lowered:
-            score = 2
-        else:
-            score = 1
-        # A tie goes to the heavier component: between two rows that read
-        # equally like "the final", the one worth more of the course is the one
-        # a student is asking about.
-        if score > best_score or (score == best_score and best is not None
-                                  and float(row.weight or 0) > float(best.weight or 0)):
-            best, best_score = row, score
+        try:
+            value = float(weight or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        if score > best_score or (score == best_score and value > best_weight):
+            best, best_score, best_weight = name, score, value
     return best
+
+
+def _scheme_final_name(analysis):
+    """The one component in this scheme that means *the* final exam."""
+    weights = _component_weight_lookup(analysis)
+    return _pick_final_name((n, weights.get(_grade_key(n), 0.0))
+                            for n in _scheme_component_names(analysis))
+
+
+def _names_same_component(left, right):
+    """Whether two component names refer to the same thing.
+
+    A pass rule names its component in the outline's words, which are not
+    always the scheme's exact spelling, so this is the same tolerant containment
+    match _find_grade_row uses rather than equality.
+    """
+    a, b = _grade_key(left), _grade_key(right)
+    return bool(a) and bool(b) and (a in b or b in a)
+
+
+def _pick_final_row(rows):
+    """Which saved mark is *the* final exam, for the required-final solver."""
+    chosen = _pick_final_name((r.name, r.weight) for r in rows)
+    if chosen is None:
+        return None
+    # Identity, not a name match: two rows can share a name and the object is
+    # what the caller compares against.
+    for row in rows:
+        if row.name == chosen:
+            return row
+    return None
 
 
 def _is_bonus_row(row):
@@ -5901,7 +6473,13 @@ def _compute_official_result(user_id, course, target=50.0, assumed_other_average
                 ev=_evaluate_option(opt,row_map,final_override=fs,analysis=analysis)
                 if not ev['eligible']: continue
                 # Missing final is satisfied by override; other missing inputs still block calculation.
-                nonfinal_missing=[m for m in ev['missing'] if 'Final Exam' not in m and 'final exam' not in m.lower()]
+                # The override satisfies exactly one component, so only that
+                # one's "is not entered" message may be ignored here. Matching
+                # the words "final exam" also swallowed a missing "Final Lab
+                # Exam" and solved a target the student could not reach.
+                option_final=ev.get('final_source')
+                nonfinal_missing=[m for m in ev['missing']
+                                  if not (option_final and m.startswith(f'{option_final} '))]
                 if nonfinal_missing: continue
                 pass_rules,_=_evaluate_pass_rules(analysis,row_map,ev['grade'],final_override=fs)
                 if ev['grade']>=target and pass_rules:
@@ -7497,6 +8075,94 @@ def sync_course_content():
     return jsonify({"ok": True, **_import_content(user, payload)})
 
 
+def _adopt_reported_timezone(user, name):
+    """Take a timezone a synced client reported, if the account has none.
+
+    The extension and the Canvas API both know the student's zone, and both
+    reach the server before the student has necessarily opened a Nexora page.
+    Waiting for a page view meant the very first import -- the one that creates
+    every deadline -- was dated in UTC. This is not guesswork: the browser and
+    Canvas are each stating their own setting.
+
+    An account that already has a zone is left alone. A student who has told
+    Nexora where they are outranks a client reporting where it is.
+    """
+    valid = _valid_timezone(name)
+    if not valid or (user.timezone or "").strip():
+        return ""
+    user.timezone = valid
+    db.session.commit()
+    return valid
+
+
+def _import_deadlines(user, items):
+    """Turn the due dates the extension scraped into calendar deadlines.
+
+    The extension reads D2L's own `DueDate` for every assignment and quiz and
+    sends it as `due_at`. Nothing consumed it: `CourseContent` has no column
+    for a date, so it was dropped, and the only source of deadlines was the
+    Brightspace *calendar feed* URL -- a separate step on the connect page that
+    is easy to skip. A student who did exactly what the page told them to do
+    ("install the extension, press Import my courses") got a calendar with no
+    assignments or quizzes in it at all, and no indication anything was
+    missing. That is the worst possible shape for this bug: an empty calendar
+    looks like a calm week.
+
+    Deliberately mirrors the feed importer rather than inventing a second
+    scheme: same `group_id`, so an assignment that arrives from both the feed
+    and the extension collapses into one card, and the same
+    `sync_state == 'dismissed'` check, so deleting something the LMS gave you
+    is not undone on the next sync.
+    """
+    zone = _user_zone(user)
+    counts = {"added": 0, "updated": 0, "unchanged": 0}
+    now_text = datetime.utcnow().isoformat()
+    for item in items[:1200]:
+        kind_name = str(item.get("content_type") or "").strip().lower()
+        if kind_name not in {"assignment", "quiz"}:
+            continue
+        title = str(item.get("title") or "").strip()
+        due_iso = local_date_iso(item.get("due_at") or item.get("due_date"), zone)
+        if not title or not due_iso:
+            continue
+        course_full = _normalize_course_code(item.get("course") or item.get("course_full") or "OTHER")
+        base = base_title(title)
+        gid = make_group_id(course_full, base)
+        # Stable across re-syncs and distinct from the feed's uids, so the two
+        # sources update their own row instead of fighting over one.
+        source_uid = f"ext:{str(item.get('source_uid') or f'{course_full}|{title}')}"[:255]
+        source_hash = hashlib.sha256(f"{title}|{due_iso}|{course_full}".encode("utf-8")).hexdigest()
+
+        task = Task.query.filter_by(user_id=user.id, source_uid=source_uid).first()
+        if task and task.sync_state == "dismissed":
+            counts["unchanged"] += 1
+            continue
+        if task:
+            changed = task.source_hash != source_hash
+            task.group_id = gid; task.title = title; task.base_title = base
+            task.course_full = course_full; task.course_prefix = course_prefix(course_full)
+            task.due_raw = due_iso; task.kind = "due"; task.is_deadline = True
+            task.source_due_at = str(item.get("due_at") or item.get("due_date") or "")[:40]
+            task.due_time = local_time_label(task.source_due_at, zone)
+            task.source_hash = source_hash; task.sync_state = "active"
+            task.last_seen_sync = now_text
+            counts["updated" if changed else "unchanged"] += 1
+        else:
+            db.session.add(Task(
+                id=uuid4().hex, user_id=user.id, group_id=gid, title=title,
+                base_title=base, course_full=course_full,
+                course_prefix=course_prefix(course_full), due_raw=due_iso,
+                source_due_at=str(item.get("due_at") or item.get("due_date") or "")[:40],
+                due_time=local_time_label(item.get("due_at") or item.get("due_date"), zone),
+                kind="due", is_deadline=True, source="extension",
+                created_at=now_text, source_uid=source_uid,
+                source_hash=source_hash, sync_state="active",
+                last_seen_sync=now_text,
+            ))
+            counts["added"] += 1
+    return counts
+
+
 def _import_content(user, payload):
     """Upsert course content for one student, from either LMS.
 
@@ -7516,6 +8182,13 @@ def _import_content(user, payload):
     if scan_course:
         scan_course = _normalize_course_code(scan_course)
     counts = {"added": 0, "updated": 0, "unchanged": 0}
+    # Before any date is derived: the extension reports the browser's zone, and
+    # this is usually the request that creates the student's first deadlines.
+    _adopt_reported_timezone(user, payload.get("timezone"))
+    # Deadlines are handled in their own pass, on purpose: the content loop
+    # short-circuits an item whose hash has not changed, so a deadline attached
+    # to already-imported content would never be created retroactively.
+    counts["deadlines"] = _import_deadlines(user, items)
     for item in items[:1200]:
         title = str(item.get("title") or "").strip()
         if not title:
@@ -7909,6 +8582,26 @@ def calendar_feed_link():
     return jsonify({"ok": True, "url": url_for("calendar_feed", token=token, _external=True)})
 
 
+def _known_brightspace_home(user_id):
+    """The origin this student's own courses came from, if any are imported.
+
+    The page shipped with a hard link to brightspace.carleton.ca. The scraper is
+    deliberately university-agnostic -- `location.origin` plus D2L's own API --
+    so sending every student to one university's login page is both wrong and
+    the kind of thing that makes an app look like it was built for one campus.
+    With nothing imported yet there is nothing to know, and the page says so
+    instead of guessing.
+    """
+    rows = (SyncedCourse.query.filter_by(user_id=user_id)
+            .order_by(SyncedCourse.id.desc()).limit(40).all())
+    for row in rows:
+        url = str(row.brightspace_url or "").strip()
+        m = re.match(r"(https://[^/]+)/", url + "/")
+        if m:
+            return m.group(1) + "/d2l/home"
+    return ""
+
+
 @app.route("/connect-brightspace")
 @login_required
 def connect_brightspace():
@@ -7926,6 +8619,7 @@ def connect_brightspace():
         last_sync_text=last_sync_text,
         sync_status=current_user.sync_status or "never",
         sync_message=current_user.sync_message or "Not synchronized yet.",
+        brightspace_home=_known_brightspace_home(current_user.id),
         user=current_user,
     )
 
@@ -8340,7 +9034,8 @@ def _inject_contact():
     """
     return {"contact_email": SUPPORT_EMAIL,
             "trial_days": TRIAL_DAYS,
-            "corpus_cases": OUTLINE_CORPUS_CASES}
+            "corpus_cases": OUTLINE_CORPUS_CASES,
+            "extension_url": EXTENSION_URL}
 
 
 # ============================
@@ -8479,10 +9174,14 @@ def _canvas_term_label(course):
     return ""
 
 
-def _canvas_due_date(value):
-    """Canvas sends ISO 8601 with a Z; the app stores plain YYYY-MM-DD."""
-    text = str(value or "")[:10]
-    return text if re.match(r"^\d{4}-\d{2}-\d{2}$", text) else ""
+def _canvas_due_date(value, zone=None):
+    """Canvas sends ISO 8601 with a Z; the app stores plain YYYY-MM-DD.
+
+    Taking `str(value)[:10]` took the UTC date, which is the day AFTER a
+    late-evening local deadline -- the same defect the Brightspace paths had.
+    Canvas is if anything worse for it: 11:59 PM is its default due time.
+    """
+    return local_date_iso(value, zone)
 
 
 def canvas_sync(user, fetch_list=None, base_url=None):
@@ -8494,6 +9193,7 @@ def canvas_sync(user, fetch_list=None, base_url=None):
     session and hands them over, and everything below this line is unchanged --
     the interpretation of a Canvas payload exists once, here.
     """
+    canvas_zone = _user_zone(user)
     account = CanvasAccount.query.filter_by(user_id=user.id).first()
 
     if fetch_list is None:
@@ -8559,7 +9259,7 @@ def canvas_sync(user, fetch_list=None, base_url=None):
                 "module_name": "Assignments",
                 "published_at": str(row.get("created_at") or "")[:80],
             })
-            due = _canvas_due_date(row.get("due_at"))
+            due = _canvas_due_date(row.get("due_at"), canvas_zone)
             if due:
                 task_rows.append({"course": code, "title": title, "due": due, "uid": uid})
 
@@ -8995,6 +9695,10 @@ def canvas_connect():
     if not isinstance(profile, dict) or not profile.get("id"):
         return jsonify({"error": "Canvas did not recognise that token."}), 400
 
+    # Canvas states the student's own timezone, so there is no reason to wait
+    # for a page view before dating their deadlines correctly.
+    _adopt_reported_timezone(current_user, profile.get("time_zone"))
+
     account = CanvasAccount.query.filter_by(user_id=current_user.id).first()
     if not account:
         account = CanvasAccount(id=uuid4().hex, user_id=current_user.id)
@@ -9260,6 +9964,31 @@ def public_analyze_outline():
                   "before relying on it.",
         "budget_left": max(0, _public_budget_left()),
     })
+
+
+@app.route("/api/timezone", methods=["POST"])
+@login_required
+def save_timezone():
+    """The browser reports its own IANA zone, once, and that is what is stored.
+
+    Every deadline is dated in this zone. Guessing it from an IP or assuming the
+    server's would silently date a student's work wrongly, which is the one
+    mistake that makes them miss it -- so an unrecognised name is refused and
+    the app stays on UTC rather than storing something it cannot honour.
+    """
+    name = _valid_timezone((request.get_json(silent=True) or {}).get("timezone"))
+    if not name:
+        return jsonify({"ok": False, "error": "Unrecognised timezone."}), 400
+    if (current_user.timezone or "") == name:
+        return jsonify({"ok": True, "timezone": name, "recomputed": 0})
+    current_user.timezone = name
+    db.session.commit()
+    # Fix what is already stored rather than waiting for the next sync. No
+    # network: every deadline keeps the instant it came with.
+    recomputed = _recompute_task_dates(current_user)
+    if recomputed:
+        app.logger.info("Timezone set to %s; re-dated %d deadlines", name, recomputed)
+    return jsonify({"ok": True, "timezone": name, "recomputed": recomputed})
 
 
 @app.route("/terms")

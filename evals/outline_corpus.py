@@ -414,4 +414,45 @@ components above.
             "must_not_contain": ["laborator"],
         },
     },
+
+    {
+        "id": "two_finals_two_schemes",
+        "why": "A lecture final AND a lab final, inside alternative schemes. Nexora reads "
+               "'the final exam' in four places and every one of them matched any component "
+               "containing the word, so the hypothetical mark used by 'what do I need on the "
+               "final' was applied to both at once and the answer was unreachable arithmetic. "
+               "The extraction side of that is what this case checks: both finals must survive "
+               "as separate components with their own weights in every scheme, because merging "
+               "them or dropping one is the reading that makes the solver's job impossible. "
+               "Real shape -- a science course with a lecture stream and a lab stream is the "
+               "commonest place two finals appear.",
+        "text": """
+Evaluation
+
+The course has a lecture component and a laboratory component, each with its own
+final examination. Your grade is computed under both schemes below and the
+higher of the two results is recorded.
+
+Scheme A
+  Term work                       40%
+  Final examination               40%
+  Final laboratory examination    20%
+
+Scheme B
+  Term work                       20%
+  Final examination               60%
+  Final laboratory examination    20%
+
+You must pass the final laboratory examination (at least 50%) to pass the
+course, regardless of your overall mark.
+""",
+        "expect": {
+            "components": None,   # either scheme may sit at top level
+            "total": None,
+            "signals": ["grading_options", "component_minimums"],
+            "options_count": 2,
+            "options_base_total": 100,
+            "some_option_contains": ["laboratory"],
+        },
+    },
 ]

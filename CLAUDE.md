@@ -311,6 +311,88 @@ bullet with the reason, not a red cross.
 Do not "simplify" any of these back into a boolean. The failure mode is silent
 and it is the worst thing this app can do to someone.
 
+## Every date is the student's day, not UTC
+
+`User.timezone` holds an IANA name the browser reports once; `_user_zone` falls
+back to `DEFAULT_TIMEZONE` and then UTC. `local_date_iso(value, zone)` turns a
+source timestamp into the calendar day it falls on **for that student**.
+
+This was missing entirely, and it is the worst bug this project has had. Dates
+were taken in UTC, and a Brightspace deadline of **11:59 PM Eastern** is
+`03:59Z the next day` -- so the commonest deadline time in a university was
+shown a day late. Not blank, not obviously broken: confidently wrong, on the
+screen a student checks to decide what to do tonight.
+
+**A 10:00 PM Brightspace deadline was landing on the next day.** Reported with
+screenshots: Brightspace said Tuesday Oct 6, 10:00 PM; Nexora said Wednesday
+Oct 7. 22:00 Eastern is 02:00Z the following morning, and the UTC date was what
+got stored. Nearly every SYSC 2004 deadline in that student's term was a day
+late.
+
+**A feed timestamp has three shapes and only one of them is UTC.**
+
+| DTSTART | Means | Handling |
+|---|---|---|
+| `...T020000Z` | an instant | convert to the student's zone |
+| `;TZID=America/Toronto:...` | an instant | the `ics` library resolves it; convert |
+| `...T003000` (no zone) | **local wall clock** | take the day as written, never convert |
+| `;VALUE=DATE:20261026` | a calendar day | never convert |
+
+The floating case is the trap: the `ics` library parses a zone-less DTSTART and
+labels it UTC, so after parsing it is indistinguishable from a real `Z`.
+Converting it pulled a 00:30 deadline back to 20:30 the previous evening -- a
+day early, in the opposite direction to the original bug. `_ics_floating_uids`
+reads the raw text once, because that is the only place the difference
+survives, and `floating=True` then means "the day is what the feed wrote".
+
+**`due_time` is populated on every path and shown on the calendar.** A student
+can compare Nexora against Brightspace at a glance -- a day that agrees but a
+time that does not is a bug worth seeing, and silence is what let a whole term
+of dates be wrong. `/settings` has a visible picker (`COMMON_TIMEZONES`, plus
+whatever the browser reports if it is not in the list) so this is auditable
+rather than magic.
+
+Rules that keep it correct:
+
+- **A bare date is never shifted.** `2026-09-10` is already a calendar day, and
+  applying an offset it never had would move every all-day event.
+- **A timestamp with no offset is read as UTC.** Brightspace and Canvas both
+  send UTC; assuming local would shift a correct date the wrong way.
+- **An unrecognised zone is refused, not stored.** `/api/timezone` returns 400
+  and the account stays on UTC. Storing something the app cannot honour would
+  date deadlines wrongly, and there is no guessing from an IP address.
+- The reporter is inside `{% if current_user.is_authenticated %}` -- an
+  anonymous page has no account to store it on and would only 401.
+
+Existing rows keep whatever date they were imported with until the next sync
+re-writes them. That is acceptable because a sync fixes them; a migration
+cannot, since the original timestamp was never stored.
+
+## A scraped due date is worthless until something consumes it
+
+`_import_deadlines(user, items)` turns the extension's `due_at` into real
+deadlines. Before it existed, the extension read D2L's own `DueDate` for every
+assignment and quiz, sent it, and the server **dropped it**: `CourseContent`
+has no date column, and nothing else looked at the field.
+
+So the only source of deadlines was the Brightspace *calendar feed* URL, a
+separate step on the connect page that is easy to skip. A student who did
+exactly what the page told them -- install the extension, press Import my
+courses -- got a calendar with **no assignments or quizzes in it at all**, and
+nothing said so. An empty calendar looks like a calm week.
+
+It deliberately mirrors the feed importer rather than inventing a second
+scheme: the same `group_id`, so an assignment arriving from both the feed and
+the extension collapses into one card, and the same
+`sync_state == 'dismissed'` check, so deleting something the LMS gave you is
+not undone on the next sync. Its `source_uid` is prefixed `ext:` so the two
+sources update their own row instead of fighting over one.
+
+**It runs in its own pass, before the content loop.** That loop
+short-circuits an item whose hash has not changed, so a deadline attached to
+already-imported content would never be created retroactively -- which is every
+student who synced before this shipped.
+
 ## Events, exams and the calendar feed
 
 **An event is a `Task`.** Not its own table: the dashboard, calendar,
@@ -366,18 +448,33 @@ stored as 4%.
 has both. Every matching row was excluded from the term-work total and the last
 one won the `final_row` slot, so the required-final solver worked against the
 12% lab exam while treating the 20% final as unmarked and assuming 100% on it.
-`_pick_final_row(rows)` now chooses once, up front, by score — exact "Final
-Exam" beats "final exam" without "lab", beats "final" without "lab", beats
-anything else with "final" in it — with ties going to the heavier component,
-and `is_final` is then identity against that choice rather than a regex per
-row. A course with a lecture final and a lab final is ordinary; only one of
-them is what "what do I need on the final" means.
+**`_final_name_score(name)` is the single definition**, and `_pick_final_name`
+picks the best of a set of `(name, weight)` pairs: exact "Final Exam" beats
+"final exam" without "lab", beats "final" without "lab", beats anything else
+containing "final", with ties going to the heavier component. It never guesses
+— with no candidate the caller simply offers no required-final figure. A course
+with a lecture final and a lab final is ordinary; only one of them is what
+"what do I need on the final" means.
 
-`_evaluate_option` still has the same blind spot on the multi-option path
-(`'final' in source.lower()` applies the hypothetical mark to every component
-containing the word). Left alone deliberately — that path carries eligibility
-and selection rules, and there is no corpus case for two finals inside an
-alternative scheme.
+Five places asked that question and every one of them asked it loosely:
+
+| Site | What it got wrong |
+|---|---|
+| `_compute_official_result`, single scheme | Excluded both from term work, and `final_row` ended as whichever matched last |
+| `_evaluate_option` | Applied one hypothetical mark to two components at once |
+| the same function's caller | `'final exam' not in m.lower()` also swallowed a missing **Final Lab Exam**, so it solved targets that were not reachable |
+| `_evaluate_pass_rules`, `component_minimum` | Answered a rule *about the lab exam* with the final's hypothetical mark |
+| `_group_state` | An aggregate holding both finals got two overridden members |
+
+`_evaluate_option` now returns `final_source`, so the caller filters on the
+component that was actually overridden instead of sniffing message text.
+`_pick_final_row` is identity-based, and `_component_source_name` is the one
+place that normalises `source`/`name`/`component`/`label`.
+
+`tests/test_two_finals.py` pins each site, and all five of its behavioural
+tests were confirmed to fail against the old matching before the fix landed —
+a test that passes either way pins nothing. The corpus case is
+`two_finals_two_schemes`.
 
 **A required mark above 100% is not advice.** The panel printed "You need
 158.33% on the final exam" — the right answer to the wrong question, and the
@@ -428,12 +525,13 @@ set -a; . ./.env; set +a
 venv/Scripts/python.exe evals/run_outline_eval.py
 ```
 
-Fifteen outlines, each isolating a different mechanism (dropped marks,
+Sixteen outlines, each isolating a different mechanism (dropped marks,
 overflow cap, excluded bonus, hurdle, aggregate minimum, alternative schemes,
 gated scheme, weight transfer, underspecified, multi-option with eligibility,
 two-column schemes with a bonus, a syllabus priced in points, a page where
 most percentages are penalties rather than weights, and an unweighted
-pass/fail hurdle). 15/15 on the single-call path; the pipeline path passes
+pass/fail hurdle, and two finals inside alternative schemes). 16/16 on the
+single-call path; the pipeline path passes
 every case it has been run against since the invention guard landed.
 
 `multi_option_eligibility` is **model-dependent**: it passes on
@@ -661,10 +759,41 @@ only in production.
 
 ## The study planner
 
-`/study-plan`. Three tables: `ClassBlock` (a recurring commitment -- a lecture,
+`/study-plan`. **The timetable card is promoted above the plan for a student
+who has not uploaded one** (`has_timetable` -> `.lead{order:-1}`, and the
+heading becomes "Start here / Add your timetable"). It shipped underneath an
+empty plan card, which made the only useful action on the page the second thing
+on it; a student asked where the timetable upload was while looking straight at
+the page.
+
+Three tables: `ClassBlock` (a recurring commitment -- a lecture,
 a lab, a work shift, a commute; all block study time the same way),
 `StudyPreference` (when this student will actually work), and `StudySession`
 (the generated blocks).
+
+**A biweekly lab is ordinary, and a weekly-only model is wrong both ways.**
+Entered as a weekly class it charged the student its hours on every off week;
+left out so the plan could use that time, the planner scheduled revision
+straight over the lab. `ClassBlock.repeat` is `weekly` | `biweekly` and
+`_block_occurs_on(block, day)` decides per DATE rather than per weekday --
+`_free_slots` already had the real date in hand.
+
+`anchor_date` is a date the class **does** fall on, deliberately not "odd or
+even weeks": whose numbering, ISO, the term's, the department's? A student can
+always answer when their next lab is. Weeks are compared Monday-to-Monday, so
+answering with the Monday of that week works as well as answering with the
+lab's own day.
+
+A biweekly block with **no** anchor is treated as running every week. Losing a
+study slot costs an hour; scheduling revision over a lab the student then
+misses costs the lab. Measured effect on a 9-12 Thursday lab: 8h15 free on lab
+weeks, 11h30 on off weeks -- 3h15 per fortnight that used to be discarded.
+
+The timetable reader is told to return `repeat: "biweekly"` for alternating,
+odd/even, fortnightly or A/B week wording, and told **not** to guess which
+weeks -- the student confirms the anchor. The week grid labels those chips
+"every other week", because an unmarked biweekly block looks weekly and the
+student cannot tell whether Nexora understood it.
 
 Times are **minutes from midnight**, not time columns. The planner does
 arithmetic on them constantly and a weekly repeat has no date to anchor a
@@ -674,6 +803,40 @@ timestamp to.
 and nothing else. A plan has to be the same plan when you look at it twice, has
 to explain why every block is where it is, and must not cost quota to redraw --
 `test_the_same_week_generated_twice_is_the_same_week` pins the first of those.
+
+## What the plan is FOR
+
+`StudyPreference.focus` is `all` or `exams`, and `focus_courses` narrows it
+further. Planning everything sounds generous and is the opposite: a term has
+twenty small deadlines and two exams, so the small ones win on count. Measured
+on a realistic term -- 27 blocks with everything on, of which one project
+milestone took **8** and each pre-lab quiz took 2. Aimed at exams: 12 blocks,
+all revision. A student following the first plan reaches their midterm having
+revised nothing, which is what was reported.
+
+`_EXAM_KINDS` includes `test` deliberately: in most courses a "test" is a
+midterm under another name, and dropping it would lose the thing the student is
+actually worried about.
+
+**`/api/study-plan/ask` lets the AI read the REQUEST, never write the
+schedule.** A sentence becomes settings -- focus, courses, days, daily minutes
+-- and the existing arithmetic builds the week. That is the same rule as the
+rest of the planner: a plan has to be the same plan when you look at it twice,
+has to explain why every block is where it is, and must not cost quota to
+redraw. A model laying out the week satisfies none of those, and
+`test_the_plan_it_returns_matches_a_plain_rebuild` pins the split.
+
+Two guards on that endpoint. A course code the student does not have is
+dropped, because a hallucinated one silently empties their plan; and the
+response carries `understood`, shown on the page, so a misreading is visible
+instead of quietly reshaping someone's term. The buttons do the common case
+with no AI at all, so a quota outage degrades to "use the buttons" rather than
+killing the feature.
+
+`_known_course_codes` unions SyncedCourse, Task and CourseOutlineProfile. A
+student who connected only the Brightspace calendar feed has deadlines and no
+course rows, and naming one of those courses was being discarded as unknown --
+so "only MATH" appeared to do nothing.
 
 What makes it worth using is data Nexora already has: `_study_items` reads the
 outline's component weight for each piece of work, so a 30% midterm earns three
@@ -811,5 +974,11 @@ empty rectangle, which is the normal case on a fresh account.
 
 - Match the surrounding style in `app.py` — it is dense and compact in places;
   don't reformat neighbouring code.
+- **Never insert a helper directly above a `def` that has decorators on it.**
+  `@app.route(...)` and `@login_required` sit on the lines above the function
+  they decorate, so a helper dropped in between silently steals them: the route
+  disappears and the helper becomes the view, which fails as
+  `TypeError: missing 1 required positional argument` on every request. Put new
+  helpers above the decorator line, or well away from routes.
 - Comments explain *why*, usually referencing a bug that motivated the line.
 - New assessment logic gets a test in `tests/`.

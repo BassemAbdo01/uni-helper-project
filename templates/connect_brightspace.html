@@ -117,7 +117,8 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     <header><div><span class="k">Everything else</span><h2>Nexora Sync extension</h2></div></header>
     <div class="body pad">
       <ol class="steps">
-        <li><strong>Install Nexora Sync</strong> in Chrome.</li>
+        <li><strong>Install Nexora Sync</strong> in Chrome
+            {%- if extension_url %} — the button below opens the Chrome Web Store{% endif %}.</li>
         <li><strong>Click the Nexora icon</strong> in your toolbar and press
             <strong>Connect to Nexora</strong>. It links itself to this account —
             there is no key to copy.</li>
@@ -127,10 +128,35 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       </ol>
 
       <div class="actions" style="margin-top:18px">
-        <a class="btn" href="https://brightspace.carleton.ca/d2l/home" target="_blank" rel="noopener">
-          Open Brightspace
-        </a>
+        {# Installing is the actual first action, so it gets the primary button.
+           Without a store id there is nothing to link to, and a dead Install
+           button is worse than a sentence telling them what to search for. #}
+        {% if extension_url %}
+          <a class="btn" href="{{ extension_url }}" target="_blank" rel="noopener">
+            Install Nexora Sync
+          </a>
+        {% endif %}
+        {# Never Carleton's Brightspace for a student who is not at Carleton.
+           brightspace_home is derived from their own imported courses. #}
+        {% if brightspace_home %}
+          <a class="btn {% if extension_url %}quiet{% endif %}"
+             href="{{ brightspace_home }}" target="_blank" rel="noopener">
+            Open Brightspace
+          </a>
+        {% endif %}
       </div>
+      {% if not extension_url %}
+        <p class="hint" style="margin-top:12px">
+          Search the Chrome Web Store for <strong>Nexora Sync</strong> and add it to Chrome.
+        </p>
+      {% endif %}
+      {% if not brightspace_home %}
+        <p class="hint" style="margin-top:12px">
+          Then open your own university's Brightspace and press
+          <strong>Import my courses</strong>. Nexora works with any university's
+          Brightspace, so there is nothing to configure here.
+        </p>
+      {% endif %}
 
       <p class="hint" style="margin-top:14px">
         The extension works through your existing Brightspace session. Nexora never receives

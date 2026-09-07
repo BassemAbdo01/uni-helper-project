@@ -5,6 +5,12 @@
 {% block head %}
 <style>
 .two{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;align-items:start}
+/* The column is a flex stack so the timetable can be promoted above the plan
+   for a student who has not uploaded one yet. Setup before output: an empty
+   plan card sitting above the upload is what made the upload impossible to
+   find. */
+.two > div{display:flex;flex-direction:column;gap:18px}
+.two .lead{order:-1}
 @media (max-width:1000px){ .two{grid-template-columns:1fr} }
 
 .setup{padding:18px}
@@ -96,6 +102,30 @@
   </div>
 </div>
 
+<section class="card" id="focusCard">
+  <header><div><span class="k">What is this plan for</span><h2>Aim it</h2></div></header>
+  <div class="body pad">
+    <div style="display:flex;gap:9px;flex-wrap:wrap">
+      <button class="btn quiet sm focusBtn" data-focus="all" type="button">All coursework</button>
+      <button class="btn quiet sm focusBtn" data-focus="exams" type="button">Tests, midterms &amp; finals only</button>
+    </div>
+    <p class="hint" style="margin-top:11px">
+      Planning everything buries revision under pre-lab quizzes and milestones &mdash;
+      the small things win on sheer number. Aim it at exams and Nexora spends the
+      week on what decides your grade.
+    </p>
+    <div style="margin-top:14px">
+      <label for="askBox">Or just say what you want</label>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:6px">
+        <input id="askBox" maxlength="500" style="flex:1;min-width:240px"
+               placeholder="Only midterms and finals for BIOL and MATH, three weeks ahead">
+        <button class="btn sm" id="askGo" type="button">Ask Nexora</button>
+      </div>
+      <p class="note meta" id="askState" hidden></p>
+    </div>
+  </div>
+</section>
+
 <div class="two">
   <div>
     <section class="card" id="planCard">
@@ -106,9 +136,10 @@
       <div class="body pad" id="planBody"></div>
     </section>
 
-    <section class="card">
+    <section class="card{% if not has_timetable %} lead{% endif %}">
       <header>
-        <div><span class="k">Your week</span><h2>Timetable</h2></div>
+        <div><span class="k">{% if has_timetable %}Your week{% else %}Start here{% endif %}</span>
+             <h2>{% if has_timetable %}Timetable{% else %}Add your timetable{% endif %}</h2></div>
         <span class="k" style="margin:0" id="blockCount"></span>
       </header>
       <div class="body pad setup">
@@ -131,6 +162,17 @@
 
         <div id="proposed" hidden style="margin-top:16px">
           <div class="week" id="proposedWeek"></div>
+          {# A timetable says a class is biweekly; it almost never says which
+             week is which -- the alternation usually lives in a separate lab
+             schedule. So Nexora asks, once, rather than guessing. #}
+          <div id="anchorAsk" hidden style="margin-top:14px">
+            <p class="hint" style="margin:0 0 9px">
+              These run <strong>every other week</strong>. When is the next one?
+              Leave a date blank and Nexora will keep that time clear every week,
+              which is safe but costs you study hours on the off weeks.
+            </p>
+            <div id="anchorRows" style="display:flex;flex-direction:column;gap:8px"></div>
+          </div>
           <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:12px">
             <button class="btn sm" id="ttConfirm" type="button">These are right &mdash; save them</button>
             <button class="btn quiet sm" id="ttDiscard" type="button">Discard</button>
@@ -257,6 +299,21 @@
     </div>
     <div class="pair">
       <div>
+        <label for="cRepeat">How often</label>
+        <select id="cRepeat">
+          <option value="weekly">Every week</option>
+          <option value="biweekly">Every other week</option>
+        </select>
+      </div>
+      <div>
+        {# An anchor date, not "odd or even weeks" -- whose numbering? A student
+           can always answer when their next one is. #}
+        <label for="cAnchor">Next one falls on</label>
+        <input id="cAnchor" type="date">
+      </div>
+    </div>
+    <div class="pair">
+      <div>
         <label for="cCourse">Course</label>
         <select id="cCourse">
           <option value="">No course</option>
@@ -349,7 +406,14 @@ dialog.sheet::backdrop{background:#0B0908cc}
         const who = document.createElement('b');
         who.textContent = block.label;
         const when = document.createElement('span');
+        // Say so on the chip. A biweekly lab sitting in the week grid with no
+        // marking looks like a weekly one, and the student cannot tell whether
+        // Nexora understood it.
+        const everyOther = (block.repeat || 'weekly') === 'biweekly';
         when.textContent = `${block.start_label || clock(block.start)}–${block.end_label || clock(block.end)}`
+          + (everyOther ? (block.anchor_date
+              ? ' · every other week'
+              : ' · every other week, date not set') : '')
           + (block.location ? ` · ${block.location}` : '');
         chip.append(who, when);
         if (editable) {
@@ -395,6 +459,7 @@ dialog.sheet::backdrop{background:#0B0908cc}
       const data = await call('/api/timetable/analyze', { method: 'POST', body: form });
       proposed = data.blocks || [];
       weekInto($('proposedWeek'), proposed, false);
+      renderAnchorAsk();
       $('proposedNotice').textContent = data.notice || '';
       $('proposed').hidden = false;
       setStatus($('ttStatus'), `Found ${proposed.length} class${proposed.length === 1 ? '' : 'es'}. Check them below.`, 'good');
@@ -405,7 +470,41 @@ dialog.sheet::backdrop{background:#0B0908cc}
     }
   };
 
-  $('ttDiscard').onclick = () => { proposed = []; $('proposed').hidden = true; setStatus($('ttStatus'), ''); };
+  const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
+                    'Saturday', 'Sunday'];
+
+  // One date field per biweekly class, so the answer is specific to that class
+  // -- a Monday lab and a Thursday lab can easily alternate out of step.
+  function renderAnchorAsk() {
+    const rows = $('anchorRows');
+    const every_other = proposed.filter(b => (b.repeat || 'weekly') === 'biweekly');
+    $('anchorAsk').hidden = !every_other.length;
+    if (!every_other.length) { rows.replaceChildren(); return; }
+    const frag = document.createDocumentFragment();
+    every_other.forEach(block => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap';
+      const name = document.createElement('span');
+      name.style.cssText = 'flex:1;min-width:180px;font-size:13px';
+      name.textContent = `${block.label} — ${DAY_NAMES[block.weekday] || ''} `
+        + `${block.start_label || ''}`;
+      const when = document.createElement('input');
+      when.type = 'date';
+      when.value = block.anchor_date || '';
+      when.setAttribute('aria-label', `Date of the next ${block.label}`);
+      when.oninput = e => { block.anchor_date = e.target.value; };
+      row.append(name, when);
+      frag.append(row);
+    });
+    rows.replaceChildren(frag);
+  }
+
+  $('ttDiscard').onclick = () => {
+    proposed = [];
+    $('proposed').hidden = true;
+    $('anchorAsk').hidden = true;
+    setStatus($('ttStatus'), '');
+  };
 
   $('ttConfirm').onclick = async () => {
     if (!proposed.length) return;
@@ -417,8 +516,18 @@ dialog.sheet::backdrop{background:#0B0908cc}
       blocks = data.blocks || [];
       proposed = [];
       $('proposed').hidden = true;
+      $('anchorAsk').hidden = true;
       renderTimetable();
-      setStatus($('ttStatus'), 'Saved. Building your plan…', 'good');
+      // Never claim a save that saved nothing. This said "Saved. Building your
+      // plan..." over an empty week for as long as the upload path existed.
+      if (!blocks.length) {
+        setStatus($('ttStatus'), 'Nothing was saved. Add your classes by hand below.', 'bad');
+        return;
+      }
+      const dropped = Number(data.skipped) || 0;
+      setStatus($('ttStatus'), dropped
+        ? `Saved ${blocks.length}, but ${dropped} could not be read — check them below.`
+        : 'Saved. Building your plan…', dropped ? 'bad' : 'good');
       await regenerate();
     } catch (err) { setStatus($('ttStatus'), err.message, 'bad'); }
   };
@@ -430,9 +539,21 @@ dialog.sheet::backdrop{background:#0B0908cc}
     $('classForm').reset();
     $('cStart').value = '09:00';
     $('cEnd').value = '10:00';
+    syncRepeat();
     sheet.showModal();
     $('cLabel').focus();
   };
+  // The anchor date is meaningless for a weekly class, and an empty required
+  // field nobody needs is how a form gets abandoned.
+  const syncRepeat = () => {
+    const every_other = $('cRepeat').value === 'biweekly';
+    $('cAnchor').parentElement.hidden = !every_other;
+    // Deliberately not prefilled with today. "Today is a lab day" is a guess,
+    // and a wrong anchor inverts the whole alternation -- every study block
+    // lands on the weeks the student is actually in the lab.
+  };
+  $('cRepeat').onchange = syncRepeat;
+
   $('cCancel').onclick = () => sheet.close();
   $('classForm').addEventListener('submit', async e => {
     e.preventDefault();
@@ -443,6 +564,7 @@ dialog.sheet::backdrop{background:#0B0908cc}
           label: $('cLabel').value, weekday: $('cDay').value, start: $('cStart').value,
           end: $('cEnd').value, kind: $('cKind').value, course: $('cCourse').value,
           location: $('cWhere').value,
+          repeat: $('cRepeat').value, anchor_date: $('cAnchor').value,
         }),
       });
       blocks.push(data.block);
@@ -458,10 +580,14 @@ dialog.sheet::backdrop{background:#0B0908cc}
       const empty = document.createElement('div');
       empty.className = 'empty';
       const head = document.createElement('strong');
+      // The server already knows which of the three reasons applies -- no
+      // timetable, nothing due, or no free time inside the study hours -- and
+      // that answer belongs here, in the empty card the student is reading,
+      // not only in the preferences panel off to the side.
       head.textContent = blocks.length ? 'No plan yet' : 'Add your timetable first';
-      empty.append(head, document.createTextNode(blocks.length
+      empty.append(head, document.createTextNode(lastReason || (blocks.length
         ? 'Press "Build my plan" and Nexora will lay out the next two weeks.'
-        : 'Nexora needs to know when you are in class before it can find your free time.'));
+        : 'Nexora needs to know when you are in class before it can find your free time.')));
       host.replaceChildren(empty);
       $('planCount').textContent = '';
       return;
@@ -542,12 +668,79 @@ dialog.sheet::backdrop{background:#0B0908cc}
     $('planCount').textContent = `${hours.toFixed(1)}h planned · ${left} to go`;
   }
 
+  // Why the last build produced nothing, so renderPlan can say so.
+  let lastReason = '';
+
+  /* ---------------- what the plan is for ---------------- */
+  // The buttons are the whole feature for most people. The box exists for the
+  // requests a pair of buttons cannot express -- two named courses, a longer
+  // horizon -- and it goes through the same settings, so a plan is still
+  // reproducible and still explains itself.
+  function markFocus(focus) {
+    document.querySelectorAll('.focusBtn').forEach(b => {
+      const on = b.dataset.focus === (focus || 'all');
+      b.classList.toggle('quiet', !on);
+    });
+  }
+  markFocus((prefs && prefs.focus) || 'all');
+
+  document.querySelectorAll('.focusBtn').forEach(button => {
+    button.onclick = async () => {
+      const focus = button.dataset.focus;
+      markFocus(focus);
+      try {
+        await call('/api/study-preferences', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ focus }),
+        });
+        await regenerate();
+      } catch (err) { setStatus($('prefStatus'), err.message, 'bad'); }
+    };
+  });
+
+  $('askGo').onclick = async () => {
+    const question = $('askBox').value.trim();
+    if (!question) return;
+    const state = $('askState');
+    state.hidden = false;
+    state.className = 'note meta';
+    state.textContent = 'Reading that…';
+    $('askGo').disabled = true;
+    try {
+      const data = await call('/api/study-plan/ask', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question }),
+      });
+      sessions = data.sessions || [];
+      lastReason = sessions.length ? '' : (data.reason || '');
+      renderPlan();
+      markFocus(data.focus);
+      // Say what it understood. A misreading has to be visible rather than
+      // quietly reshaping someone's term.
+      const bits = [
+        data.focus === 'exams' ? 'tests, midterms and finals only' : 'all coursework',
+        (data.courses || []).length ? (data.courses || []).join(', ') : 'every course',
+        `${data.days} days`,
+        `up to ${Math.round((data.max_daily_minutes || 0) / 60 * 10) / 10}h a day`,
+      ];
+      state.className = 'note meta good';
+      state.textContent = (data.understood ? data.understood + ' ' : '')
+        + `Now planning: ${bits.join(' · ')}.`;
+    } catch (err) {
+      state.className = 'note meta bad';
+      state.textContent = err.message;
+    } finally {
+      $('askGo').disabled = false;
+    }
+  };
+
   async function regenerate() {
     $('regen').disabled = true;
     $('regen').textContent = 'Building…';
     try {
       const data = await call('/api/study-plan/generate', { method: 'POST' });
       sessions = data.sessions || [];
+      lastReason = sessions.length ? '' : (data.reason || '');
       renderPlan();
       if (!sessions.length && data.reason) setStatus($('prefStatus'), data.reason, 'bad');
       else setStatus($('prefStatus'), '');

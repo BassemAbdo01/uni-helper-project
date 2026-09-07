@@ -68,6 +68,29 @@
 {% block scripts %}{% endblock %}
 
 {% if current_user.is_authenticated %}
+<script>
+/* Report this browser's timezone once, so deadlines are dated in the student's
+   own day rather than in UTC. A Brightspace deadline of 11:59 PM Eastern is
+   03:59Z the next morning, and dating it in UTC showed it a day late -- the one
+   mistake that makes someone miss the work. Fires only when it differs from
+   what the server already has, so it is not a request per page view. */
+(() => {
+  "use strict";
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!zone || zone === {{ (current_user.timezone or '')|tojson }}) return;
+    fetch('/api/timezone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timezone: zone }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch (_) { /* a browser without Intl simply stays on UTC */ }
+})();
+</script>
+{% endif %}
+
+{% if current_user.is_authenticated %}
 <div id="nexToast" role="status" aria-live="polite"></div>
 <script>
 /* Canvas has no scheduler behind it, so the refresh rides on the student

@@ -83,6 +83,34 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     separately from whether you passed. Nexora reports both.
   </div>
 
+  <section class="card" id="timezone">
+    <header><div><span class="k">Your day</span><h2>Time zone</h2></div></header>
+    <div class="body pad">
+      <p class="hint">
+        Every deadline is shown as the day it falls on <em>where you are</em>. A
+        Brightspace deadline at 10:00&nbsp;PM is the small hours of the next
+        morning in UTC, so getting this wrong moves work by a day. Nexora reads
+        it from your browser; change it here if you are studying somewhere else.
+      </p>
+      <div class="row" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:220px">
+          <label for="tzPick">Time zone</label>
+          <select id="tzPick">
+            {% for name in timezones %}
+              <option value="{{ name }}"{% if name == current_timezone %} selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button class="btn" id="tzSave" type="button">Save time zone</button>
+      </div>
+      <p class="note meta" id="tzState" hidden></p>
+      <p class="hint" style="margin-top:10px">
+        Detected in this browser: <strong id="tzDetected">—</strong>.
+        {% if not current_timezone %}Nothing saved yet, so Nexora is using UTC.{% endif %}
+      </p>
+    </div>
+  </section>
+
   <section class="card" id="calendar-feed">
     <header><div><span class="k">Google Calendar</span><h2>Subscribe to your deadlines</h2></div></header>
     <div class="body pad">
@@ -131,6 +159,46 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 {% endblock %}
 
 {% block scripts %}
+<script>
+(() => {
+  "use strict";
+  const pick = document.getElementById('tzPick');
+  const state = document.getElementById('tzState');
+  const detected = (() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) { return ''; }
+  })();
+  document.getElementById('tzDetected').textContent = detected || 'not available';
+  // Offer the browser's own zone even if it is not in the shortlist, so a
+  // student anywhere can pick the right one rather than the nearest guess.
+  if (detected && !Array.from(pick.options).some(o => o.value === detected)) {
+    const extra = document.createElement('option');
+    extra.value = detected; extra.textContent = detected;
+    pick.prepend(extra);
+  }
+  if (!pick.value && detected) pick.value = detected;
+
+  document.getElementById('tzSave').onclick = async () => {
+    state.hidden = false;
+    state.textContent = 'Saving…';
+    state.className = 'note meta';
+    try {
+      const res = await fetch('/api/timezone', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ timezone: pick.value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'That time zone was not accepted.');
+      state.className = 'note meta good';
+      state.textContent = data.recomputed
+        ? `Saved. ${data.recomputed} deadline${data.recomputed === 1 ? '' : 's'} re-dated to your day.`
+        : 'Saved.';
+    } catch (err) {
+      state.className = 'note meta bad';
+      state.textContent = err.message;
+    }
+  };
+})();
+</script>
 <script>
 (() => {
   "use strict";
