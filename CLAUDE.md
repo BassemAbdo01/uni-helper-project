@@ -804,6 +804,66 @@ and nothing else. A plan has to be the same plan when you look at it twice, has
 to explain why every block is where it is, and must not cost quota to redraw --
 `test_the_same_week_generated_twice_is_the_same_week` pins the first of those.
 
+## Nexora measuring what actually happened
+
+`StudySession.state` was written by Done/Skip and read by **nothing**. Nexora
+recorded no fact about what a student actually did, and that one gap blocked
+every "learn the student" idea: "this student needs 3h15m for a SYSC lab"
+requires having recorded six labs.
+
+`actual_minutes` and `completed_at` fix it, and `_learned_effort(user_id)`
+turns them into estimates keyed by (course, kind). Four rules keep it honest:
+
+- **Only real answers count.** A session marked done with no duration records
+  `0` and is skipped. Recording the *planned* length as the actual one would
+  teach the estimator its own guess back for ever, and it would never improve.
+- **Per item, not per block.** An assignment is several sessions; what it cost
+  is the total.
+- **The median, not the mean.** One abandoned six-hour session would drag every
+  future estimate with it.
+- **`LEARNED_EFFORT_MIN_SAMPLES` (3) before it trusts itself.** Below that the
+  generic estimate is the honest answer. Measured effect: a lab guessed at 2h
+  becomes 3h15m once six real ones are in.
+
+Durations are capped at 8h -- a forgotten timer must not teach it that a lab
+takes a day and a half.
+
+## The day that went by
+
+`_close_off_yesterday` retires plan blocks whose date has passed untouched,
+from `planned` to **`missed`**. They used to stay `planned` for ever, because
+`_save_plan` only replaces sessions from today forward, so missed work
+accumulated as ghosts no rebuild could clear and no count could trust.
+
+`skipped` is a decision the student made; `missed` is a day that went by. They
+are different facts.
+
+`_catch_up_message` says what changed in one sentence with no scolding in it --
+*"2h30 of planned study did not happen (BIOL1103, SYSC2100). It is back in your
+plan across 4 blocks, ahead of the lighter work."* Every planner fails the same
+way: the moment someone misses Tuesday the plan is wrong, stays wrong, and
+becomes a thing they avoid opening. There is a test asserting the message
+contains none of "should have", "failed", "behind schedule".
+
+## Revision has stages
+
+`_EXAM_LADDER` and `_exam_stage(days_left)`: read and rebuild notes, then weak
+topics, then timed problem sets, then a past paper, then repair what it
+exposed, then light review only. Deterministic on the gap to the exam, so the
+same day always gets the same stage and the plan can explain itself.
+
+**Capping the daily minutes was not enough to make it reachable.** The greedy
+loop poured a five-hour midterm into the first two free days and stopped eleven
+days out, so the past-paper rung existed and could never be climbed.
+`exam_gaps` spaces the same six sessions across the window -- one every ~2 days,
+finishing near the exam -- with the last two days always open so the final rung
+cannot be lost to a busy week.
+
+A block's focus line carries three different things and needs all of them: the
+topics are WHAT, the outline's own pointer ("module 4-6") is WHERE, and the rung
+is HOW. The first version of this dropped the pointer, and
+`test_a_session_names_the_topics_the_outline_gave` caught it.
+
 ## What the plan is FOR
 
 `StudyPreference.focus` is `all` or `exams`, and `focus_courses` narrows it

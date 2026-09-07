@@ -133,6 +133,7 @@
         <div><span class="k">The plan</span><h2>Next two weeks</h2></div>
         <span class="k" style="margin:0" id="planCount"></span>
       </header>
+      <p class="note meta" id="catchUp" hidden></p>
       <div class="body pad" id="planBody"></div>
     </section>
 
@@ -575,6 +576,13 @@ dialog.sheet::backdrop{background:#0B0908cc}
 
   /* ---------------- the plan ---------------- */
   function renderPlan() {
+    // Say what happened to a day that went by, above the plan, once. Not a
+    // telling-off: the work still has a deadline and it has been moved.
+    const banner = $('catchUp');
+    if (banner) {
+      banner.textContent = catchUp || '';
+      banner.hidden = !catchUp;
+    }
     const host = $('planBody');
     if (!sessions.length) {
       const empty = document.createElement('div');
@@ -646,10 +654,27 @@ dialog.sheet::backdrop{background:#0B0908cc}
           if (s.state === state) button.classList.add('on');
           button.onclick = async () => {
             const next = s.state === state ? 'planned' : state;
+            const body = { state: next };
+            if (next === 'done') {
+              // Ask how long it really took. This is the only measurement
+              // Nexora has, and recording the PLANNED length instead would
+              // teach the estimator its own guess back for ever. Cancel or a
+              // blank answer records nothing rather than a fabricated number.
+              const planned = Math.max(0, (s.end || 0) - (s.start || 0));
+              const said = window.prompt(
+                `How long did that actually take, in minutes?
+` +
+                `Planned ${planned}. Leave blank to skip — Nexora only learns from real answers.`,
+                String(planned));
+              if (said !== null && String(said).trim() !== '') {
+                const minutes = Number(String(said).trim());
+                if (Number.isFinite(minutes) && minutes > 0) body.minutes = Math.round(minutes);
+              }
+            }
             try {
               const data = await call(`/api/study-plan/${encodeURIComponent(s.id)}`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ state: next }),
+                body: JSON.stringify(body),
               });
               Object.assign(s, data.session);
               renderPlan();
@@ -670,6 +695,8 @@ dialog.sheet::backdrop{background:#0B0908cc}
 
   // Why the last build produced nothing, so renderPlan can say so.
   let lastReason = '';
+  // What happened to the days that went by untouched.
+  let catchUp = '';
 
   /* ---------------- what the plan is for ---------------- */
   // The buttons are the whole feature for most people. The box exists for the
@@ -741,6 +768,7 @@ dialog.sheet::backdrop{background:#0B0908cc}
       const data = await call('/api/study-plan/generate', { method: 'POST' });
       sessions = data.sessions || [];
       lastReason = sessions.length ? '' : (data.reason || '');
+      catchUp = data.catch_up || '';
       renderPlan();
       if (!sessions.length && data.reason) setStatus($('prefStatus'), data.reason, 'bad');
       else setStatus($('prefStatus'), '');

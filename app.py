@@ -592,7 +592,18 @@ class StudySession(db.Model):
     reason = db.Column(db.String(255), default="")
     task_id = db.Column(db.String(64), default="")
     item_kind = db.Column(db.String(30), default="work")
-    state = db.Column(db.String(20), default="planned")   # planned | done | skipped
+    # planned | done | skipped | missed. 'skipped' is a decision the student
+    # made; 'missed' is a day that simply went by. They are different facts and
+    # only one of them is worth apologising for -- neither, as it turns out.
+    state = db.Column(db.String(20), default="planned")
+    # How long it really took, in minutes. 0 means the student did not say, and
+    # such a session is excluded from learning: recording the PLANNED length as
+    # the actual one would teach the estimator its own guess back and it would
+    # never improve. Nexora measured nothing about what a student actually did
+    # until this existed -- `state` was written by Done/Skip and read by
+    # nothing at all -- which is what blocked every "learn the student" idea.
+    actual_minutes = db.Column(db.Integer, default=0)
+    completed_at = db.Column(db.DateTime, nullable=True)
     generated_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
@@ -721,6 +732,10 @@ def ensure_schema_columns():
         "course_outline_profile": {
             "study_brief_json": "TEXT DEFAULT ''",
             "brief_built_at": "TIMESTAMP NULL",
+        },
+        "study_session": {
+            "actual_minutes": "INTEGER DEFAULT 0",
+            "completed_at": "TIMESTAMP NULL",
         },
         "study_preference": {
             "focus": "VARCHAR(20) DEFAULT 'all'",
@@ -4362,7 +4377,9 @@ def accept_exam_suggestions():
 # not cost quota to redraw. Gemini reads the timetable image; nothing more.
 
 STUDY_HORIZON_DAYS = 14
-EXAM_REVISION_WINDOW = 12      # days before an exam that revision may start
+# Days before an exam that revision may start. Matches the top rung of
+# _EXAM_LADDER: starting earlier than the first stage has nothing to say.
+EXAM_REVISION_WINDOW = 14
 MAX_CONSECUTIVE_SAME = 2       # sessions in a row on one thing before switching
 
 # Rough hours of work a thing deserves, before weight is taken into account.
@@ -4757,6 +4774,56 @@ def _focus_courses_set(pref):
     return {c.strip().upper() for c in raw.split(",") if c.strip()}
 
 
+# How many finished items of a kind Nexora needs before it trusts its own
+# measurement over the generic estimate. Two is noise; one long night with a
+# broken laptop should not redefine what a lab costs.
+LEARNED_EFFORT_MIN_SAMPLES = int(os.environ.get("LEARNED_EFFORT_MIN_SAMPLES", "3"))
+
+
+def _median(values):
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[middle])
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _learned_effort(user_id):
+    """How long this student's work actually takes, per course and kind.
+
+    The median rather than the mean, because one abandoned six-hour session
+    would drag every future estimate with it. Grouped per ITEM, not per block:
+    an assignment is several sessions and what matters is what the assignment
+    cost in total.
+
+    Returns {(course, kind): hours}. Only pairs with at least
+    LEARNED_EFFORT_MIN_SAMPLES finished items appear -- below that the generic
+    estimate is the honest answer, and pretending otherwise is how a planner
+    starts confidently telling students the wrong thing.
+    """
+    rows = StudySession.query.filter_by(user_id=user_id, state="done").all()
+    per_item = {}
+    for row in rows:
+        minutes = int(row.actual_minutes or 0)
+        if minutes <= 0:
+            continue          # the student did not say; never guess for them
+        key = (row.course_full or "OTHER", row.item_kind or "work")
+        item = row.task_id or f"{key[0]}|{row.title or ''}"
+        per_item.setdefault(key, {}).setdefault(item, 0)
+        per_item[key][item] += minutes
+    learned = {}
+    for key, items in per_item.items():
+        totals = list(items.values())
+        if len(totals) < LEARNED_EFFORT_MIN_SAMPLES:
+            continue
+        middle = _median(totals)
+        if middle:
+            learned[key] = max(0.25, min(12.0, middle / 60.0))
+    return learned
+
+
 def _study_items(user_id, today=None, pref=None):
     """Everything worth spending time on, with a priority and an effort budget.
 
@@ -4771,6 +4838,7 @@ def _study_items(user_id, today=None, pref=None):
     weights = _component_weights(user_id)
     standing = _course_standing(user_id)
     at_risk = _at_risk_courses(user_id)
+    learned = _learned_effort(user_id)
     briefs = {}
     horizon = today + timedelta(days=STUDY_HORIZON_DAYS + 21)
     items = []
@@ -4790,7 +4858,13 @@ def _study_items(user_id, today=None, pref=None):
             continue
         weight = _weight_for(title, course, weights)
         hours = _BASE_EFFORT.get(kind, 2.0)
-        if weight:
+        measured = learned.get((course, kind))
+        if measured:
+            # What this student's own finished work of this kind actually cost.
+            # Beats both the generic estimate and the weight-scaled one: a
+            # student who needs 3h15m for a SYSC lab needs 3h15m for the next.
+            hours = measured
+        elif weight:
             # Weight is the honest signal when the outline gave one: a 30%
             # midterm earns three times the hours of a 10% one.
             hours = max(1.0, min(12.0, hours * (float(weight) / 12.0) ** 0.7))
@@ -4848,7 +4922,34 @@ def _study_items(user_id, today=None, pref=None):
     return items
 
 
-def _focus_for(item):
+# Revision has a shape, and it is not "study for two hours" six times over.
+# Each rung is (days before the exam this stage starts, what the stage is for).
+# Read from the widest gap down, so the first rung a day qualifies for wins.
+_EXAM_LADDER = [
+    (11, "read back through the material and rebuild your notes"),
+    (8, "work the topics you are weakest on, not the ones you enjoy"),
+    (5, "problem sets end to end, timed, no notes"),
+    (3, "a past paper under exam conditions"),
+    (2, "repair whatever the past paper exposed"),
+    (0, "light review only — sleep is worth more than another hour now"),
+]
+
+
+def _exam_stage(days_left):
+    """Which rung of the revision ladder a day sits on.
+
+    A student asked for exactly this and it is also simply how revision works:
+    reading, then weak topics, then problems, then a past paper, then repair,
+    then leave it alone. Deterministic on the gap to the exam, so the same day
+    always gets the same stage and the plan can explain itself.
+    """
+    for threshold, purpose in _EXAM_LADDER:
+        if days_left >= threshold:
+            return purpose
+    return _EXAM_LADDER[-1][1]
+
+
+def _focus_for(item, day=None):
     """What to do in this block.
 
     The outline's own topics when Nexora has read them, and the generic verb
@@ -4858,6 +4959,23 @@ def _focus_for(item):
     brief = item.get("brief") or {}
     how = str(brief.get("how") or "").strip()
     topics = [t for t in (brief.get("topics") or []) if t]
+    # For an exam, WHAT to study comes from the outline and HOW depends on how
+    # close it is. Four sessions all saying "revise" is the advice that makes
+    # plans useless.
+    if day is not None and item.get("kind") in _EXAM_KINDS and item.get("due"):
+        # Three different things, and a block needs all of them: the topics are
+        # WHAT, the outline's own pointer is WHERE, and the ladder rung is HOW.
+        # Dropping the outline's "module 4-6" for the rung lost the only part
+        # that tells a student which pages to open.
+        stage = _exam_stage((item["due"] - day).days)
+        head = ", ".join(topics[:3])
+        if head and how:
+            return f"{head} ({how}) — {stage}"[:500]
+        if head:
+            return f"{head} — {stage}"[:500]
+        if how:
+            return f"{how} — {stage}"[:500]
+        return stage[:500]
     if topics:
         listed = ", ".join(topics[:3])
         return (f"{listed} — {how}" if how else
@@ -4903,6 +5021,33 @@ def _build_plan(user_id, today=None, days=None):
     break_len = max(0, int(pref.break_min or 0))
     daily_cap = max(session_len, int(pref.max_daily_min or 240))
     remaining = {id(i): i["minutes_needed"] for i in items}
+    # Revision has to be SPREAD, not spent. The greedy loop poured a midterm's
+    # whole five hours into the first two free days, so the plan finished
+    # revising eleven days early and never reached the past-paper stage --
+    # _EXAM_LADDER existed and could not be climbed. Cap an exam at roughly its
+    # fair share of the days it may be revised over.
+    exam_daily_cap = {}
+    # Which days-before-the-exam an exam may be revised on. Capping the daily
+    # minutes alone was not enough: a five-hour midterm still finished in six
+    # consecutive days and stopped eleven days out, so the problem-set and
+    # past-paper rungs were never reached. Spacing the same six sessions across
+    # the window is both what a student asked for and how revision works.
+    exam_gaps = {}
+    for item in items:
+        if item["kind"] not in _EXAM_KINDS or not item.get("due"):
+            continue
+        window = max(1, min(EXAM_REVISION_WINDOW, (item["due"] - today).days))
+        exam_daily_cap[id(item)] = max(session_len, int(item["minutes_needed"] / window))
+        needed = max(1, -(-item["minutes_needed"] // max(1, session_len)))
+        if needed >= window:
+            gaps = set(range(1, window + 1))
+        else:
+            step = window / float(needed)
+            gaps = {max(1, int(round(1 + index * step))) for index in range(needed)}
+        # The last two days are always open, so the final light-review rung
+        # cannot be lost to a day with no free time earlier in the week.
+        exam_gaps[id(item)] = gaps | {1, 2}
+    spent_per_item_day = {}
     # Work that is already late still has to fit somewhere. Without this the
     # "never schedule past the deadline" rule silently excluded exactly the
     # work the student is most behind on -- every day is past its deadline.
@@ -4928,8 +5073,17 @@ def _build_plan(user_id, today=None, days=None):
                 # does not start now just because there is a gap in the week.
                 if day > latest_day[id(item)]:
                     continue
-                if item["kind"] in ("exam", "final", "midterm", "test") and \
+                if item["kind"] in _EXAM_KINDS and item.get("due") and \
                         (item["due"] - day).days > EXAM_REVISION_WINDOW:
+                    continue
+                cap = exam_daily_cap.get(id(item))
+                if cap is not None and spent_per_item_day.get((day, id(item)), 0) >= cap:
+                    # Its share of today is used. Something else takes this slot
+                    # and this exam gets a later day -- which is what turns six
+                    # blocks of "revise" into a sequence of stages.
+                    continue
+                gaps = exam_gaps.get(id(item))
+                if gaps is not None and (item["due"] - day).days not in gaps:
                     continue
                 score = item["priority"]
                 if item is last_item and run >= MAX_CONSECUTIVE_SAME:
@@ -4948,20 +5102,75 @@ def _build_plan(user_id, today=None, days=None):
             length = min(session_len, remaining[id(item)])
             if length < 20:
                 length = min(session_len, max(20, remaining[id(item)]))
+            cap = exam_daily_cap.get(id(item))
+            if cap is not None:
+                room = cap - spent_per_item_day.get((day, id(item)), 0)
+                length = min(length, max(20, room))
             plan.append({
                 "on_date": day.isoformat(), "start_min": cursor,
                 "end_min": cursor + length, "course_full": item["course"],
                 "title": item["title"], "item_kind": item["kind"],
                 "task_id": item["task_id"] or "",
-                "focus": _focus_for(item),
+                "focus": _focus_for(item, day),
                 "reason": _reason_for(item, today),
             })
             remaining[id(item)] -= length
             spent_on_day[day] = used + length
+            key = (day, id(item))
+            spent_per_item_day[key] = spent_per_item_day.get(key, 0) + length
             run = run + 1 if item is last_item else 1
             last_item = item
             cursor += length + break_len
     return plan
+
+
+def _close_off_yesterday(user_id, today=None):
+    """Retire plan blocks whose day has gone by without them being touched.
+
+    They used to stay `planned` for ever: `_save_plan` only replaces sessions
+    from today forward, so last week's untouched blocks accumulated as ghosts
+    that no rebuild could clear and no count could trust.
+
+    Returns what was missed, so the page can say what it is doing about it.
+    Deliberately not framed as a failing: the work still has a deadline, and
+    the only useful response is to put it back in the week that is left.
+    """
+    today = (today or date.today()).isoformat()
+    rows = StudySession.query.filter_by(user_id=user_id, state="planned").filter(
+        StudySession.on_date < today).all()
+    if not rows:
+        return {"count": 0, "minutes": 0, "courses": [], "dates": []}
+    minutes = 0
+    courses, dates = set(), set()
+    for row in rows:
+        row.state = "missed"
+        minutes += max(0, int(row.end_min or 0) - int(row.start_min or 0))
+        if row.course_full:
+            courses.add(row.course_full)
+        if row.on_date:
+            dates.add(row.on_date)
+    db.session.commit()
+    return {"count": len(rows), "minutes": minutes,
+            "courses": sorted(courses), "dates": sorted(dates)}
+
+
+def _catch_up_message(missed, rebuilt):
+    """What changed, in one sentence, with no scolding in it.
+
+    Every planner fails the same way: the moment a student misses Tuesday the
+    plan is wrong, stays wrong, and quietly becomes something they avoid
+    opening. Saying plainly what moved is what makes it survivable.
+    """
+    if not missed.get("count"):
+        return ""
+    hours, mins = divmod(max(0, int(missed["minutes"])), 60)
+    spent = f"{hours}h{mins:02d}" if hours else f"{mins} min"
+    where = ", ".join(missed.get("courses") or [])
+    tail = (f" It is back in your plan{f' across {rebuilt} blocks' if rebuilt else ''}, "
+            "ahead of the lighter work.") if rebuilt else \
+        " There was no free time left to move it into, so shorten something or free up a day."
+    return (f"{spent} of planned study did not happen"
+            + (f" ({where})" if where else "") + "." + tail)
 
 
 def _save_plan(user_id, plan):
@@ -4998,6 +5207,7 @@ def _session_json(row):
         "course": row.course_full, "title": row.title, "focus": row.focus,
         "reason": row.reason, "kind": row.item_kind, "state": row.state,
         "task_id": row.task_id or "",
+        "actual_minutes": int(row.actual_minutes or 0),
     }
 
 
@@ -5521,6 +5731,9 @@ def study_plan_ask():
 @login_required
 @requires_active
 def study_plan_generate():
+    # Before planning: anything whose day has passed untouched is missed, and
+    # its work has to be considered again rather than left behind.
+    missed = _close_off_yesterday(current_user.id)
     plan = _build_plan(current_user.id)
     if not plan:
         # Three different reasons produce an empty plan, and the student can
@@ -5539,12 +5752,17 @@ def study_plan_generate():
                 reason = "Nothing is due in the next two weeks, so there is nothing to plan. Sync your courses if that looks wrong."
         else:
             reason = "Your week has no free time inside your study hours. Widen the hours, or free up a day."
-        return jsonify({"ok": True, "created": 0, "sessions": [], "reason": reason})
+        return jsonify({"ok": True, "created": 0, "sessions": [], "reason": reason,
+                        "missed": missed,
+                        "catch_up": _catch_up_message(missed, 0)})
     made = _save_plan(current_user.id, plan)
     rows = StudySession.query.filter_by(user_id=current_user.id).filter(
         StudySession.on_date >= date.today().isoformat()).order_by(
         StudySession.on_date.asc(), StudySession.start_min.asc()).all()
-    return jsonify({"ok": True, "created": made, "sessions": [_session_json(r) for r in rows]})
+    return jsonify({"ok": True, "created": made,
+                    "missed": missed,
+                    "catch_up": _catch_up_message(missed, len(rows)),
+                    "sessions": [_session_json(r) for r in rows]})
 
 
 @app.route("/api/study-plan/<session_id>", methods=["POST"])
@@ -5553,10 +5771,23 @@ def study_session_state(session_id):
     row = StudySession.query.filter_by(user_id=current_user.id, id=session_id).first()
     if not row:
         return jsonify({"error": "That session is no longer in your plan."}), 404
-    state = str((request.get_json(silent=True) or {}).get("state") or "").lower()
+    data = request.get_json(silent=True) or {}
+    state = str(data.get("state") or "").lower()
     if state not in {"planned", "done", "skipped"}:
         return jsonify({"error": "Unknown session state."}), 400
     row.state = state
+    if state == "done":
+        row.completed_at = datetime.utcnow()
+        if "minutes" in data:
+            try:
+                # Capped at eight hours: a forgotten timer must not teach the
+                # estimator that a lab takes a day and a half.
+                row.actual_minutes = max(0, min(480, int(float(data.get("minutes") or 0))))
+            except (TypeError, ValueError):
+                return jsonify({"error": "Give the minutes as a number."}), 400
+    else:
+        row.completed_at = None
+        row.actual_minutes = 0
     db.session.commit()
     return jsonify({"ok": True, "session": _session_json(row)})
 
