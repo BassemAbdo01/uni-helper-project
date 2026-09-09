@@ -405,6 +405,12 @@ class Task(db.Model):
     # unrepairable without re-fetching from the university. Storing this makes
     # a timezone change a local recomputation -- see _recompute_task_dates.
     source_due_at = db.Column(db.String(40), default="")
+    # Where this deadline lives in the LMS. Only ever a URL the LMS itself
+    # gave us -- see _lms_link. Empty for anything the student typed, and for
+    # a source that offered no link; the UI shows no button rather than
+    # guessing one, because a link that 404s is the same class of failure as
+    # a wrong date: confidently wrong on the screen they trust.
+    source_link = db.Column(db.Text, default="")
     sync_state = db.Column(db.String(30), default="active")
     last_seen_sync = db.Column(db.String(40), default="")
     completed = db.Column(db.Boolean, default=False)
@@ -725,6 +731,9 @@ def ensure_schema_columns():
             # The instant the LMS gave, so a date can be re-derived without
             # going back to the university. See _recompute_task_dates.
             "source_due_at": "VARCHAR(40) DEFAULT ''",
+            # Existing rows get theirs on the next sync, the same way the
+            # timezone repair works. There is nothing to back-fill from.
+            "source_link": "TEXT DEFAULT ''",
         },
         "grade_entry": {
             "notes": "VARCHAR(255) DEFAULT ''",
@@ -931,6 +940,39 @@ def plan_api():
 # ============================
 # Task Load / Save helpers
 # ============================
+def _lms_link(url):
+    """A link into the student's LMS, or "" if it cannot be trusted.
+
+    Every one of these arrives as scraped or fed text -- the extension reads
+    D2L's own item ids, Canvas hands over `html_url`, an ICS feed may carry a
+    `URL:` property -- so none of it may reach an `href` unchecked:
+
+    - Only http(s) survives. A `javascript:` URL rendered into an anchor is
+      cross-site scripting on our own dashboard, delivered by the university
+      page we scraped.
+    - Userinfo is refused outright. `https://brightspace.example.ca@evil.tld/`
+      reads as the university at a glance and resolves to evil.tld, which is
+      the whole phishing trick.
+    - There must be a host, so a relative or malformed URL is dropped rather
+      than rendered as a link to nowhere.
+
+    Nothing here is ever constructed by Nexora. If the source gave no link the
+    answer is "", and the UI shows no button.
+    """
+    text = str(url or "").strip()
+    if not text or len(text) > 4000:
+        return ""
+    try:
+        parts = urllib.parse.urlsplit(text)
+    except ValueError:
+        return ""
+    if parts.scheme.lower() not in {"http", "https"}:
+        return ""
+    if "@" in parts.netloc or not parts.hostname:
+        return ""
+    return text
+
+
 def task_to_dict(t):
     return {
         "id": t.id,
@@ -953,6 +995,7 @@ def task_to_dict(t):
         "due_time": t.due_time or "",
         "location": t.location or "",
         "notes": t.notes or "",
+        "source_link": t.source_link or "",
     }
 
 
@@ -1440,6 +1483,7 @@ def build_grouped_cards(raw_tasks):
                 "due_time": "",
                 "location": "",
                 "notes": "",
+                "source_link": "",
             }
 
         g = grouped[gid]
@@ -1449,6 +1493,9 @@ def build_grouped_cards(raw_tasks):
         if t.get("due_time") and not g["due_time"]: g["due_time"] = t["due_time"]
         if t.get("location") and not g["location"]: g["location"] = t["location"]
         if t.get("notes") and not g["notes"]: g["notes"] = t["notes"]
+        # A group is one card built from several rows -- opens, due, closes --
+        # and only some of them carry the link. First one wins.
+        if t.get("source_link") and not g["source_link"]: g["source_link"] = t["source_link"]
 
         if k == "opens" and d:
             if (not g["opens_raw"]) or (d < g["opens_raw"]):
@@ -1680,6 +1727,9 @@ def import_calendar_string(ics_text, mark_missing=True):
         source_uid = _event_uid(event, course_full, title, kind)
         source_hash = _event_hash(event, title, due_raw, course_full, kind)
         source_updated = _event_updated_text(event)
+        # Brightspace does not always write one, and a feed that omits it is
+        # not a fault -- the card simply gets no link.
+        event_link = _lms_link(getattr(event, "url", ""))
         seen_uids.add(source_uid)
 
         task = existing_by_uid.get(source_uid)
@@ -1704,6 +1754,7 @@ def import_calendar_string(ics_text, mark_missing=True):
             task.is_deadline = True
             task.source_hash = source_hash
             task.source_updated = source_updated
+            task.source_link = event_link
             task.sync_state = "active"
             task.last_seen_sync = now_text
             counts["updated" if changed else "unchanged"] += 1
@@ -1713,7 +1764,7 @@ def import_calendar_string(ics_text, mark_missing=True):
                 base_title=base, course_full=course_full, course_prefix=cprefix,
                 due_raw=due_raw, source_due_at=source_stamp,
                 due_time=due_time_label,
-                kind=kind, is_deadline=True, source="ics",
+                kind=kind, is_deadline=True, source="ics", source_link=event_link,
                 created_at=now_text, source_uid=source_uid, source_hash=source_hash,
                 source_updated=source_updated, sync_state="active", last_seen_sync=now_text,
             )
@@ -3804,6 +3855,7 @@ def home():
                 "due_label": c.get("status_label", ""),
                 "due_pretty": c.get("main_due_pretty", ""),
                 "status": c.get("status", ""),
+                "link": c.get("source_link", ""),
             })
 
     upcoming_cards = upcoming_cards[:4]
@@ -5198,7 +5250,31 @@ def _save_plan(user_id, plan):
     return made
 
 
-def _session_json(row):
+def _session_links(rows):
+    """task_id -> LMS link, for a batch of plan blocks in one query.
+
+    A lookup per block would be N+1 against a week that is routinely twenty
+    sessions long.
+    """
+    ids = {r.task_id for r in rows if r.task_id}
+    if not ids:
+        return {}
+    found = Task.query.filter(Task.id.in_(list(ids)[:400])).all()
+    return {t.id: (t.source_link or "") for t in found if t.source_link}
+
+
+def _sessions_json(rows):
+    """A list of plan blocks, resolving every link in one query rather than
+    one per block."""
+    links = _session_links(rows)
+    return [_session_json(r, links) for r in rows]
+
+
+def _session_json(row, links=None):
+    # A single-row response resolves its own link; the list endpoints pass a
+    # batch so they do not query once per block.
+    if links is None:
+        links = _session_links([row])
     return {
         "id": row.id, "date": row.on_date, "start": row.start_min, "end": row.end_min,
         "start_label": f"{row.start_min // 60:02d}:{row.start_min % 60:02d}",
@@ -5207,6 +5283,9 @@ def _session_json(row):
         "course": row.course_full, "title": row.title, "focus": row.focus,
         "reason": row.reason, "kind": row.item_kind, "state": row.state,
         "task_id": row.task_id or "",
+        # Where the work itself lives, so a plan block is one click from the
+        # assignment rather than a reminder to go and find it.
+        "link": links.get(row.task_id or "", ""),
         "actual_minutes": int(row.actual_minutes or 0),
     }
 
@@ -5357,7 +5436,7 @@ def study_plan_page():
         # timetable" was looking straight at it.
         has_timetable=bool(blocks),
         blocks=[_block_json(b) for b in blocks],
-        sessions=[_session_json(x) for x in sessions],
+        sessions=_sessions_json(sessions),
         preferences={
             "earliest_min": pref.earliest_min, "latest_min": pref.latest_min,
             "session_min": pref.session_min, "break_min": pref.break_min,
@@ -5594,7 +5673,7 @@ def study_plan_api():
         StudySession.on_date.asc(), StudySession.start_min.asc()).all()
     return jsonify({
         "ok": True,
-        "sessions": [_session_json(r) for r in rows],
+        "sessions": _sessions_json(rows),
         "has_timetable": ClassBlock.query.filter_by(user_id=current_user.id).count() > 0,
     })
 
@@ -5720,7 +5799,7 @@ def study_plan_ask():
         "focus": focus, "courses": chosen, "days": days,
         "max_daily_minutes": daily,
         "created": made,
-        "sessions": [_session_json(r) for r in rows],
+        "sessions": _sessions_json(rows),
         "reason": "" if rows else ("No tests, midterms or finals are coming up in that "
                                    "window." if focus == "exams" else
                                    "Nothing is due in that window."),
@@ -5762,7 +5841,7 @@ def study_plan_generate():
     return jsonify({"ok": True, "created": made,
                     "missed": missed,
                     "catch_up": _catch_up_message(missed, len(rows)),
-                    "sessions": [_session_json(r) for r in rows]})
+                    "sessions": _sessions_json(rows)})
 
 
 @app.route("/api/study-plan/<session_id>", methods=["POST"])
@@ -8376,6 +8455,10 @@ def _import_deadlines(user, items):
             task.source_due_at = str(item.get("due_at") or item.get("due_date") or "")[:40]
             task.due_time = local_time_label(task.source_due_at, zone)
             task.source_hash = source_hash; task.sync_state = "active"
+            # Assigned outside the `changed` check on purpose: the link is not
+            # in source_hash, so an unchanged deadline still picks one up the
+            # first time a student syncs after this shipped.
+            task.source_link = _lms_link(item.get("source_url"))
             task.last_seen_sync = now_text
             counts["updated" if changed else "unchanged"] += 1
         else:
@@ -8386,6 +8469,7 @@ def _import_deadlines(user, items):
                 source_due_at=str(item.get("due_at") or item.get("due_date") or "")[:40],
                 due_time=local_time_label(item.get("due_at") or item.get("due_date"), zone),
                 kind="due", is_deadline=True, source="extension",
+                source_link=_lms_link(item.get("source_url")),
                 created_at=now_text, source_uid=source_uid,
                 source_hash=source_hash, sync_state="active",
                 last_seen_sync=now_text,
@@ -8605,6 +8689,7 @@ def calendar_page():
                 "location": c.get("location") or "",
                 "notes": c.get("notes") or "",
                 "imported": (c.get("source") or "manual") != "manual",
+                "link": c.get("source_link") or "",
             })
 
     weeks = []
@@ -9492,7 +9577,8 @@ def canvas_sync(user, fetch_list=None, base_url=None):
             })
             due = _canvas_due_date(row.get("due_at"), canvas_zone)
             if due:
-                task_rows.append({"course": code, "title": title, "due": due, "uid": uid})
+                task_rows.append({"course": code, "title": title, "due": due,
+                                  "uid": uid, "link": row.get("html_url")})
 
         # Canvas states the weighting outright, so unlike the Brightspace path
         # there is nothing for a model to infer.
@@ -9694,6 +9780,7 @@ def _import_canvas_tasks(user, rows):
             existing.base_title = base_name
             existing.due_raw = row["due"]
             existing.group_id = group_id
+            existing.source_link = _lms_link(row.get("link"))
             counts["updated"] += 1
             continue
         db.session.add(Task(
@@ -9701,6 +9788,7 @@ def _import_canvas_tasks(user, rows):
             title=row["title"], base_title=base_name, course_full=course,
             course_prefix=course_prefix(course) if course != "OTHER" else "OTHER",
             due_raw=row["due"], kind="due", is_deadline=True, source="canvas",
+            source_link=_lms_link(row.get("link")),
             created_at=stamp, source_uid=row["uid"], sync_state="active",
         ))
         counts["added"] += 1

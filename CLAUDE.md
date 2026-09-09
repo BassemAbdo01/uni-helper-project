@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 462 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 712 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -367,6 +367,46 @@ Rules that keep it correct:
 Existing rows keep whatever date they were imported with until the next sync
 re-writes them. That is acceptable because a sync fixes them; a migration
 cannot, since the original timestamp was never stored.
+
+## A deadline links to the work, and only ever to a link it was given
+
+`Task.source_link`, filled by all three importers and rendered on the
+dashboard, the calendar editor and the study plan. The URL was already being
+scraped and thrown away: `extension/background.js` builds D2L's own
+`folder_submit_files.d2l?db=...&ou=...` for every assignment and
+`quiz_summary.d2l?qi=...&ou=...` for every quiz, Canvas hands over `html_url`,
+and a Brightspace ICS feed may carry a `URL:` property (the `ics` library
+parses it into `event.url`). `_import_deadlines` read none of them because
+`Task` had no column.
+
+**`_lms_link(url)` is the single gate, and it is a security boundary.** Every
+one of these arrives as scraped or fed text, so none may reach an `href`
+unchecked:
+
+- Only http(s). A `javascript:` URL rendered into an anchor is cross-site
+  scripting on our own dashboard, delivered by the university page we scraped.
+- Userinfo is refused. `https://brightspace.example.ca@evil.tld/` reads as the
+  university and resolves to evil.tld -- the whole phishing trick.
+- No host, no link. A relative or malformed URL is dropped rather than rendered
+  as a link to nowhere.
+
+**Nexora never constructs one.** If the source gave no link the answer is `""`
+and the UI shows no button. A link that 404s or opens the wrong quiz is the
+same class of failure as a wrong date: confidently wrong on the screen a
+student trusts, and worse than an honest absence.
+
+The link is deliberately **not** in `source_hash`, so an otherwise unchanged
+deadline picks one up on the first sync after this shipped -- which is every
+row that already exists. Both importers assign it outside their `changed`
+check for the same reason, and the counters stay honest about what really
+changed.
+
+`_sessions_json(rows)` resolves a whole week's links in one query;
+`_session_json` alone would be N+1 against a twenty-block week. The plan block
+reaches the work through `StudySession.task_id`, so no column was needed there.
+
+No extension release is required: `source_url` and `due_at` already travel on
+the same item, in both `background.js` and `content.js`.
 
 ## A scraped due date is worthless until something consumes it
 

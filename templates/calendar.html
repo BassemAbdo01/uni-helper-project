@@ -119,6 +119,8 @@ dialog.sheet::backdrop{background:#0B0908cc}
 .sheet button.danger:hover{border-color:#C9705C;color:#C9705C}
 .sheet .err{color:#C9705C;font-size:12.5px;min-height:1em}
 .sheet .locked{font-size:12px;color:var(--fg-3);line-height:1.5}
+.sheet .open a{font-size:12.5px;color:var(--amber);text-decoration:none}
+.sheet .open a:hover{text-decoration:underline}
 
 </style>
 {% endblock %}
@@ -174,7 +176,8 @@ dialog.sheet::backdrop{background:#0B0908cc}
                         data-course="{{ task.course }}" data-date="{{ day.iso }}"
                         data-time="{{ task.time }}" data-kind="{{ task.kind }}"
                         data-location="{{ task.location }}" data-notes="{{ task.notes }}"
-                        data-imported="{{ '1' if task.imported else '' }}">
+                        data-imported="{{ '1' if task.imported else '' }}"
+                        data-link="{{ task.link }}">
                   <strong>{{ task.title }}</strong>
                   <small>{% if task.time %}<span class="t">{{ task.time }}</span> &middot; {% endif %}{% if task.course %}{{ task.course }} &middot; {% endif %}{{ task.status }}</small>
                 </button>
@@ -237,6 +240,10 @@ dialog.sheet::backdrop{background:#0B0908cc}
       <textarea id="evNotes" maxlength="2000"></textarea>
     </div>
 
+    <p class="open" id="openSource" hidden>
+      <a id="openSourceLink" href="#" target="_blank" rel="noopener noreferrer">Open in your LMS &#8599;</a>
+    </p>
+
     <p class="locked" id="importedNote" hidden>
       This came from your LMS. Editing it here changes only your copy in Nexora,
       and the next sync will not overwrite the change.
@@ -279,6 +286,10 @@ dialog.sheet::backdrop{background:#0B0908cc}
     $('evLocation').value = event?.location || '';
     $('evNotes').value = event?.notes || '';
     $('evDelete').hidden = !event;
+    // Only what the LMS actually gave. Nothing here is ever constructed, so
+    // an event with no link simply shows no row.
+    $('openSource').hidden = !event?.link;
+    if (event?.link) $('openSourceLink').href = event.link;
     $('importedNote').hidden = !event?.imported;
     $('evError').textContent = '';
     sheet.showModal();
@@ -288,7 +299,8 @@ dialog.sheet::backdrop{background:#0B0908cc}
   function readEvent(button) {
     const d = button.dataset;
     return { id: d.id, title: d.title, course: d.course, date: d.date, time: d.time,
-             kind: d.kind, location: d.location, notes: d.notes, imported: !!d.imported };
+             kind: d.kind, location: d.location, notes: d.notes, imported: !!d.imported,
+             link: d.link || '' };
   }
 
   $('addEvent').onclick = () => open(null, '{{ today_iso }}');
