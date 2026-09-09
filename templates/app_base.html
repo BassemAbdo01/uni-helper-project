@@ -36,7 +36,7 @@
       <div class="sync">
         {% if current_user.is_authenticated and current_user.last_sync %}
           <span class="lbl"><i></i>Auto-sync</span>
-          <p>{{ current_user.last_sync.strftime('%b %d at %I:%M %p') }}</p>
+          <p>{{ current_user.last_sync|local_stamp }}</p>
         {% else %}
           <span class="lbl off"><i></i>Not synced</span>
           <p>Nexora has no course data yet.</p>

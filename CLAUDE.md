@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 712 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 725 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -407,6 +407,53 @@ reaches the work through `StudySession.task_id`, so no column was needed there.
 
 No extension release is required: `source_url` and `due_at` already travel on
 the same item, in both `background.js` and `content.js`.
+
+## A stored timestamp is UTC; a displayed one is the student's clock
+
+`local_stamp(value, fmt, user)`, registered as the Jinja filter
+`|local_stamp`. Every datetime column in this app holds UTC, and four
+templates were calling `.strftime()` straight on one -- so a sync that
+happened at **10:04 PM in Ottawa displayed as 2:04 AM**, beside a line
+claiming it was the last sync. Reported as "THE TIMEZONE IS SO WRONG".
+
+Exactly the deadline-date bug in a place nobody thought to look: a value that
+has to be derived for the student was never derived. **Never call `.strftime()`
+on a model datetime in a template.** `save_sync_result` also stored
+`datetime.now()` while every other writer stored `datetime.utcnow()`; on Render
+both are UTC so it looked fine, and locally it was silently four hours out.
+
+## A course with work in it is never "Other courses"
+
+`_term_from_dates(dates)`. `_term_meta` reads a term from what Brightspace
+stated, and Brightspace does not always state one -- a student who connected
+only the calendar feed has deadlines and no course rows at all. Those courses
+fell into the "Other courses" group, and because the dashboard **opens on the
+current term**, the five courses a student was actually taking were the ones
+hidden behind the picker while finished enrolments filled the screen.
+
+Their own deadlines answer it: the same season rule as `_current_term_label`,
+over dates already held. Most common wins; a tie goes to the later term,
+because a course straddling December and January is the one starting. With no
+dates it returns `""` -- inventing a term is worse than admitting to none --
+and **a stated term always outranks the guess**, since a course can carry work
+outside its own term.
+
+This is grouping only. It never edits `SyncedCourse.term`, so the next sync
+still gets the last word.
+
+## The import scope is remembered, and a stale one hides a whole term
+
+The extension stores `importScope` / `importTerm`. With scope `term`,
+`content.js` filters enrolments to that exact label
+(`fromApi.filter(c => c.term === term)`), so a term named in a previous
+semester keeps being the only one imported -- the student's current courses
+never arrive, and nothing says so. Seen live: 109/190/187 items across an old
+Winter and Summer, and **no course rows at all** for the term in progress,
+whose deadlines had come from the calendar feed instead.
+
+The popup does re-ask on every visit to Brightspace (that was fixed in 3.4),
+so the recovery is one click -- pick "every term", or name the current one --
+but the failure is silent until someone notices their courses are unnamed.
 
 ## A scraped due date is worthless until something consumes it
 

@@ -65,7 +65,7 @@
             </strong>
             <span>{{ account.base_url }}</span>
             <span>
-              {% if account.last_sync %}Last synced {{ account.last_sync.strftime('%b %d at %I:%M %p') }}
+              {% if account.last_sync %}Last synced {{ account.last_sync|local_stamp }}
               {% else %}Not synced yet — press Sync now.{% endif %}
             </span>
             {% if account.last_error %}<span>{{ account.last_error }}</span>{% endif %}

@@ -1058,13 +1058,73 @@ def save_sync_result(status, message, successful=False):
     current_user.sync_status = status
     current_user.sync_message = message
     if successful:
-        current_user.last_sync = datetime.now()
+        # utcnow, not now: every other writer of a timestamp in this app stores
+        # UTC, and `local_stamp` converts on the way out. Mixing the two means a
+        # sync time that is right or four hours wrong depending on which code
+        # path wrote it.
+        current_user.last_sync = datetime.utcnow()
     db.session.commit()
 
 
 # ============================
 # Dates + labels
 # ============================
+def local_stamp(value, fmt="%b %d at %I:%M %p", user=None):
+    """A stored UTC timestamp, rendered on the student's own clock.
+
+    Every datetime column in this app holds UTC. Templates were calling
+    `.strftime()` on them directly, so a sync that happened at 10:04 PM in
+    Ottawa displayed as **2:04 AM** -- next to a line claiming it was the last
+    sync, which reads as the app being a day out or simply broken.
+
+    Same fault as the deadline dates, in a place nobody thought to look: a
+    derived local value was never derived. See "Every date is the student's
+    day, not UTC".
+    """
+    if not value:
+        return ""
+    zone = _user_zone(user if user is not None else
+                      (current_user if current_user.is_authenticated else None))
+    aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone(zone).strftime(fmt)
+
+
+# Registered so a template can never accidentally print a raw UTC datetime
+# again: `{{ row.last_sync|local_stamp }}`.
+app.jinja_env.filters["local_stamp"] = local_stamp
+
+
+def _term_from_dates(dates):
+    """Which academic term a course's own deadlines put it in.
+
+    Brightspace does not always state a term -- and a student who connected
+    only the calendar feed has deadlines and no course rows at all -- so a
+    course with work in it was landing in "Other courses". The dashboard opens
+    on the CURRENT term, so that hid exactly the courses the student is taking
+    right now behind a picker, while old enrolments filled the page.
+
+    Their work says which term it is: the same season rule as
+    `_current_term_label`, over the dates already held. Most common wins, and a
+    tie goes to the later term -- a course straddling December and January is
+    the one starting, not the one ending. Returns "" when there is nothing to
+    go on, because inventing a term is worse than admitting to none.
+    """
+    counts = {}
+    for value in dates:
+        day = parse_iso_date(value)
+        if not day:
+            continue
+        season = ("Winter" if day.month <= 4 else
+                  "Summer" if day.month <= 8 else "Fall")
+        key = (season, day.year)
+        counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        return ""
+    season, year = max(counts, key=lambda k: (counts[k], k[1],
+                                              _TERM_RANK.get(k[0].lower(), 4)))
+    return f"{season} {year}"
+
+
 def _recompute_task_dates(user):
     """Re-derive every deadline's calendar day from the instant the LMS gave.
 
@@ -3766,6 +3826,9 @@ def home():
     dashboard_cards = [decorate_card(c) for c in sort_cards(view_filter(build_grouped_cards(raw_tasks), "all"))]
 
     course_map = {}
+    # Every dated piece of work, per course. Which term a course belongs to is
+    # answerable from these when Brightspace never said -- see _term_from_dates.
+    course_dates = {}
 
     for c in dashboard_cards:
         course = c.get("course_full") or "OTHER"
@@ -3780,6 +3843,8 @@ def home():
             }
 
         course_map[course]["total"] += 1
+        if c.get("main_due_raw"):
+            course_dates.setdefault(course, []).append(c["main_due_raw"])
 
         if not course_map[course]["next_title"]:
             course_map[course]["next_title"] = c.get("title", "Task")
@@ -3893,14 +3958,23 @@ def home():
     last_sync = load_last_sync()
     academic_updates = AcademicUpdate.query.filter_by(user_id=current_user.id).order_by(AcademicUpdate.created_at.desc()).limit(4).all()
 
-    if last_sync:
-        last_sync_text = last_sync.strftime("%b %d, %Y at %I:%M %p")
-    else:
-        last_sync_text = "Never"
+    # The student's clock, not the server's. See local_stamp.
+    last_sync_text = local_stamp(last_sync, "%b %d, %Y at %I:%M %p") or "Never"
 
     # Group courses by academic term. Brightspace terms may be human-readable
     # ("Winter 2026") or D2L-style codes ("2026.10", "2026.20", "2026.30").
     term_rank=_TERM_RANK
+    # A course whose term Brightspace never stated is still plainly in one: its
+    # own deadlines say which. Without this a student's CURRENT courses -- the
+    # ones that actually have work in them -- fell into "Other courses", and
+    # since the page opens on the current term they were hidden behind the
+    # picker while finished enrolments filled the screen.
+    for card in course_cards:
+        if _term_meta(card.get("term") or card.get("title") or "")[1]:
+            continue
+        guessed = _term_from_dates(course_dates.get(card.get("course"), []))
+        if guessed:
+            card["term"] = guessed
     grouped_courses={}
     for card in course_cards:
         season,year=_term_meta(card.get("term") or card.get("title") or "")
@@ -8924,10 +8998,8 @@ def connect_brightspace():
     feed_url = load_feed_url()
     last_sync = load_last_sync()
 
-    if last_sync:
-        last_sync_text = last_sync.strftime("%b %d, %Y at %I:%M %p")
-    else:
-        last_sync_text = "Never"
+    # The student's clock, not the server's. See local_stamp.
+    last_sync_text = local_stamp(last_sync, "%b %d, %Y at %I:%M %p") or "Never"
 
     return render_template(
         "connect_brightspace.html",

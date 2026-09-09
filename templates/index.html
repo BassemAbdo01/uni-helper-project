@@ -311,7 +311,7 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
                The old markup wrapped each one in <a href="#">. #}
             <div class="upd">
               <strong>{{ u.title|truncate(46) }}</strong>
-              <small>{{ u.course_full }}{% if u.created_at %} &middot; {{ u.created_at.strftime('%b %d') }}{% endif %}</small>
+              <small>{{ u.course_full }}{% if u.created_at %} &middot; {{ u.created_at|local_stamp('%b %d') }}{% endif %}</small>
             </div>
           {% endfor %}
         {% else %}
