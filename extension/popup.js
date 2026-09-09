@@ -35,67 +35,21 @@ async function activeTab() {
   return tab || null;
 }
 
-function show({ step, headline, detail, action, disabled = false, choices = false }) {
+function show({ step, headline, detail, action, disabled = false }) {
   $('step').textContent = step || '';
   $('step').style.visibility = step ? 'visible' : 'hidden';
   $('headline').textContent = headline;
   $('detail').textContent = detail;
   $('go').textContent = action;
   $('go').disabled = disabled;
-  $('scope').hidden = !choices;
 }
 
-/* ---------------- which terms exist ----------------
-   Asked of Brightspace itself rather than guessed, because only the enrolments
-   API knows what a student has ever been registered in -- the page shows one
-   term tab at a time. The date decides which of them is preselected: on the
-   1st of September the answer is Fall, whatever tab happens to be mounted. */
-let terms = [];
-let termsLoaded = false;
+/* Nexora imports every term, every time, so there is no term to choose and
+   nothing to list. The question used to live here: a student answered it once
+   and the answer stuck, so a choice made in first year kept later terms out of
+   the app -- silently, because a sync that imports nothing looks exactly like
+   one that worked. */
 let pollTimer = null;
-
-function fillTermSelect(select, chosen) {
-  if (!select) return;
-  select.innerHTML = '';
-  if (!terms.length) {
-    const option = document.createElement('option');
-    option.value = '';
-    option.textContent = termsLoaded ? 'The term on screen' : 'Finding your terms…';
-    select.appendChild(option);
-    select.disabled = true;
-    return;
-  }
-  select.disabled = false;
-  for (const term of terms) {
-    const option = document.createElement('option');
-    option.value = term.label;
-    option.textContent = `${term.label} · ${term.courses} course${term.courses === 1 ? '' : 's'}`;
-    select.appendChild(option);
-  }
-  const wanted = terms.some(t => t.label === chosen) ? chosen : terms[0].label;
-  select.value = wanted;
-}
-
-async function loadTerms(chosen) {
-  let response = null;
-  try { response = await chrome.runtime.sendMessage({ type: 'NEXORA_LIST_TERMS' }); }
-  catch (_) { response = null; }
-  termsLoaded = true;
-  terms = Array.isArray(response?.terms) ? response.terms : [];
-  // The current term by the calendar, falling back to the newest one found.
-  const preferred = chosen
-    || (terms.some(t => t.label === response?.current) ? response.current : '')
-    || (terms[0]?.label || '');
-  fillTermSelect($('scopeTerm'), preferred);
-  fillTermSelect($('termSetting'), preferred);
-  const hint = $('scopeTermHint');
-  if (hint) {
-    hint.textContent = terms.length
-      ? 'The term you are enrolled in now, or pick another below.'
-      : 'Nexora could not list your terms, so it will import the term your Brightspace is showing.';
-  }
-  return preferred;
-}
 
 function say(text, kind = '') {
   const box = $('result');
@@ -127,8 +81,6 @@ async function evaluate() {
   $('apiBase').value = status.config?.apiBase || '';
   $('token').value = status.config?.token || '';
   $('autoSync').checked = status.config?.autoSyncEnabled !== false;
-  $('scopeSetting').value = status.config?.importScope === 'all' ? 'all' : 'term';
-  $('termSetting').disabled = $('scopeSetting').value === 'all';
   $('interval').value = String(status.config?.intervalMinutes || 30);
 
   // A sync in flight is the whole answer: the work runs in the background and
@@ -218,40 +170,16 @@ async function evaluate() {
   //    time, not only before the first import: a student who chose one term
   //    and then wanted everything had nowhere to say so, because this screen
   //    had already been replaced by "Ready to sync".
-  if (onBrightspace) {
-    const asked = Boolean(status.config?.importScope);
-    const previous = new Date(status.lastSync || 0).getTime()
-      ? new Date(status.lastSync).toLocaleString() : null;
-    state = { kind: 'scope', origin: tabOrigin };
-    show({
-      step: asked ? '' : 'Step 2 of 2',
-      headline: asked ? 'Import your courses' : 'What should Nexora import?',
-      detail: previous
-        ? `Last synced ${previous}. Changing this changes what Nexora keeps.`
-        : 'Nexora remembers your answer; you can change it here any time.',
-      action: previous ? 'Sync again' : 'Import my courses',
-      choices: true
-    });
-    const wantsAll = status.config?.importScope === 'all';
-    const radio = value => document.querySelector(`input[name="scope"][value="${value}"]`);
-    if (radio('all')) radio('all').checked = wantsAll;
-    if (radio('term')) radio('term').checked = !wantsAll;
-    if (!termsLoaded) loadTerms(status.config?.importTerm);
-    else fillTermSelect($('scopeTerm'), status.config?.importTerm);
-    reportLastSync(status);
-    return;
-  }
-
-  // 4. Ready.
+  // 4. On Brightspace with permission granted, and 5. ready elsewhere are now
+  //    the same screen: there is nothing left to ask.
   const last = status.lastSync ? new Date(status.lastSync).toLocaleString() : null;
-  const scopeText = status.config?.importScope === 'all'
-    ? 'every term'
-    : (status.config?.importTerm || 'the term on screen');
   state = { kind: 'sync', origin: tabOrigin || status.config?.brightspaceOrigin };
   show({
     step: '',
     headline: 'Ready to sync',
-    detail: last ? `Last synced ${last}. Importing ${scopeText}.` : `Bringing in ${scopeText}.`,
+    detail: last
+      ? `Last synced ${last}. Importing every course, every term.`
+      : 'Bringing in every course, every term.',
     action: last ? 'Sync again' : 'Import my courses'
   });
   reportLastSync(status);
@@ -312,19 +240,6 @@ $('go').onclick = async () => {
       await evaluate();
     }
     return;
-  }
-
-  if (state?.kind === 'scope') {
-    const all = document.querySelector('input[name="scope"]:checked')?.value === 'all';
-    await chrome.storage.sync.set({
-      importScope: all ? 'all' : 'term',
-      importTerm: all ? '' : ($('scopeTerm').value || ''),
-      // Kept in step so a downgrade to 3.3 still imports what was asked for.
-      includeFinished: all
-    });
-    await chrome.runtime.sendMessage({ type: 'NEXORA_CONFIG_CHANGED' });
-    state = { kind: 'sync', origin: state.origin };
-    $('scope').hidden = true;
   }
 
   if (state?.kind !== 'sync') return;
@@ -423,14 +338,15 @@ $('outline').onclick = async () => {
 
 /* ---------------- advanced ---------------- */
 $('save').onclick = async () => {
-  const all = $('scopeSetting').value === 'all';
   await chrome.storage.sync.set({
     apiBase: $('apiBase').value.trim() || DEFAULT_API_BASE,
     token: $('token').value.trim(),
     autoSyncEnabled: $('autoSync').checked,
-    importScope: all ? 'all' : 'term',
-    importTerm: all ? '' : ($('termSetting').value || ''),
-    includeFinished: all,
+    // Written every save so an account carrying an old one-term choice is
+    // repaired the first time anything is saved, not only on a fresh install.
+    importScope: 'all',
+    importTerm: '',
+    includeFinished: true,
     intervalMinutes: Number($('interval').value)
   });
   await chrome.runtime.sendMessage({ type: 'NEXORA_CONFIG_CHANGED' });
@@ -438,10 +354,8 @@ $('save').onclick = async () => {
   await evaluate();
 };
 $('autoSync').onchange = () => $('save').click();
-$('scopeSetting').onchange = () => { $('termSetting').disabled = $('scopeSetting').value === 'all'; };
 // Opening Advanced is the only moment the term list is worth fetching for it.
 $('advanced').addEventListener('toggle', () => {
-  if ($('advanced').open && !termsLoaded) loadTerms();
 });
 
 evaluate();

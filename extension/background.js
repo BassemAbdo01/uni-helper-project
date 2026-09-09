@@ -25,21 +25,23 @@ async function getConfig() {
     'apiBase', 'token', 'autoSyncEnabled', 'intervalMinutes', 'brightspaceOrigin',
     'includeFinished', 'importScope', 'importTerm'
   ]);
-  // importScope is the student's answer to "everything, or just one term?".
-  // includeFinished was the 3.3 spelling of the same choice as a buried
-  // checkbox; anyone who ticked it keeps meaning 'all' after they update.
-  const scope = v.importScope === 'all' || v.importScope === 'term'
-    ? v.importScope
-    : (v.includeFinished === true ? 'all' : '');
+  // Nexora imports EVERYTHING, always. The choice used to be the student's,
+  // and it was the wrong thing to ask: a term named once stayed named, so a
+  // choice made in first year quietly kept every later term out of the app --
+  // and nothing said so, because a sync that imports nothing looks exactly
+  // like one that worked. The dashboard already opens on the current term and
+  // keeps the rest a click away, so "everything" costs a student nothing.
+  // The stored keys are still written so a downgrade to 3.4 behaves.
+  const scope = 'all';
   return {
     apiBase: String(v.apiBase || DEFAULT_API_BASE).replace(/\/$/, ''),
     token: String(v.token || ''),
     autoSyncEnabled: v.autoSyncEnabled !== false,
     intervalMinutes: Math.max(15, Number(v.intervalMinutes) || 30),
     brightspaceOrigin: normalizeOrigin(v.brightspaceOrigin || DEFAULT_ORIGIN),
-    includeFinished: scope === 'all',
+    includeFinished: true,
     importScope: scope,
-    importTerm: String(v.importTerm || '')
+    importTerm: ''
   };
 }
 
@@ -395,10 +397,10 @@ async function runDiscoverCourses() {
   const config = await getConfig();
   const result = await sendToBrightspace({
     type: 'NEXORA_DISCOVER_COURSES',
-    // An unanswered scope keeps the 3.3 behaviour: the term on screen.
-    scope: config.importScope || 'term',
-    term: config.importScope === 'term' ? config.importTerm : '',
-    includeFinished: config.includeFinished
+    // Always every term. See getConfig.
+    scope: 'all',
+    term: '',
+    includeFinished: true
   });
   if (!result?.ok) throw new Error(result?.error || 'Brightspace course discovery failed.');
   const courses = result.courses || [];

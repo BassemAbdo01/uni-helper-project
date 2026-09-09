@@ -3856,6 +3856,11 @@ def home():
     synced_courses = [c for c in all_synced_courses if not bool(getattr(c, "is_hidden", False)) and c.course_code not in hidden_course_codes]
     for hidden_code in hidden_course_codes:
         course_map.pop(hidden_code, None)
+    # One card per course code, but there can now be several ROWS behind it --
+    # the same course taken in two terms is two offerings. The newest term owns
+    # the card, because a student looking at ECOR1031 means the one they are in
+    # now; letting whichever row was written last win put a 2024 name and term
+    # on a course being taken this September.
     for synced in synced_courses:
         code = synced.course_code or "OTHER"
         if code not in course_map:
@@ -3863,11 +3868,14 @@ def home():
                 "course": code, "total": synced.content_count or 0,
                 "next_title": "", "next_due": "", "progress": 0,
             }
-        course_map[code]["title"] = synced.course_name or code
-        course_map[code]["image_url"] = synced.image_url or ""
-        course_map[code]["brightspace_url"] = synced.brightspace_url or ""
-        course_map[code]["term"] = synced.term or ""
-        course_map[code]["content_count"] = synced.content_count or 0
+        card = course_map[code]
+        if "term" in card and _term_sort_key(card.get("term") or "") > _term_sort_key(synced.term or ""):
+            continue
+        card["title"] = synced.course_name or code
+        card["image_url"] = synced.image_url or ""
+        card["brightspace_url"] = synced.brightspace_url or ""
+        card["term"] = synced.term or ""
+        card["content_count"] = synced.content_count or 0
 
     # Sorted by code so a course keeps its place. Ordering by updated_at meant
     # the page rearranged itself after every sync, and combined with the old
@@ -8368,9 +8376,18 @@ def _import_courses(user, courses):
             "image_url": incoming_image,
             "brightspace_url": url,
         }
+        # An org unit is the identity; a course CODE is not. Matching on the
+        # code as a fallback meant every offering of the same code collapsed
+        # into ONE row -- a student with 37 enrolments kept 11, and whichever
+        # offering happened to be imported last won the name and the term. It
+        # was silent, and it cost the content sync too, because that walks the
+        # course list read back from the server: a course with no row is never
+        # scraped, so its outline, materials and announcements never arrive.
+        #
+        # `_prune_courses` already assumed this ("a code can be shared by two
+        # org units"), and every consumer groups by code anyway, so two
+        # offerings still show as one card on the dashboard.
         existing = SyncedCourse.query.filter_by(user_id=user.id, source_uid=source_uid).first()
-        if not existing and code != "OTHER":
-            existing = SyncedCourse.query.filter_by(user_id=user.id, course_code=code).first()
         if existing and not incoming_image:
             data["image_url"] = existing.image_url or ""
         fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -8414,7 +8431,12 @@ def _import_courses(user, courses):
     stored = sum(1 for c in SyncedCourse.query.filter_by(user_id=user.id).all()
                  if not bool(getattr(c, "is_hidden", False)) and c.course_code not in hidden)
 
-    return {**counts, "courses": imported, "stored": stored}
+    # `found` is what the LMS offered, `stored` is what Nexora now holds. They
+    # are allowed to differ -- a hidden course, a tombstone -- but a student
+    # pressing sync must be able to SEE that they differ. Reporting only one of
+    # them is how "37 courses" sat in the extension for weeks beside a
+    # dashboard showing 11.
+    return {**counts, "courses": imported, "found": len(courses or []), "stored": stored}
 
 
 @app.route("/api/sync/status")

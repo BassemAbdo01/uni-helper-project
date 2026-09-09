@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 725 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 733 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -764,28 +764,50 @@ Both LMSs write through `_import_courses` and `_import_content`, so the
 dashboard, calendar, grade calculator and study tools never learn which one a
 student uses. Adding a third should extend those, not parallel them.
 
-## What gets imported, and what the dashboard opens on
+## What gets imported: everything, always
 
-The extension asks once, before the first import: **every term** or **one
-term**, chosen from a list Brightspace itself supplies (`NEXORA_LIST_TERMS` ->
-`discoverCoursesFromApi(true)` -> `termsFrom`). The answer is
-`importScope: 'all' | 'term'` plus `importTerm`; `includeFinished` is the 3.3
-spelling of the same choice and is still read, so an upgrade keeps its meaning.
+**Nexora imports every course in every term, and there is no question about
+it.** The extension used to ask once and remember the answer, which failed the
+way remembered answers do: a term named in first year stayed named, `content.js`
+filtered enrolments to `c.term === term`, and the student's current courses
+simply stopped arriving. Silently -- a sync that imports nothing looks exactly
+like one that worked.
 
-`currentTermLabel()` decides the default from the date -- Jan-Apr Winter,
-May-Aug Summer, Sep-Dec Fall. It is deliberately **not** `selectedTermLabel()`,
-which reads the tab on screen: that answers a different question, and answering
-with it imported Winter 2025 for a student sitting in September. Naming a term
-also forces `includeFinished` on the enrolments query, because the active-only
-variant cannot return a term that is over.
+`getConfig()` returns `importScope: 'all'` unconditionally; the popup has no
+scope screen and the advanced pane rewrites the stored keys to `'all'` on every
+save, so an install carrying an old one-term choice repairs itself. The keys are
+still written so a downgrade behaves.
 
-The dashboard has to hold up its end: `home()` computes `current_term_label`
-from the same date rule and renders every term group, showing only that one,
-with `#termPick` to switch and the choice kept in `localStorage`. If the
-calendar's term is not one the student is enrolled in, it falls back to the
-newest group -- otherwise a student between terms gets an empty page with their
-courses hidden behind it. "Import everything" is only a usable answer because
-of this.
+This costs a student nothing, because `home()` already opens on the current term
+(`_current_term_label`) and keeps the rest behind `#termPick`. "Import
+everything" was only ever unusable without that, and it has it.
+
+`currentTermLabel()` and the term-listing plumbing survive for the popup's
+copy and for Canvas; `selectedTermLabel()` no longer decides anything.
+
+## A course code is a label, not an identity
+
+`_import_courses` matched on `source_uid` and then **fell back to matching on
+`course_code`**, so every offering of the same code collapsed into one row and
+whichever was imported last won the name and the term. Reported as **37 courses
+in the extension, 11 on the dashboard**, with a third-year student's current
+courses wearing first-year names.
+
+The missing cards were the smaller half. The content sync walks the course list
+it reads back from `/api/sync/status`, so **a course with no row is never
+scraped** -- its outline, materials and announcements never arrive, and the
+outline analyser and study planner have nothing to work with for exactly the
+courses that matter.
+
+An org unit is the identity. `_prune_courses` already assumed this ("a code can
+be shared by two org units"), and every consumer groups by code anyway, so two
+offerings still render as one card -- owned by the **newest term**, because a
+student looking at ECOR1031 means the one they are in now.
+
+`/api/sync/courses` now returns **`found` and `stored`**. They are allowed to
+differ -- a hidden course, a tombstone -- but a student pressing sync has to be
+able to see that they do. Reporting one number and showing the other is how 37
+sat beside 11 for weeks.
 
 ## Extension
 
