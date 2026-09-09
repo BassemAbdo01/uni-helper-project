@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 733 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 739 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -809,6 +809,46 @@ differ -- a hidden course, a tombstone -- but a student pressing sync has to be
 able to see that they do. Reporting one number and showing the other is how 37
 sat beside 11 for weeks.
 
+## One definition of which offering a course code means
+
+`_newest_offering_per_code(rows)`. Storing one row per offering means a course
+taken twice is two rows sharing a code, and every screen that lists courses has
+to pick one. Left to a dict comprehension the winner is whichever row the query
+yielded last -- found in the browser right after the import change shipped:
+ECOR1031 appeared under **Fall 2025 with its first-year title**, in the grade
+calculator's term picker, on the page a student uses to enter *this* term's
+marks. The study room had it too.
+
+The newest term wins. The dashboard, the grade calculator and the study room
+all call the same helper, because two screens disagreeing about which offering
+a code means is the same class of bug as two disagreeing about a grade.
+
+**A placeholder code is not printed.** An org unit with no course code in its
+name gets `COURSE<orgUnitId>` from the extension's parser -- Carleton's "(MS
+LAP) Math and Stats Learning Assistance Program" is a real one, and so is a
+co-op shell. The code has to stay, because it is the join key for content,
+deadlines and grades, but `_display_code` blanks it on the card so a student
+sees the course's name rather than a number that reads as a fault.
+
+## The envelope's course is a fallback, on both paths
+
+`/api/sync/content` takes `{"course": X, "items": [...]}`. `_import_content`
+read the code off each item and ignored the envelope, and `_import_deadlines`
+did the same -- so a caller that filled only the envelope got **every deadline
+filed under OTHER**, which costs the outline's weights, `_course_standing`, and
+the plan's ability to say which course a block is for. Caught by a plan block
+coming back as `course='OTHER'` during an audit. The extension puts the code on
+every item, so this was latent, not live -- but two sibling paths reading the
+same payload differently is exactly how the last one happened.
+
+## Caps must be loud
+
+`COURSE_IMPORT_MAX` and `DASHBOARD_COURSE_LIMIT` are both 400, raised from 80
+and 60 once offerings stopped collapsing: a four-year degree is past both, and
+the only thing a low cap bought was courses vanishing without a word. A payload
+past the cap now returns `truncated` on the import result. The rule that keeps
+coming back: a limit a student cannot see is indistinguishable from a bug.
+
 ## Extension
 
 Injection is programmatic (`chrome.scripting.executeScript`), not a static
@@ -1117,6 +1157,12 @@ instead of mentioning an account. A rate limit dressed as a sales pitch reads as
 manufactured scarcity.
 
 ## The first-run tour
+
+**Ten steps, and one of them is the study planner.** For a long time there
+were nine and none of them mentioned it: a new student was walked past
+connecting, the grading scale, tasks, courses, grades, the calendar and the
+study room, and never told about the feature that turns all of that into a
+week. Add a step whenever a rail item earns one.
 
 A spotlight over the real dashboard, not a slideshow: nine steps, ordered by
 what a new account actually needs -- connect a source, save the grading scale

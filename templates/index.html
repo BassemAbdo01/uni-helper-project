@@ -245,7 +245,7 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
             {% for c in group.courses %}
               <article class="course" data-course="{{ c.course }}">
                 <a href="{{ url_for('course_workspace', course_code=c.course) }}">
-                  <span class="code">{{ c.course }}</span>
+                  <span class="code">{{ c.display_code }}</span>
                   <span class="name">{{ c.title }}</span>
                   <span class="meta">{% if c.next_title %}Next: {{ c.next_title|truncate(46) }}{% else %}No deadlines imported yet{% endif %}</span>
                   <span class="foot">
@@ -403,6 +403,9 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
       { at: 'nav-calendar',
         title: 'Your calendar',
         body: 'Every deadline laid out by day. Add your own midterms and exams, and subscribe to it from Google Calendar.' },
+      { at: 'nav-plan',
+        title: 'Your week, planned around you',
+        body: 'Add your timetable and Nexora builds the study week around your classes — more hours on what is worth more marks and due soonest, and it re-plans itself when a day gets away from you.' },
       { at: 'nav-study',
         title: 'Study room',
         body: 'A timer and a quiet place to work, with flashcards and practice questions generated from your own course material.' },

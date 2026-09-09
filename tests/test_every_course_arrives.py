@@ -152,3 +152,82 @@ def test_the_extension_is_told_about_every_offering_to_scrape(synced, client):
     payload = client.get("/api/sync/status", headers=synced).get_json()
     assert payload["course_count"] == 3
     assert {c["source_uid"] for c in payload["courses"]} == {"1", "2", "3"}
+
+
+# ------------------------------- one entry per course, named by the newest
+
+def test_the_grade_calculator_lists_a_repeated_course_once_in_its_current_term(synced, client):
+    """Found while auditing the change above: storing both offerings made a
+    dict-by-code pick whichever the query yielded last, so ECOR1031 -- taken in
+    first year and again this year -- appeared under Fall 2025 with its old
+    title, on the page a student uses to enter THIS term's marks."""
+    send(client, synced, [
+        offering("111", "ECOR1031", "Old Title From First Year", "Fall 2025"),
+        offering("222", "ECOR1031", "Programming and Data Management", "Winter 2026"),
+    ])
+    body = client.get("/grade-calculator").get_data(as_text=True)
+    assert body.count('value="ECOR1031"') == 1
+    assert "Fall 2025" not in body
+    assert "Programming and Data Management" in body
+
+
+def test_the_study_room_lists_it_once_too(synced, client):
+    send(client, synced, [
+        offering("111", "ECOR1031", "Old Title From First Year", "Fall 2025"),
+        offering("222", "ECOR1031", "Programming and Data Management", "Winter 2026"),
+    ])
+    body = client.get("/study-room").get_data(as_text=True)
+    assert "Old Title From First Year" not in body
+
+
+def test_the_newest_offering_represents_the_course_everywhere():
+    """One definition. Two screens disagreeing about which offering a course
+    code means is the same class of bug as two disagreeing about a grade."""
+    import app as nexora
+
+    class Row:
+        def __init__(self, code, term):
+            self.course_code, self.term = code, term
+
+    rows = [Row("ECOR1031", "Fall 2025"), Row("ECOR1031", "Winter 2026"),
+            Row("BIOL1103", "Fall 2026")]
+    best = nexora._newest_offering_per_code(rows)
+    assert set(best) == {"ECOR1031", "BIOL1103"}
+    assert best["ECOR1031"].term == "Winter 2026"
+    # order must not decide it
+    assert nexora._newest_offering_per_code(list(reversed(rows)))["ECOR1031"].term == "Winter 2026"
+
+
+def test_a_deadline_uses_the_course_on_the_envelope_when_the_item_omits_it(synced, client):
+    """/api/sync/content takes {"course": X, "items": [...]}. Content honoured
+    it and deadlines did not, so a caller filling only the envelope got every
+    deadline filed under OTHER -- which costs the outline's weights, the course
+    standing, and the plan's ability to say which course a block is for."""
+    import app as nexora
+    client.post("/api/sync/content", json={"course": "SYSC2004A", "items": [
+        {"content_type": "assignment", "title": "Assignment 1", "source_uid": "a1",
+         "due_at": "2026-10-07T02:00:00Z"}]}, headers=synced)
+    with nexora.app.app_context():
+        task = nexora.Task.query.filter_by(title="Assignment 1").first()
+        assert task is not None
+        assert task.course_full == "SYSC2004A"
+
+
+def test_a_course_with_no_real_code_does_not_print_a_made_up_one(synced, client):
+    """An org unit with no code in its name gets `COURSE<orgUnitId>` from the
+    extension's parser -- Carleton's "(MS LAP) Math and Stats Learning
+    Assistance Program" is a real one. The code stays, because it is the join
+    key for content, deadlines and grades; printing it on a card tells a
+    student nothing and reads as a fault."""
+    import app as nexora
+    assert nexora._display_code("COURSE1006") == ""
+    assert nexora._display_code("SYSC2004A") == "SYSC2004A"
+
+    send(client, synced, [
+        offering("1006", "COURSE1006", "Math and Stats Learning Assistance Program", "Fall 2026"),
+        offering("1", "BIOL1103", "Foundations of Biology I", "Fall 2026"),
+    ])
+    body = client.get("/dashboard").get_data(as_text=True)
+    assert "Math and Stats Learning Assistance Program" in body
+    assert ">COURSE1006<" not in body
+    assert ">BIOL1103<" in body

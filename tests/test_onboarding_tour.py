@@ -38,8 +38,18 @@ def test_it_renders_on_an_account_with_no_data_at_all(client):
     assert 'id="tourCard"' in body and 'id="tourNext"' in body
     # and the rail hooks the steps point at exist
     for hook in ("nav-brightspace", "nav-settings", "nav-grades",
-                 "nav-calendar", "nav-study"):
+                 "nav-calendar", "nav-plan", "nav-study"):
         assert f'data-tour="{hook}"' in body
+
+
+def test_the_tour_covers_the_study_planner(client):
+    """It did not. Nine steps walked a new student past connecting, the
+    grading scale, tasks, courses, grades, the calendar and the study room --
+    and never mentioned the one feature that turns all of that into a week."""
+    signup(client)
+    body = client.get("/dashboard").get_data(as_text=True)
+    assert "'nav-plan'" in body
+    assert "Your week, planned around you" in body
 
 
 def test_finishing_it_puts_it_away(client):

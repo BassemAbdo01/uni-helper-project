@@ -116,8 +116,17 @@ app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # up to 8 outline screensho
 # past that is memory this instance does not have. Below 1100px it starts losing
 # small print, so images are scaled toward the band from whichever side they are on.
 # A guard against an account with an implausible number of enrolments, not a
-# page size: a student's courses should all be on their dashboard.
-DASHBOARD_COURSE_LIMIT = int(os.environ.get("DASHBOARD_COURSE_LIMIT", "60"))
+# page size: a student's courses should all be on their dashboard. Raised once
+# the import stopped collapsing offerings of the same code into one row -- a
+# four-year degree is comfortably past sixty enrolments, and the page groups by
+# term, so the only thing a low cap bought was courses vanishing in silence.
+DASHBOARD_COURSE_LIMIT = int(os.environ.get("DASHBOARD_COURSE_LIMIT", "400"))
+
+# The most enrolments one sync will store. Same reasoning: a bound on a
+# pathological payload, not an opinion about how many courses a student may
+# have. Anything past it is REPORTED rather than dropped quietly -- see the
+# `truncated` key on the import result.
+COURSE_IMPORT_MAX = int(os.environ.get("COURSE_IMPORT_MAX", "400"))
 
 # Render sets RENDER_GIT_COMMIT on every deploy. Reported by /healthz so "did it
 # ship?" has an answer that does not depend on spotting a changed word somewhere.
@@ -319,6 +328,44 @@ def _term_sort_key(value):
     """Newest term first. Sort a list of labels with reverse=True."""
     season, year = _term_meta(value)
     return (year, _TERM_RANK.get(season.lower(), 4))
+
+
+# An org unit with no course code in its name gets `COURSE<orgUnitId>` from the
+# extension's parser -- Carleton's "(MS LAP) Math and Stats Learning Assistance
+# Program" is a real example, and so is a co-op or orientation shell. The code
+# has to stay as it is, because it is the join key for content, deadlines and
+# grades, but printing "COURSE1006" at the top of a card tells a student
+# nothing and looks like a fault. The card shows the course's name instead.
+_PLACEHOLDER_CODE = re.compile(r"^COURSE\d+$", re.I)
+
+
+def _display_code(code):
+    """The code to print on a card, or "" when the code is a placeholder."""
+    text = str(code or "").strip()
+    return "" if _PLACEHOLDER_CODE.match(text) else text
+
+
+def _newest_offering_per_code(rows):
+    """{course_code: the offering that should represent it}.
+
+    A course taken twice is two SyncedCourse rows sharing one code, and every
+    screen that lists courses has to pick one. Left to a dict comprehension the
+    winner is whichever row the query happened to yield last, so ECOR1031 --
+    taken in first year and again this year -- turned up filed under Fall 2025
+    with its old title, on a page a student uses to enter this term's marks.
+
+    The newest term wins, because a student naming a course means the one they
+    are in now. Keep this as the single definition: the dashboard, the grade
+    calculator and the study room all answer the same question, and two of them
+    disagreeing is the same class of bug as two disagreeing about a grade.
+    """
+    best = {}
+    for row in rows:
+        code = getattr(row, "course_code", "") or "OTHER"
+        current = best.get(code)
+        if current is None or _term_sort_key(row.term or "") > _term_sort_key(current.term or ""):
+            best[code] = row
+    return best
 
 
 def _current_term_label(today=None):
@@ -3857,11 +3904,9 @@ def home():
     for hidden_code in hidden_course_codes:
         course_map.pop(hidden_code, None)
     # One card per course code, but there can now be several ROWS behind it --
-    # the same course taken in two terms is two offerings. The newest term owns
-    # the card, because a student looking at ECOR1031 means the one they are in
-    # now; letting whichever row was written last win put a 2024 name and term
-    # on a course being taken this September.
-    for synced in synced_courses:
+    # the same course taken in two terms is two offerings. `_newest_offering_per_code`
+    # is the one place that decides which of them the card speaks for.
+    for synced in _newest_offering_per_code(synced_courses).values():
         code = synced.course_code or "OTHER"
         if code not in course_map:
             course_map[code] = {
@@ -3869,9 +3914,8 @@ def home():
                 "next_title": "", "next_due": "", "progress": 0,
             }
         card = course_map[code]
-        if "term" in card and _term_sort_key(card.get("term") or "") > _term_sort_key(synced.term or ""):
-            continue
         card["title"] = synced.course_name or code
+        card["display_code"] = _display_code(code)
         card["image_url"] = synced.image_url or ""
         card["brightspace_url"] = synced.brightspace_url or ""
         card["term"] = synced.term or ""
@@ -3907,6 +3951,8 @@ def home():
 
     course_art = ["code", "circuit", "economy", "math"]
     for index, course_card in enumerate(course_cards):
+        # Every card, synced or built from deadlines alone, gets one.
+        course_card["display_code"] = _display_code(course_card.get("course"))
         total = course_card["total"]
         compact_code = course_card["course"].replace(" ", "").upper()
         course_card["title"] = course_card.get("title") or course_titles.get(course_card["course"], course_titles.get(compact_code, "Course Workspace"))
@@ -4045,7 +4091,11 @@ def study_room():
         "due": c.get("main_due_pretty") or "No date",
         "status": c.get("status_label") or "Active",
     } for c in active]
-    synced = SyncedCourse.query.filter_by(user_id=current_user.id).order_by(SyncedCourse.updated_at.desc()).all()
+    # One entry per course, named by the newest offering -- the same rule the
+    # dashboard and the grade calculator use.
+    synced = list(_newest_offering_per_code(
+        SyncedCourse.query.filter_by(user_id=current_user.id).all()).values())
+    synced.sort(key=lambda x: (_term_sort_key(x.term or ""), x.course_code or ""), reverse=True)
     courses = [{"code": x.course_code or "OTHER", "name": x.course_name or x.course_code or "Course"} for x in synced[:12]]
     if not courses:
         seen = []
@@ -8350,7 +8400,7 @@ def _import_courses(user, courses):
     imported = []
     if courses:
         _credit_referrer(user)
-    for item in courses[:80]:
+    for item in courses[:COURSE_IMPORT_MAX]:
         url = str(item.get("brightspace_url") or item.get("url") or "").strip()[:4000]
         raw_code = str(item.get("course_code") or item.get("code") or item.get("title") or "OTHER")
         code = _normalize_course_code(raw_code)
@@ -8436,7 +8486,14 @@ def _import_courses(user, courses):
     # pressing sync must be able to SEE that they differ. Reporting only one of
     # them is how "37 courses" sat in the extension for weeks beside a
     # dashboard showing 11.
-    return {**counts, "courses": imported, "found": len(courses or []), "stored": stored}
+    result = {**counts, "courses": imported, "found": len(courses or []),
+              "stored": stored}
+    # Silence is what made the last one expensive. If a payload was too large to
+    # take whole, the answer says so instead of letting the student wonder why a
+    # course they can see in Brightspace is not in Nexora.
+    if len(courses or []) > COURSE_IMPORT_MAX:
+        result["truncated"] = len(courses) - COURSE_IMPORT_MAX
+    return result
 
 
 @app.route("/api/sync/status")
@@ -8501,7 +8558,7 @@ def _adopt_reported_timezone(user, name):
     return valid
 
 
-def _import_deadlines(user, items):
+def _import_deadlines(user, items, default_course=""):
     """Turn the due dates the extension scraped into calendar deadlines.
 
     The extension reads D2L's own `DueDate` for every assignment and quiz and
@@ -8531,7 +8588,14 @@ def _import_deadlines(user, items):
         due_iso = local_date_iso(item.get("due_at") or item.get("due_date"), zone)
         if not title or not due_iso:
             continue
-        course_full = _normalize_course_code(item.get("course") or item.get("course_full") or "OTHER")
+        # The envelope's course is the fallback. `/api/sync/content` takes
+        # `{"course": X, "items": [...]}` and the extension puts the code on
+        # every item as well, but a caller that only fills the envelope used to
+        # get every deadline filed under OTHER -- which silently costs the
+        # outline's weights, the course standing, and the plan's ability to say
+        # which course a block is for.
+        course_full = _normalize_course_code(
+            item.get("course") or item.get("course_full") or default_course or "OTHER")
         base = base_title(title)
         gid = make_group_id(course_full, base)
         # Stable across re-syncs and distinct from the feed's uids, so the two
@@ -8599,12 +8663,13 @@ def _import_content(user, payload):
     # Deadlines are handled in their own pass, on purpose: the content loop
     # short-circuits an item whose hash has not changed, so a deadline attached
     # to already-imported content would never be created retroactively.
-    counts["deadlines"] = _import_deadlines(user, items)
+    counts["deadlines"] = _import_deadlines(user, items, scan_course)
     for item in items[:1200]:
         title = str(item.get("title") or "").strip()
         if not title:
             continue
-        course = _normalize_course_code(item.get("course") or item.get("course_full") or "OTHER")
+        course = _normalize_course_code(
+            item.get("course") or item.get("course_full") or scan_course or "OTHER")
         if course in hidden_codes:
             counts["unchanged"] += 1
             continue
@@ -9115,8 +9180,9 @@ def grade_calculator():
     user_id = current_user.id
     profiles = {p.course_full: p for p in
                 CourseOutlineProfile.query.filter_by(user_id=user_id).all()}
-    synced = {c.course_code: c for c in SyncedCourse.query.filter_by(user_id=user_id).all()
-              if c.course_code and not bool(getattr(c, "is_hidden", False))}
+    synced = _newest_offering_per_code(
+        c for c in SyncedCourse.query.filter_by(user_id=user_id).all()
+        if c.course_code and not bool(getattr(c, "is_hidden", False)))
     graded = {row.course_full for row in
               GradeEntry.query.filter_by(user_id=user_id).with_entities(
                   GradeEntry.course_full).distinct()}
