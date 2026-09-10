@@ -92,6 +92,25 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .need .targetrow > div{width:150px}
 .need .targetrow label{margin-bottom:7px}
 .need .answer{margin:16px 0 0;font-size:15px;line-height:1.6;color:var(--fg-2)}
+
+/* Ask about this outline. Toggled with el.hidden, so nothing here may set
+   display on a class -- see the #courseState note in CLAUDE.md. */
+.qrow{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+.qrow input{flex:1;min-width:220px}
+.qanswer{margin-top:16px;border:1px solid var(--line-2);border-radius:9px;
+  background:var(--surface-2);padding:15px 16px}
+.qanswer p{margin:0;font-size:15px;line-height:1.65;color:var(--fg-2);white-space:pre-wrap}
+.qnums{display:flex;gap:18px;flex-wrap:wrap;margin-top:13px;padding-top:13px;
+  border-top:1px solid var(--line)}
+.qnums div{font-size:12px;color:var(--fg-3)}
+.qnums b{display:block;font-size:16px;font-weight:500;color:var(--fg);
+  font-family:var(--mono);margin-top:3px}
+.qanswer details{margin-top:13px}
+.qanswer summary{font-size:12.5px;color:var(--fg-3);cursor:pointer}
+.qanswer blockquote{margin:9px 0 0;padding-left:11px;border-left:2px solid var(--line-2);
+  font-size:13px;line-height:1.55;color:var(--fg-3)}
+.qanswer .warn{margin-top:12px;font-size:12.5px;color:var(--amber)}
+#qUnderstood{margin-top:11px}
 .need .answer b{color:var(--fg);font-weight:500}
 .need .answer .big{font-family:var(--mono);font-size:1.5rem;font-weight:500;color:var(--amber);
   font-variant-numeric:tabular-nums}
@@ -262,6 +281,35 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       <div class="note alert" id="statusAlert" role="status"></div>
     </div>
 </section>
+
+<section class="card" id="askPanel" hidden>
+  <header>
+    <div><span class="k">In your own words</span><h2>Ask about this outline</h2></div>
+  </header>
+  <div class="body">
+    <p class="note">
+      Anything the boxes above do not cover &mdash; &ldquo;how much do I need to pass?&rdquo;,
+      &ldquo;what do I need for a B+?&rdquo;, &ldquo;is the lab worth failing over?&rdquo;
+      Nexora answers from your outline and its own grade arithmetic, and quotes
+      the outline back so you can check it.
+    </p>
+    <div class="qrow">
+      <input id="qBox" maxlength="2000" placeholder="How much do I need on the final to pass?"
+             aria-label="Your question about this course outline">
+      <button class="btn" id="qSend" type="button">Ask</button>
+    </div>
+    <p class="note meta" id="qUnderstood" hidden></p>
+    <div class="qanswer" id="qAnswer" hidden>
+      <p id="qText"></p>
+      <div id="qNumbers" class="qnums" hidden></div>
+      <details id="qCites" hidden>
+        <summary>From your outline</summary>
+        <div id="qCiteList"></div>
+      </details>
+      <p class="note warn" id="qWarn" hidden></p>
+    </div>
+  </div>
+</section>
 {% endblock %}
 
 {% block scripts %}
@@ -423,6 +471,12 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     const link = $('openWorkspace');
     link.hidden = !course;
     if (course) link.href = `/course/${encodeURIComponent(course)}?tab=grades`;
+
+    // Nothing to ask about until a course is picked; the answer comes from
+    // that course's outline.
+    $('askPanel').hidden = !course;
+    $('qAnswer').hidden = true;
+    $('qUnderstood').hidden = true;
 
     const url = new URL(location.href);
     if (course) url.searchParams.set('course', course); else url.searchParams.delete('course');
@@ -863,6 +917,93 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     if (opening) { answerNeed(); $('targetGrade').focus(); }
   };
   $('targetGrade').oninput = () => answerNeed();
+
+  /* ---- ask about this outline ----
+     The boxes above answer the questions we thought of. This answers the rest,
+     and it is deliberately not a chatbot: the server hands the model the
+     outline text and the numbers the calculator itself computed, and forbids
+     it from doing any arithmetic of its own. Everything below renders with
+     textContent, because every word of it came from a model reading a file a
+     student uploaded. */
+  async function askOutline() {
+    const question = $('qBox').value.trim();
+    if (!question || !course) return;
+    const send = $('qSend');
+    send.disabled = true;
+    send.textContent = 'Asking…';
+    $('qAnswer').hidden = true;
+    $('qUnderstood').hidden = true;
+    try {
+      const res = await fetch(`/api/course/${encodeURIComponent(course)}/ask`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        $('qText').textContent = data.error || 'Nexora could not answer that one.';
+        $('qNumbers').hidden = true; $('qCites').hidden = true; $('qWarn').hidden = true;
+        $('qAnswer').hidden = false;
+        return;
+      }
+
+      // What it took the question to mean. A misread target would look utterly
+      // authoritative, so it is never invisible.
+      if (data.asked_about) {
+        $('qUnderstood').textContent =
+          `Answered for ${data.asked_about}, read from ${data.asked_basis}.`;
+        $('qUnderstood').hidden = false;
+      }
+
+      $('qText').textContent = data.answer;
+
+      const n = data.numbers || {};
+      const cells = [];
+      if (n.official_grade !== null && n.official_grade !== undefined)
+        cells.push(['Where you stand', `${n.official_grade}%`]);
+      if (n.required_final !== null && n.required_final !== undefined)
+        cells.push(['Needed on the final', `${n.required_final}%`]);
+      if (n.max_with_perfect_final !== null && n.max_with_perfect_final !== undefined)
+        cells.push(['Best possible finish', `${n.max_with_perfect_final}%`]);
+      $('qNumbers').textContent = '';
+      for (const [label, value] of cells) {
+        const cell = document.createElement('div');
+        cell.textContent = label;
+        const b = document.createElement('b');
+        b.textContent = value;
+        cell.append(b);
+        $('qNumbers').append(cell);
+      }
+      $('qNumbers').hidden = !cells.length;
+
+      $('qCiteList').textContent = '';
+      for (const quote of data.citations || []) {
+        const q = document.createElement('blockquote');
+        q.textContent = quote;
+        $('qCiteList').append(q);
+      }
+      $('qCites').hidden = !(data.citations || []).length;
+
+      const warnings = [];
+      if (data.confidence === 'low') warnings.push('Nexora is not confident about this one.');
+      if (data.not_covered) warnings.push('Your outline does not appear to cover it.');
+      if (data.unverified_citation_count)
+        warnings.push('Some quotes could not be found in your outline and were dropped.');
+      if (data.recommend_professor) warnings.push('Check with your professor before relying on it.');
+      $('qWarn').textContent = warnings.join(' ');
+      $('qWarn').hidden = !warnings.length;
+
+      $('qAnswer').hidden = false;
+    } catch (_) {
+      $('qText').textContent = 'Could not reach Nexora. Check your connection.';
+      $('qNumbers').hidden = true; $('qCites').hidden = true; $('qWarn').hidden = true;
+      $('qAnswer').hidden = false;
+    } finally {
+      send.disabled = false;
+      send.textContent = 'Ask';
+    }
+  }
+  $('qSend').onclick = askOutline;
+  $('qBox').addEventListener('keydown', e => { if (e.key === 'Enter') askOutline(); });
 
   $('uploadBtn').onclick = uploadSyllabus;
   $('parseBtn').onclick = parseText;

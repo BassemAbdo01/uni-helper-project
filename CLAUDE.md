@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 739 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 765 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -576,6 +576,45 @@ The course workspace still owns the same data and is untouched, on Bassem's
 call: it is the riskiest file in the repo and this change is about where
 things live, not how they are calculated. Remove its outline/grades tabs only
 once he has said the new page is better.
+
+## Ask the outline a question
+
+`/api/course/<code>/ask`, on the **course workspace and the grade calculator**.
+A student types a question in their own words -- "how much do I need to pass?",
+"what do I need for a B+?" -- and gets an answer grounded in their own outline.
+
+The rule is the same one the study planner follows: **the model reads the
+question, the server does the arithmetic.** `ask_course_ai` hands it the outline
+text and the numbers `_compute_official_result` already produced, and forbids it
+from computing anything. Every factual claim must carry a verbatim quote, and
+`_verify_quote_in_source` checks each one against the real outline before it is
+shown -- a citation the model could not have pulled is worse than none, because
+it looks trustworthy.
+
+**It was target-blind.** It always asked for a bare pass, so "what do I need to
+get 80" was answered with the numbers for 50 -- and the model, correctly barred
+from doing its own maths, presented them anyway. `_target_from_question` reads
+the mark out of the sentence and hands it to `_compute_official_result`:
+
+- an explicit percentage, but only where the sentence is **asking for** it. A
+  `%` alone is not enough -- "is the final worth 40%" is about a weight, and
+  "I got 80 on the midterm" is a statement, not a goal.
+- a letter, matched against the student's **own** saved scale, so a university
+  whose A starts at 80 is never answered with someone else's 85. Matched
+  uppercase-as-written, or the "a" in "what do I need" becomes an A.
+- passing, using the course's own `pass_mark` rather than a hardcoded 50.
+- a number glued to letters is a course code, not a mark.
+
+Deterministic on purpose: a model misreading "85" as "58" once in a hundred
+times is a student planning a term around a number nobody checked. The response
+carries `asked_about` and `asked_basis`, shown on the page, because a misread
+target is the one failure here that would look completely authoritative -- the
+same reason `/api/study-plan/ask` returns `understood`. It also returns the
+`numbers` the answer was built from, so the sentence can be checked against the
+arithmetic instead of taken on trust.
+
+**It was also the only Gemini-backed route with no `AI_LIMIT`**, which mattered
+much more once it moved onto a page a student can sit and retype questions into.
 
 ## Outline analysis
 

@@ -7019,6 +7019,83 @@ def grade_outcomes(course_code):
     return jsonify(result)
 
 
+# Words that mean "the mark I am aiming for" rather than "a mark I already
+# have". "What do I need to get 80" is a target; "I got 80 on the midterm" is
+# not, and answering the second as though it were the first would hand a
+# student the wrong number with a straight face.
+_TARGET_CUE = re.compile(
+    r"(?:need|needed|require[sd]?|get|getting|achieve|score|earn|end\s+up\s+with|"
+    r"finish\s+with|aiming\s+for|target|to\s+reach|for\s+an?)\b[^.?!]{0,40}?$",
+    re.I)
+_PASS_CUE = re.compile(r"\b(pass|passing|not\s+fail|avoid\s+failing)\b", re.I)
+
+
+def _target_from_question(user_id, question, analysis):
+    """What mark the student is asking about, read out of their own words.
+
+    The model is never allowed to do grade arithmetic -- see `ask_course_ai` --
+    so the only way it can answer "what do I need for a B+" is to be handed
+    numbers that were computed FOR a B+. `_compute_official_result` takes a
+    target and does that maths already; all that was missing was reading the
+    target out of the sentence, which is a job for a regex and not for a model.
+    Before this, every question was answered with the numbers for a bare pass,
+    so "what do I need to get 80" got the mark needed for 50 -- confidently,
+    and with the app's own arithmetic behind it.
+
+    Deterministic on purpose. A model reading "85" as "58" once in a hundred
+    times is a student planning a term around a number nobody checked.
+
+    Returns {"target", "label", "basis"} or None when the question names no
+    mark, in which case the caller keeps the pass-mark default.
+    """
+    text = str(question or "")
+    if not text.strip():
+        return None
+
+    # 1. An explicit percentage, but only where the sentence is asking FOR it.
+    for match in re.finditer(r"(\d{1,3}(?:\.\d+)?)\s*(%|percent)?", text):
+        try:
+            value = float(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= value <= 100):
+            continue
+        before = text[:match.start()]
+        # A number glued to letters is a course code (SYSC2004), not a mark.
+        if before[-1:].isalpha():
+            continue
+        # A percent sign is NOT enough on its own: "is the final worth 40%" is a
+        # question about a weight, and answering it with the numbers needed to
+        # finish on 40 would be a confident non-sequitur. The sentence has to be
+        # asking FOR the mark.
+        if _TARGET_CUE.search(before):
+            return {"target": value, "label": f"{value:g}%", "basis": "the mark you named"}
+
+    # 2. A letter grade, matched against the student's OWN scale. Uppercase as
+    #    written, so the "a" in "what do I need" is never read as an A.
+    profile = _get_user_grading_scale(user_id)
+    bands = sorted(profile.get("scale") or [], key=lambda b: -len(str(b.get("letter") or "")))
+    for band in bands:
+        letter = str(band.get("letter") or "").strip()
+        if not letter or letter.upper() == "F":
+            continue
+        if re.search(r"(?<![A-Za-z0-9+-])" + re.escape(letter) + r"(?![A-Za-z0-9+-])", text):
+            return {"target": float(band["minimum"]),
+                    "label": f"{letter} ({band['minimum']:g}%)",
+                    "basis": "your saved grading scale"}
+
+    # 3. Passing, which is the course's own pass mark when the outline gave one.
+    if _PASS_CUE.search(text):
+        mark = analysis.get("pass_mark")
+        try:
+            value = float(mark)
+        except (TypeError, ValueError):
+            value = 50.0
+        return {"target": value, "label": f"a pass ({value:g}%)", "basis": "this course's pass mark"}
+
+    return None
+
+
 def _verify_quote_in_source(quote, source_text):
     """True only if `quote` actually appears verbatim (modulo whitespace) in
     `source_text`. A citation the AI could not have really pulled from the
@@ -7033,6 +7110,7 @@ def _verify_quote_in_source(quote, source_text):
 
 
 @app.route('/api/course/<course_code>/ask', methods=['POST'])
+@limiter.limit(AI_LIMIT)
 @login_required
 @requires_active
 def ask_course_ai(course_code):
@@ -7067,7 +7145,12 @@ def ask_course_ai(course_code):
     if not outline_text and not analysis:
         return jsonify({'error':"Upload and analyze this course's outline first — Nexora has nothing to answer from yet."}),409
 
-    official_result,official_error=_compute_official_result(current_user.id,course)
+    # "What do I need for a B+" can only be answered with numbers computed FOR
+    # a B+. The model must never do the arithmetic, so the target is read out
+    # of the question here and handed to the engine that already owns it.
+    asked = _target_from_question(current_user.id, question, analysis)
+    official_result,official_error=_compute_official_result(
+        current_user.id, course, target=asked['target'] if asked else 50.0)
     official_summary=official_result if not official_error else None
 
     excerpt=_outline_relevant_excerpt(outline_text) if outline_text else ''
@@ -7113,7 +7196,14 @@ def ask_course_ai(course_code):
     )
     user_prompt=(
         f"Student's question about {course}: {question}\n\n"
-        "=== PRE-COMPUTED OFFICIAL GRADE RESULT (already calculated by the app's grading "
+        + (f"The numbers below were computed for a target of {asked['label']}, taken from "
+           f"{asked['basis']}. `required_final` is the mark needed on the final exam to reach "
+           f"exactly that, and `max_with_perfect_final` is the best possible finish even with "
+           f"100% on the final. If max_with_perfect_final is below the target, say plainly "
+           f"that it is out of reach and give that best possible figure.\n\n"
+           if asked else
+           "The student named no particular mark, so the numbers below are for a bare pass.\n\n")
+        + "=== PRE-COMPUTED OFFICIAL GRADE RESULT (already calculated by the app's grading "
         "engine -- reuse these numbers exactly, never recompute) ===\n"
         +(json.dumps(official_summary,ensure_ascii=False,indent=2) if official_summary else "Not available yet (outline not confirmed, or no grades entered).")
         +"\n\n=== CONFIRMED STRUCTURED GRADING POLICY ===\n"
@@ -7150,6 +7240,20 @@ def ask_course_ai(course_code):
         'confidence':confidence,
         'recommend_professor':bool(raw.get('recommend_professor')) or confidence=='low',
         'not_covered':bool(raw.get('not_covered')),
+        # What Nexora understood the question to be asking for, shown on the
+        # page. A misread target is the one failure here that would look
+        # completely authoritative, so it is never invisible -- the same reason
+        # /api/study-plan/ask returns `understood`.
+        'asked_about':asked['label'] if asked else '',
+        'asked_basis':asked['basis'] if asked else '',
+        # The numbers the answer was built from, so the student can check the
+        # sentence against the arithmetic rather than taking prose on trust.
+        'numbers':{
+            'target':official_summary.get('target') if official_summary else None,
+            'official_grade':official_summary.get('official_grade') if official_summary else None,
+            'required_final':official_summary.get('required_final') if official_summary else None,
+            'max_with_perfect_final':official_summary.get('max_with_perfect_final') if official_summary else None,
+        } if official_summary else None,
     })
 
 
