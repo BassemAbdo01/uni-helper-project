@@ -1224,6 +1224,27 @@ def _user_zone(user=None):
         return timezone.utc
 
 
+def _student_now(user_or_id=None):
+    """The current moment on the student's own clock.
+
+    The planner took `date.today()` -- the server's date, which on Render is
+    UTC. At 8 PM in Ottawa on a Tuesday, UTC is already Wednesday: the plan
+    would start tomorrow, Tuesday's evening slots were simply gone, and
+    `_close_off_yesterday` marked the untouched Tuesday blocks MISSED while the
+    student still had the whole evening to do them. "Every date is the
+    student's day, not UTC" -- the same lesson the deadlines learnt, in the one
+    feature that is entirely about which day it is.
+    """
+    user = user_or_id
+    if user is not None and not hasattr(user, "timezone"):
+        user = User.query.get(user)
+    return datetime.now(_user_zone(user))
+
+
+def _student_today(user_or_id=None):
+    return _student_now(user_or_id).date()
+
+
 def _valid_timezone(name):
     name = str(name or "").strip()[:64]
     if not name:
@@ -2686,12 +2707,19 @@ def _local_outline_analysis(text_value, course=''):
             try: pass_mark=float(m.group(1)); break
             except Exception: pass
     structured_rules=[]; minimums=[]; final_minimum=None
+    # A stretch of a sentence that contains NO percentage. The gap between a
+    # threshold and the word "final" must not be allowed to cross another
+    # threshold: "at least 50% overall AND at least 40% on the final
+    # examination" was read as a 50% final minimum, because the plain gap
+    # matched from the FIRST "at least" and skipped straight over the second.
+    # A student at 45% on the final would have been told they failed.
+    NO_PCT=r'(?:(?!\d{1,3}(?:\.\d+)?\s*%)[^.\n])'
     # Final/component minimum rules in both word orders.
     rule_specs=[
         ('Final Exam',[
-            r'(?:must|required\s+to)\s+(?:pass|obtain|earn|achieve)[^.\n]{0,80}?final(?:\s+exam|\s+examination)?[^.\n]{0,50}?(\d{1,3}(?:\.\d+)?)\s*%',
-            r'(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%[^.\n]{0,90}?final(?:\s+exam|\s+examination)',
-            r'final(?:\s+exam|\s+examination)[^.\n]{0,60}?(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%',
+            r'(?:must|required\s+to)\s+(?:pass|obtain|earn|achieve)'+NO_PCT+r'{0,80}?final(?:\s+exam|\s+examination)?'+NO_PCT+r'{0,50}?(\d{1,3}(?:\.\d+)?)\s*%',
+            r'(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%'+NO_PCT+r'{0,90}?final(?:\s+exam|\s+examination)',
+            r'final(?:\s+exam|\s+examination)'+NO_PCT+r'{0,60}?(?:at\s+least|minimum(?:\s+of)?)\s*(\d{1,3}(?:\.\d+)?)\s*%',
         ]),
         ('Labs',[
             r'(?:must|required\s+to).{0,80}?lab(?:s|oratory)?.{0,50}?(\d{1,3}(?:\.\d+)?)\s*%',
@@ -4809,6 +4837,11 @@ def _free_slots(user_id, pref, start, days):
 
     off = _days_off(pref)
     buffer_min = max(0, int(pref.buffer_min or 0))
+    # A plan built at 3 PM must not offer 9 AM today. The first day's window
+    # opens at the next quarter-hour after now, on the student's clock; every
+    # later day is whole.
+    now = _student_now(user_id)
+    now_min = (now.hour * 60 + now.minute + 14) // 15 * 15 if start == now.date() else 0
     slots = []
     for offset in range(days):
         day = start + timedelta(days=offset)
@@ -4824,6 +4857,8 @@ def _free_slots(user_id, pref, start, days):
                          min(24 * 60, int(block.end_min or 0) + buffer_min)))
         busy.sort()
         cursor = int(pref.earliest_min or 0)
+        if offset == 0:
+            cursor = max(cursor, now_min)
         limit = int(pref.latest_min or 24 * 60)
         for begin, finish in busy:
             if finish <= cursor or begin >= limit:
@@ -5016,7 +5051,7 @@ def _study_items(user_id, today=None, pref=None):
     and milestones filled the week while the exams that decide the grade got
     nothing until they were close.
     """
-    today = today or date.today()
+    today = today or _student_today(user_id)
     focus = (getattr(pref, "focus", "") or "all") if pref is not None else "all"
     only_courses = _focus_courses_set(pref) if pref is not None else set()
     weights = _component_weights(user_id)
@@ -5193,7 +5228,7 @@ def _build_plan(user_id, today=None, days=None):
     nobody could argue with -- and nobody could follow, because they could not
     see why any block was where it was.
     """
-    today = today or date.today()
+    today = today or _student_today(user_id)
     days = days or STUDY_HORIZON_DAYS
     pref = _study_preference(user_id)
     slots = _free_slots(user_id, pref, today, days)
@@ -5319,7 +5354,7 @@ def _close_off_yesterday(user_id, today=None):
     Deliberately not framed as a failing: the work still has a deadline, and
     the only useful response is to put it back in the week that is left.
     """
-    today = (today or date.today()).isoformat()
+    today = (today or _student_today(user_id)).isoformat()
     rows = StudySession.query.filter_by(user_id=user_id, state="planned").filter(
         StudySession.on_date < today).all()
     if not rows:
@@ -5363,7 +5398,7 @@ def _save_plan(user_id, plan):
     A regenerate must not quietly erase the evidence that someone did the work,
     and must not touch a week they have already lived through.
     """
-    today = date.today().isoformat()
+    today = _student_today(user_id).isoformat()
     stale = StudySession.query.filter_by(user_id=user_id).filter(
         StudySession.on_date >= today, StudySession.state == "planned").all()
     for row in stale:
@@ -5553,7 +5588,7 @@ def study_plan_page():
     pref = _study_preference(user_id)
     blocks = ClassBlock.query.filter_by(user_id=user_id).order_by(
         ClassBlock.weekday.asc(), ClassBlock.start_min.asc()).all()
-    today = date.today()
+    today = _student_today(user_id)
     sessions = StudySession.query.filter_by(user_id=user_id).filter(
         StudySession.on_date >= today.isoformat()).order_by(
         StudySession.on_date.asc(), StudySession.start_min.asc()).all()
@@ -5799,7 +5834,7 @@ def study_preferences_api():
 @app.route("/api/study-plan", methods=["GET"])
 @login_required
 def study_plan_api():
-    today = date.today()
+    today = _student_today(current_user)
     rows = StudySession.query.filter_by(user_id=current_user.id).filter(
         StudySession.on_date >= today.isoformat()).order_by(
         StudySession.on_date.asc(), StudySession.start_min.asc()).all()
@@ -5923,7 +5958,7 @@ def study_plan_ask():
     plan = _build_plan(current_user.id, days=days)
     made = _save_plan(current_user.id, plan)
     rows = StudySession.query.filter_by(user_id=current_user.id).filter(
-        StudySession.on_date >= date.today().isoformat()).order_by(
+        StudySession.on_date >= _student_today(current_user).isoformat()).order_by(
         StudySession.on_date.asc(), StudySession.start_min.asc()).all()
     return jsonify({
         "ok": True,
@@ -5968,7 +6003,7 @@ def study_plan_generate():
                         "catch_up": _catch_up_message(missed, 0)})
     made = _save_plan(current_user.id, plan)
     rows = StudySession.query.filter_by(user_id=current_user.id).filter(
-        StudySession.on_date >= date.today().isoformat()).order_by(
+        StudySession.on_date >= _student_today(current_user).isoformat()).order_by(
         StudySession.on_date.asc(), StudySession.start_min.asc()).all()
     return jsonify({"ok": True, "created": made,
                     "missed": missed,
@@ -7265,11 +7300,28 @@ def upload_course_outline(course_code):
     course=_normalize_course_code(course_code)
     uploads=request.files.getlist('files') or request.files.getlist('file')
     uploads=[u for u in uploads if u and u.filename]
+    # Pasted text takes the same road as an uploaded file. It used to go to the
+    # generic analyzer instead, which keeps nothing: on the grade calculator a
+    # student picked a course, pasted their outline, watched the components
+    # appear -- and then vanish, as the page re-read the (empty) saved copy.
+    # Storing it here means the analyze route, the confirm step, the official
+    # result and Ask all find it, exactly as they would an upload.
+    pasted=''
     if not uploads:
-        return jsonify({'error':'Choose one or more outline files or screenshots.'}),400
+        body=request.get_json(silent=True) or {}
+        pasted=_sanitize_extracted_text(str(body.get('text') or ''))
+        if not pasted:
+            return jsonify({'error':'Choose one or more outline files or screenshots, or paste the outline text.'}),400
+        if len(pasted)<200:
+            return jsonify({'error':'That is too short to be a course outline. Paste the grading section at least.'}),422
     if len(uploads)>8:
         return jsonify({'error':'Upload at most 8 screenshots/pages at once.'}),400
     extracted_parts=[]; hashes=[]; total_size=0; names=[]
+    if pasted:
+        names=['Pasted course outline']
+        hashes=[hashlib.sha256(pasted.encode('utf-8')).hexdigest()]
+        total_size=len(pasted.encode('utf-8'))
+        extracted_parts=[pasted]
     try:
         for index,upload in enumerate(uploads,1):
             filename, extracted, file_hash, size=_extract_uploaded_course_file(upload)

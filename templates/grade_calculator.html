@@ -419,20 +419,45 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   async function refreshOfficial() {
     if (!course) { $('policyPanel').hidden = true; return; }
     let data;
+    const res = await fetch(
+      `/api/course/${encodeURIComponent(course)}/grade-outcomes`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: Number($('targetGrade').value) || 50 }),
+      });
     try {
-      data = await readResponse(await fetch(
-        `/api/course/${encodeURIComponent(course)}/grade-outcomes`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ target: Number($('targetGrade').value) || 50 }),
-        }));
+      data = await readResponse(res);
     } catch (err) {
-      // 409 means the policy is waiting to be confirmed; that is a state, not
-      // a failure, and the workspace is where confirming happens.
+      // 409 means the policy is waiting to be confirmed. That is a state, not
+      // a failure -- and it has to be resolvable HERE. This page is the one
+      // place for grades; sending a student to another page to press one
+      // button, with no link to it, read as the calculator being broken.
       $('policyPanel').hidden = false;
       $('official').className = 'official';
-      $('official').replaceChildren(Object.assign(document.createElement('p'),
-        { className: 'why', textContent: err.message }));
+      const why = Object.assign(document.createElement('p'),
+        { className: 'why', textContent: err.message });
+      $('official').replaceChildren(why);
       $('passRules').replaceChildren();
+      if (res.status === 409) {
+        const hint = document.createElement('p');
+        hint.className = 'why';
+        hint.textContent = 'Check the components below against your outline first. If they match, confirm and Nexora will calculate your official result.';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn';
+        btn.textContent = 'Confirm this grading policy';
+        btn.onclick = async () => {
+          btn.disabled = true;
+          try {
+            await readResponse(await fetch(
+              `/api/course/${encodeURIComponent(course)}/outline/confirm`, { method: 'POST' }));
+            await loadCourse(course);
+          } catch (e) {
+            btn.disabled = false;
+            showAlert(e.message, 'bad');
+          }
+        };
+        $('official').append(hint, btn);
+      }
       return;
     }
 
@@ -555,12 +580,6 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       }));
       render();
 
-      if (course) {
-        // The course route saved its own components; re-read them rather than
-        // keeping the copy this page just drew, so ids line up for saving.
-        await loadCourse(course);
-      }
-
       const meta = [];
       if (data.pass_mark != null) meta.push(`Course pass mark: ${data.pass_mark}%`);
       if (data.final_minimum != null) meta.push(`Final-exam minimum: ${data.final_minimum}%`);
@@ -578,28 +597,65 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     }
   }
 
+  /* With a course selected, an outline is THAT course's outline, and it takes
+     two calls: store it, then run the full analysis against the stored copy --
+     the same two the course workspace makes. This page used to make only the
+     first for an upload (so nothing was ever analyzed, under a message saying
+     it had been) and neither for pasted text (so the components appeared and
+     were then wiped by re-reading the empty saved copy). Without a course it
+     is a demonstration, and the generic analyzer that keeps nothing is right. */
+  async function analyzeForCourse(store) {
+    $('inputPanel').classList.add('loading');
+    $('analysisMeta').textContent = 'Reading the outline… this can take a minute.';
+    $('analysisMeta').classList.add('show');
+    try {
+      const stored = await readResponse(await store());
+      const analysed = await readResponse(await fetch(
+        `/api/course/${encodeURIComponent(course)}/outline/analyze`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_uid: stored.source_uid }),
+        }));
+      await loadCourse(course);
+      const meta = [];
+      if (analysed.pass_mark != null) meta.push(`Course pass mark: ${analysed.pass_mark}%`);
+      if (analysed.final_minimum != null) meta.push(`Final-exam minimum: ${analysed.final_minimum}%`);
+      for (const rule of analysed.rules || []) meta.push(rule);
+      $('analysisMeta').textContent = meta.join(' · ')
+        || 'Outline analyzed. Check the components below, then confirm the policy above.';
+      if (!components.length) {
+        showAlert('No clear grading components were found. Try a clearer screenshot or PDF, or add each one with "+ Add item".', 'bad');
+      }
+    } catch (err) {
+      $('analysisMeta').textContent = '';
+      $('analysisMeta').classList.remove('show');
+      showAlert(err.message, 'bad');
+    } finally {
+      $('inputPanel').classList.remove('loading');
+    }
+  }
+
   const uploadSyllabus = () => {
     const files = [...$('syllabusFile').files];
     if (!files.length) return showAlert('Choose one or more outline pages first.', 'bad');
     const form = new FormData();
     files.forEach(f => form.append('files', f));
-    // With a course selected this is that course's outline, so it goes to the
-    // route that stores the analysis and builds its grade sheet. The generic
-    // endpoint returns components and keeps nothing.
-    const url = course
-      ? `/api/course/${encodeURIComponent(course)}/outline/upload`
-      : '/api/analyze-outline';
-    return analyzeRequest(fetch(url, { method: 'POST', body: form }));
+    if (course) {
+      return analyzeForCourse(() => fetch(
+        `/api/course/${encodeURIComponent(course)}/outline/upload`, { method: 'POST', body: form }));
+    }
+    return analyzeRequest(fetch('/api/analyze-outline', { method: 'POST', body: form }));
   };
 
   const parseText = () => {
     const text = $('rawText').value.trim();
     if (!text) return showAlert('Paste course-outline text first.', 'bad');
-    return analyzeRequest(fetch('/api/analyze-outline', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text })
-    }));
+    const body = { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                   body: JSON.stringify({ text }) };
+    if (course) {
+      return analyzeForCourse(() => fetch(
+        `/api/course/${encodeURIComponent(course)}/outline/upload`, body));
+    }
+    return analyzeRequest(fetch('/api/analyze-outline', body));
   };
 
   /* ---------------- one card per assessment ---------------- */

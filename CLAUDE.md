@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 765 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 787 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -277,6 +277,20 @@ the app start discarding earned marks. Record any bonus whose amount the outline
 states, wherever it is stated; only a bonus with no stated amount belongs in
 `rules` instead.
 
+## Which number is the final-exam minimum
+
+`_local_outline_analysis` reads component minimums with three regexes per
+component, in both word orders. The gap between a threshold and the word
+"final" is `NO_PCT` -- a run of characters that contains no percentage --
+because a plain `[^.
+]{0,90}?` gap matched from the FIRST "at least" in the
+sentence and skipped over the second: "at least 50% overall AND at least 40%
+on the final examination" became a **50% final minimum**, and a student at 45%
+on the final would have been told they failed. Found in the browser while
+pasting an outline; the parser is the fast path for a clean table and the
+fallback when Gemini is unavailable, so it is not an edge case.
+`tests/test_final_minimum_phrasing.py` pins six orderings of that sentence.
+
 ## A rule Nexora cannot check must never fail a student
 
 `_evaluate_pass_rules` is tri-state: `passed` is True, False, or **None** for a
@@ -525,6 +539,22 @@ charset.
 that course's saved `GradeEntry` rows, its policy, and the official result from
 `_compute_official_result` -- never its own copy of the pass-rule maths, which
 is how two screens come to disagree about whether someone passed.
+
+**An outline pasted or uploaded WITH a course selected takes two calls:**
+store it (`/outline/upload`, which accepts files or JSON `{text}`), then
+analyze the stored copy (`/outline/analyze` with the returned `source_uid`),
+then re-read the grade sheet -- the same two the course workspace makes.
+Neither intake path on this page worked once a course was picked: an upload
+made only the first call, so nothing was analyzed under a message saying it
+had been, and pasted text went to the generic analyzer that keeps nothing, so
+the components appeared and were then wiped by re-reading the empty saved copy.
+Without a course the page is a demonstration and the generic analyzer is right.
+
+**The policy is confirmable here.** After analysis `confirmed` is False and
+`grade-outcomes` answers 409; the official panel now renders a Confirm button
+on that status rather than telling the student to go to another page with no
+link to it. This page is the one place for grades, so the one button that
+unlocks the result has to be on it.
 
 **Marks post as `"16/20"`, not as `16` with a separate maximum.** A bare number
 is read as a percentage by `_parse_mark_entry` -- correct for the single-field
@@ -991,6 +1021,22 @@ timestamp to.
 and nothing else. A plan has to be the same plan when you look at it twice, has
 to explain why every block is where it is, and must not cost quota to redraw --
 `test_the_same_week_generated_twice_is_the_same_week` pins the first of those.
+
+## The planner runs on the student's clock
+
+`_student_now(user)` / `_student_today(user)`, used by `_build_plan`,
+`_study_items`, `_free_slots`, `_close_off_yesterday`, `_save_plan` and every
+study-plan route. They took `date.today()` -- the server's date, UTC on Render.
+At 8 PM in Ottawa on a Tuesday, UTC is already Wednesday: the plan started
+tomorrow, Tuesday's evening slots were simply gone, and `_close_off_yesterday`
+marked the untouched Tuesday blocks **missed** while the student still had the
+whole evening. "Every date is the student's day, not UTC", missing from the one
+feature that is entirely about which day it is.
+
+**Today's window opens at the next quarter-hour after now.** A plan built at
+3 PM used to offer 9 AM today. Only the real today is cut; a `today=` passed in
+(tests, the insight page) is a whole day, so a fixed-date plan stays
+deterministic.
 
 ## Nexora measuring what actually happened
 
