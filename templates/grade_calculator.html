@@ -343,6 +343,11 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   // percentage, and making students retype 100 five times is its own bug.
   const DEFAULT_OUT_OF = 100;
   let components = [];
+  // The last official result the server gave for this course, or null. The
+  // standing panel below defers to it: a letter worked out from the number
+  // alone said D- under an official F, on the same page, for the same
+  // student, because only the server knows the outline's pass rules.
+  let official = null;
   const $ = id => document.getElementById(id);
 
   /* ---------------- course mode ----------------
@@ -434,7 +439,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   async function refreshOfficial() {
     // No sheet, no result. An "INCOMPLETE" panel over an empty course reads as
     // a verdict on nothing, and it was the first of five sections about nothing.
-    if (!course || !(components.length || byHand)) { $('policyPanel').hidden = true; return; }
+    if (!course || !(components.length || byHand)) { $('policyPanel').hidden = true; official = null; calculate(); return; }
     let data;
     const res = await fetch(
       `/api/course/${encodeURIComponent(course)}/grade-outcomes`, {
@@ -444,6 +449,8 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     try {
       data = await readResponse(res);
     } catch (err) {
+      official = null;
+      calculate();
       // 409 means the policy is waiting to be confirmed. That is a state, not
       // a failure -- and it has to be resolvable HERE. This page is the one
       // place for grades; sending a student to another page to press one
@@ -480,6 +487,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 
     $('policyPanel').hidden = false;
     $('policyCourse').textContent = `${course} — official result`;
+    official = data;
     const status = data.official_status || 'INCOMPLETE';
     const box = $('official');
     box.className = 'official ' + status.toLowerCase();
@@ -502,6 +510,8 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     const rules = document.createDocumentFragment();
     (data.pass_rules || []).forEach(rule => rules.append(ruleRow(rule)));
     $('passRules').replaceChildren(rules);
+    // Re-render the standing panel so its letter and colour follow this.
+    calculate();
   }
 
   async function loadCourse(code) {
@@ -924,7 +934,17 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     // showing only that was what made five solid marks read as 29.72%.
     const standing = t.gradedWeight > 0 ? t.earnedPoints / t.gradedWeight * 100 : null;
     const result = $('result');
-    const letter = standing == null ? '' : letterFor(standing);
+
+    // Once the official result has a grade, the letter and the pass/fail
+    // colour are ITS letter and ITS verdict. This panel's arithmetic knows
+    // the number; only the server knows that a 49 on the lecture component
+    // fails the course. Until then -- no course, unconfirmed policy, marks
+    // still missing -- the letter is the running average's, and says so.
+    const ruled = !!(course && official && official.official_grade != null);
+    const letter = ruled ? (official.letter_grade || '')
+                         : (standing == null ? '' : letterFor(standing));
+    const failedRule = ruled && official.official_status === 'FAIL'
+      ? (official.pass_rules || []).find(r => r.passed === false) : null;
 
     $('standing').textContent = standing == null ? '—' : `${standing.toFixed(2)}%`;
     $('letter').textContent = letter;
@@ -935,6 +955,17 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       $('resultSub').textContent = components.length
         ? 'Fill in the marks you have so far.'
         : 'Add an outline, then fill in the marks you have so far.';
+    } else if (ruled) {
+      const passed = official.official_status === 'PASS';
+      result.className = 'result ' + (passed ? 'pass' : 'fail');
+      $('resultLine').textContent = t.remainingWeight > 0
+        ? `Your average across the ${t.gradedWeight.toFixed(0)}% marked so far`
+        : 'Final standing — every assessment is marked';
+      $('resultSub').textContent = failedRule
+        ? `${letter} — the course is failed because a rule in the outline is not met: ${failedRule.message}`
+        : `${letter}. ${t.remainingWeight > 0
+            ? `${t.remainingWeight.toFixed(0)}% of the course is still to come.`
+            : 'Nothing left outstanding.'}`;
     } else {
       result.className = 'result ' + (standing >= 50 ? 'pass' : 'fail');
       $('resultLine').textContent = t.remainingWeight > 0

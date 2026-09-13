@@ -93,3 +93,15 @@ def test_the_page_chains_store_then_analyze_for_a_course(student):
     body = student.get("/grade-calculator").get_data(as_text=True)
     assert "/outline/upload" in body
     assert "/outline/analyze" in body
+
+
+def test_the_standing_panel_defers_to_the_official_result(student):
+    """Reported with a screenshot: FAIL · F in the official panel and D- in the
+    standing panel below it, same page, same student, same 51.24%. The panel's
+    own arithmetic knew the number; only the server knew the lecture-component
+    rule had failed. The letter and the pass/fail colour come from the
+    official result whenever there is one, and a failed rule is named."""
+    body = student.get("/grade-calculator").get_data(as_text=True)
+    assert "let official = null;" in body
+    assert "official.letter_grade" in body
+    assert "the course is failed because a rule in the outline is not met" in body

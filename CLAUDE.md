@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 800 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 801 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -583,6 +583,16 @@ the gate; both are gone.
 so "C- or better" was read as no rule at all -- the sign being the whole
 difference between C- and C. `LETTER` uses lookarounds, and reads both word
 orders ("required ... C- or better" and "C- or better is required").
+
+**The standing panel defers to the official result.** It computed its own
+letter and its own pass/fail colour from the number alone, so the page showed
+**FAIL · F** in the official panel and **D-** in the standing panel below it --
+same student, same 51.24% -- because only the server knows that a 49 on the
+lecture component fails the course. `calculate()` takes the letter and the
+verdict from the last official result whenever one has a grade, names the
+failed rule in the sub-line, and `refreshOfficial` re-runs it. During the
+one-second save debounce the letter holds the last official verdict rather
+than flashing a number-only guess; the percent updates instantly.
 
 **Marks post as `"16/20"`, not as `16` with a separate maximum.** A bare number
 is read as a percentage by `_parse_mark_entry` -- correct for the single-field
