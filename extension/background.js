@@ -1017,9 +1017,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const token = String(message.token || '').trim();
         if (!token) throw new Error('Nexora did not return a key.');
         const apiBase = String(message.apiBase || DEFAULT_API_BASE).replace(/\/$/, '');
+        const current = await getConfig();
+        // Every signed-in Nexora page offers its account's key, so this runs
+        // often and must be free when nothing changed.
+        if (current.token === token && current.apiBase === apiBase) {
+          sendResponse({ ok: true, apiBase, unchanged: true });
+          return;
+        }
+        // A different key is a different account. Everything the extension
+        // remembers about the last one -- which courses it found, when it
+        // last synced, "37 courses in Nexora" -- is about someone else now,
+        // and the next sync must be a first sync. The worst version of this
+        // was a shared computer: one student's Brightspace pushed into the
+        // account another student had left signed in.
+        const switched = Boolean(current.token) && current.token !== token;
         await chrome.storage.sync.set({ token, apiBase });
+        if (switched) {
+          await chrome.storage.local.remove(['detectedCourses', 'lastFullSync', 'pendingImport']);
+          await setStatus({ running: false, phase: 'idle', lastSync: '', lastContentSync: '',
+                            contentSummary: null, courseDiscovery: null, currentCourse: '',
+                            progress: '', connectionExpired: false, error: '' });
+          // setStatus stamps a top-level lastSync of "now"; for a new account
+          // there has been no sync at all.
+          await chrome.storage.local.remove(['lastSync']);
+        }
         await configureAlarm();
-        sendResponse({ ok: true, apiBase });
+        sendResponse({ ok: true, apiBase, switched });
         return;
       }
 

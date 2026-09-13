@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 795 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 800 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -952,6 +952,15 @@ Injection is programmatic (`chrome.scripting.executeScript`), not a static
 `content_scripts` entry, so it works on any university's domain with a permission
 the student grants for their own origin.
 
+- **The extension follows whoever is signed in on the site.** It used to keep
+  the key from the one time the connect page paired it, so switching accounts
+  on the site left it pushing courses into the previous account -- and on a
+  shared computer, into someone else's. `app_base.html` offers the session's
+  own key (`GET /api/sync/extension-key`, which never rotates) on every
+  signed-in page; the worker's `NEXORA_PAIR` returns `unchanged` when nothing
+  differs and, on a real switch, clears `detectedCourses`, `lastFullSync`,
+  `lastSync` and the sync status so the popup does not describe the last
+  account and the next sync is a first sync.
 - **`allFrames: true` is required.** Brightspace renders My Courses in a widget
   iframe; injecting only into the top document finds nothing and reports "no
   course cards found" on a page full of course cards.

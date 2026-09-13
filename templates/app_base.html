@@ -69,6 +69,30 @@
 
 {% if current_user.is_authenticated %}
 <script>
+// The extension follows whoever is signed in here. It used to keep the key
+// from the one time the connect page paired it, so switching accounts on the
+// site left the extension pushing courses into the previous account -- and
+// on a shared computer, into someone else's. Every signed-in page now offers
+// its own key; the extension ignores it when nothing changed.
+(() => {
+  const CHANNEL = 'NEXORA_COURSE_INTELLIGENCE_V10';
+  let offered = false;
+  window.addEventListener('message', async e => {
+    if (e.source !== window || e.data?.channel !== CHANNEL || e.data?.type !== 'EXTENSION_READY' || offered) return;
+    offered = true;
+    try {
+      const res = await fetch('/api/sync/extension-key', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const { token } = await res.json();
+      if (token) window.postMessage({ channel: CHANNEL, type: 'PAIR', token, apiBase: location.origin }, location.origin);
+    } catch (_) {}
+  });
+  // The bridge announces itself at document_start, usually before this runs;
+  // ask again so the answer is not missed.
+  window.postMessage({ channel: CHANNEL, type: 'PING_EXTENSION' }, location.origin);
+})();
+</script>
+<script>
 /* Report this browser's timezone once, so deadlines are dated in the student's
    own day rather than in UTC. A Brightspace deadline of 11:59 PM Eastern is
    03:59Z the next morning, and dating it in UTC showed it a day late -- the one
