@@ -7903,9 +7903,17 @@ def analyze_course_outline(course_code):
     # Bound once, here: the login proxy is only valid for the life of a request,
     # and this work is about to be handed to a thread that outlives it.
     user_id = current_user.id
+    # No longer a gate. This used to refuse with a 428 until the student had
+    # saved a grading scale in Settings -- which is every new account, and the
+    # error surfaced three cards below the button, so the owner of the app
+    # uploaded his outline four times and reported the button as broken. The
+    # scale is only needed to turn a LETTER rule ("C- or better") into a
+    # number, and `_letter_requirement_result` already returns `passed: None`
+    # when it cannot -- pending, never failing. So: analyze with the scale on
+    # file (the default when none is saved), and if the outline actually
+    # contains a letter rule, say so in the response and let the page point at
+    # Settings. A student whose outline is all percentages never hears of it.
     scale_profile = _get_user_grading_scale(user_id)
-    if not scale_profile.get("configured"):
-        return jsonify({"error":"Set up and confirm your university grading scale in Settings before analyzing a course outline. Nexora needs it to interpret rules such as C- correctly.","setup_required":"grading_scale"}),428
     data = request.get_json(silent=True) or {}
     source_uid = str(data.get('source_uid') or '')
     query = CourseContent.query.filter_by(user_id=user_id, course_full=course)
@@ -7996,13 +8004,32 @@ def analyze_course_outline(course_code):
     # Preserve explicit letter-grade requirements even when the AI misses them.
     letter_requirements=parsed.get('letter_requirements') if isinstance(parsed.get('letter_requirements'),list) else []
     text_for_rules=row.content_text or ''
-    for match in re.finditer(r'(?:required|must|need(?:ed)?)\s+(?:to\s+)?(?:achieve|obtain|earn)?[^.\n]{0,90}?\b([ABCDF][+-]?)\b\s+or\s+better',text_for_rules,re.I):
-        letter=match.group(1).upper()
-        sentence=re.split(r'[\n.]',text_for_rules[match.start():match.start()+240])[0].strip()
-        nearby=text_for_rules[max(0,match.start()-100):match.start()+240].lower()
-        scope='prerequisite' if 'prerequisite' in nearby else 'course_pass'
-        if not any(str(x.get('minimum_letter','')).upper()==letter and x.get('scope')==scope for x in letter_requirements if isinstance(x,dict)):
-            letter_requirements.append({'minimum_letter':letter,'scope':scope,'message':sentence or f'{letter} or better required'})
+    # Both word orders. "A grade of C- or better is required to proceed" is
+    # the commonest way a prerequisite is written and the first pattern -- verb
+    # first, letter after -- never saw it, so the fallback dropped the one rule
+    # that decides whether a student can take next year's course.
+    # A letter grade is one of A-F with an optional sign, standing alone. Not
+    # `\b([ABCDF][+-]?)\b`: the closing \b cannot sit between "-" and a space
+    # (both non-word), so a signed letter never matched and "C- or better"
+    # was read as no rule at all -- the sign is the whole difference between
+    # C- and C, and it was the case that was silently dropped.
+    LETTER=r'(?<![A-Za-z0-9])([ABCDF][+-]?)(?![A-Za-z0-9+-])'
+    letter_patterns=[
+        r'(?:required|must|need(?:ed)?)\s+(?:to\s+)?(?:achieve|obtain|earn)?[^.\n]{0,90}?'+LETTER+r'\s+or\s+(?:better|higher|above)',
+        LETTER+r'\s+or\s+(?:better|higher|above)[^.\n]{0,40}?(?:is\s+|are\s+)?(?:required|needed|necessary|mandatory)',
+        r'(?:minimum|at\s+least)\s+(?:a\s+|an\s+|of\s+)?(?:grade\s+of\s+)?'+LETTER,
+    ]
+    seen_spans=[]
+    for pat in letter_patterns:
+        for match in re.finditer(pat,text_for_rules,re.I):
+            if any(a<=match.start()<b for a,b in seen_spans): continue
+            seen_spans.append((match.start(),match.end()))
+            letter=match.group(1).upper()
+            sentence=re.split(r'[\n.]',text_for_rules[match.start():match.start()+240])[0].strip()
+            nearby=text_for_rules[max(0,match.start()-100):match.start()+240].lower()
+            scope='prerequisite' if re.search(r'prerequisite|proceed|continue|advance|next|admission|enter',nearby) else 'course_pass'
+            if not any(str(x.get('minimum_letter','')).upper()==letter and x.get('scope')==scope for x in letter_requirements if isinstance(x,dict)):
+                letter_requirements.append({'minimum_letter':letter,'scope':scope,'message':sentence or f'{letter} or better required'})
     parsed['letter_requirements']=letter_requirements
     if not parsed.get('input_components'): parsed['input_components']=clean
     parsed['components']=clean; parsed['total_weight']=round(float(parsed.get('total_weight') or total or 100),2)
@@ -8096,7 +8123,14 @@ def analyze_course_outline(course_code):
         stale=CourseContent.query.filter_by(user_id=user_id,course_full=course,content_type='outline').filter(CourseContent.id!=row.id).all()
         for old_outline in stale: db.session.delete(old_outline)
     db.session.commit()
-    return jsonify({"ok":True,"fallback":used_fallback,"analysis":parsed,"pass_mark":profile.pass_mark,"final_minimum":profile.final_minimum})
+    scale_note = ""
+    if not scale_profile.get("configured") and (parsed.get("letter_requirements") or []):
+        letters = ", ".join(sorted({str(x.get("minimum_letter") or "") for x in parsed["letter_requirements"] if isinstance(x, dict) and x.get("minimum_letter")}))
+        scale_note = (f"This outline has a letter-grade rule ({letters}). Nexora is using a standard "
+                      "scale for now; save your university's own in Settings so it is read exactly.")
+    return jsonify({"ok":True,"fallback":used_fallback,"analysis":parsed,"pass_mark":profile.pass_mark,
+                    "final_minimum":profile.final_minimum,
+                    "scale_configured":bool(scale_profile.get("configured")),"scale_note":scale_note})
 
 
 @app.route("/api/course/<course_code>/outline/correct", methods=["POST"])

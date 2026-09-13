@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 787 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 795 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -555,6 +555,34 @@ Without a course the page is a demonstration and the generic analyzer is right.
 on that status rather than telling the student to go to another page with no
 link to it. This page is the one place for grades, so the one button that
 unlocks the result has to be on it.
+
+**The page shows only what is actionable.** With no outline on file it is
+the course picker and the intake, nothing else; it used to show an official
+result of nothing, pass rules for nothing, an empty results card, a target box
+saying "add assessments first" and the Ask panel, and the app's owner said he
+was lost. `applyStage()` is the one place that decides. Once an outline is on
+file the intake folds to a line ("outline is on file" + "Replace the outline")
+and the results lead. "No outline? Add the assessments by hand" keeps the
+manual path reachable.
+
+**An analysis message renders beside the buttons that caused it**
+(`intakeStatus` -> `#analysisMeta`), never in the alert at the foot of Step
+Three. The grading-scale error used to land three cards below the click, so he
+uploaded four times and reported the button as broken.
+
+**Analysis does not require a saved grading scale.** `/outline/analyze`
+answered 428 until Settings had a scale -- every new account. The scale only
+turns a LETTER rule into a number, and `_letter_requirement_result` already
+returns `passed: None` when it cannot, so the analysis runs with the scale on
+file (the default when none is saved) and returns `scale_note` when the outline
+actually has a letter rule. The course workspace carried a client-side copy of
+the gate; both are gone.
+
+**A signed letter never matched.** The fallback's letter-rule regex was
+`([ABCDF][+-]?)`, and a word boundary cannot sit between "-" and a space,
+so "C- or better" was read as no rule at all -- the sign being the whole
+difference between C- and C. `LETTER` uses lookarounds, and reads both word
+orders ("required ... C- or better" and "C- or better is required").
 
 **Marks post as `"16/20"`, not as `16` with a separate maximum.** A bare number
 is read as a percentage by `_parse_mark_entry` -- correct for the single-field

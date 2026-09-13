@@ -84,6 +84,16 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .wt input{width:52px;padding:4px 6px;font-size:11px;text-align:right;font-family:var(--mono)}
 
 /* ---------- "what do I need", only when asked ---------- */
+/* Once an outline is on file, Step Two folds to one line so the page leads
+   with the results. "Replace the outline" opens it back up. */
+#inputPanel.done .intake{display:none}
+#onFile{margin:0}
+.byhand{margin:14px 0 0;font-size:12.5px}
+.linkish{background:none;border:0;padding:0;color:var(--fg-3);font:inherit;font-size:12.5px;cursor:pointer;
+  border-bottom:1px solid transparent}
+.linkish:hover{color:var(--fg);border-bottom-color:var(--fg-3)}
+#inputPanel.done .byhand{display:none}
+#onFile[hidden]{display:none}
 .askrow{margin-top:20px}
 .need{margin-top:14px;border:1px solid var(--line-2);border-radius:9px;background:var(--surface-2);
   padding:17px 18px}
@@ -210,8 +220,12 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 </section>
 
 <section class="card" id="inputPanel">
-  <header><div><span class="k">Step two</span><h2 id="intakeTitle">Add the course outline</h2></div></header>
+  <header>
+    <div><span class="k">Step two</span><h2 id="intakeTitle">Add the course outline</h2></div>
+    <button class="btn quiet sm" id="replaceOutline" type="button" hidden>Replace the outline</button>
+  </header>
   <div class="body pad">
+    <p class="note meta show" id="onFile" hidden></p>
     <div class="intake">
       <div>
         <p class="or">Upload it</p>
@@ -232,10 +246,11 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       </div>
     </div>
     <div class="note meta" id="analysisMeta"></div>
+    <p class="byhand"><button type="button" class="linkish" id="byHand">No outline? Add the assessments by hand &rarr;</button></p>
   </div>
 </section>
 
-<section class="card">
+<section class="card" id="resultsPanel" hidden>
     <header>
       <div><span class="k">Step three</span><h2>Enter your actual results</h2></div>
       <span class="saved" id="savedBadge">Saved &check;</span>
@@ -417,7 +432,9 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   }
 
   async function refreshOfficial() {
-    if (!course) { $('policyPanel').hidden = true; return; }
+    // No sheet, no result. An "INCOMPLETE" panel over an empty course reads as
+    // a verdict on nothing, and it was the first of five sections about nothing.
+    if (!course || !(components.length || byHand)) { $('policyPanel').hidden = true; return; }
     let data;
     const res = await fetch(
       `/api/course/${encodeURIComponent(course)}/grade-outcomes`, {
@@ -490,6 +507,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   async function loadCourse(code) {
     course = code || '';
     components = [];
+    byHand = false;
     setCourseState('');
     $('policyPanel').hidden = true;
 
@@ -497,9 +515,6 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     link.hidden = !course;
     if (course) link.href = `/course/${encodeURIComponent(course)}?tab=grades`;
 
-    // Nothing to ask about until a course is picked; the answer comes from
-    // that course's outline.
-    $('askPanel').hidden = !course;
     $('qAnswer').hidden = true;
     $('qUnderstood').hidden = true;
 
@@ -510,6 +525,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     if (!course) {
       $('intakeTitle').textContent = 'Add the course outline';
       render();
+      applyStage();
       return;
     }
 
@@ -534,8 +550,9 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
         ? 'This course has an outline on file but no assessments yet. Add them below.'
         : 'Nexora has not read this course\u2019s outline yet. Upload it below and the marks you enter will be saved to this course.');
     } else {
-      setCourseState('Your marks for this course. Changes save as you type.');
+      setCourseState('');
     }
+    applyStage();
     refreshOfficial();
   }
 
@@ -548,6 +565,45 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   const letterFor = grade => {
     for (const band of SCALE) if (grade >= band.minimum) return band.letter;
     return SCALE.length ? SCALE[SCALE.length - 1].letter : '';
+  };
+
+  /* What is on the page depends on where this course is. With no outline the
+     page is the course picker and the intake, nothing else -- it used to show
+     an official result of nothing, pass rules for nothing, an empty results
+     card, a target box saying "add assessments first" and the Ask panel, and
+     a student stood in front of five sections about nothing. Once an outline
+     is on file the intake folds away and the results lead. */
+  let byHand = false;   // the student chose to enter marks with no outline
+  function applyStage() {
+    const has = course && (components.length > 0 || byHand);
+    $('resultsPanel').hidden = !has;
+    $('askPanel').hidden = !has;
+    $('inputPanel').classList.toggle('done', !!has);
+    $('replaceOutline').hidden = !has;
+    $('onFile').hidden = !has;
+    if (has) $('onFile').textContent = course + "'s outline is on file. Your marks below are saved as you type.";
+    if (!has) { $('need').hidden = true; $('askBtn').textContent = 'What do I need on the rest?'; $('askBtn').setAttribute('aria-expanded', 'false'); }
+  }
+  $('byHand').onclick = () => {
+    if (!course) { intakeStatus('Pick a course first.', 'bad'); return; }
+    byHand = true;
+    applyStage();
+    $('addBtn').click();
+  };
+  $('replaceOutline').onclick = () => {
+    $('inputPanel').classList.remove('done');
+    $('replaceOutline').hidden = true;
+    $('onFile').hidden = true;
+    $('syllabusFile').focus();
+  };
+
+  // An analysis error belongs beside the button that caused it. It used to go
+  // to the alert at the foot of Step Three, three cards below the click, so
+  // the owner uploaded four times and reported the button as broken.
+  const intakeStatus = (message, kind = '') => {
+    const el = $('analysisMeta');
+    el.className = 'note meta show ' + kind;
+    el.textContent = message;
   };
 
   const showAlert = (message, kind = '') => {
@@ -584,14 +640,14 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       if (data.pass_mark != null) meta.push(`Course pass mark: ${data.pass_mark}%`);
       if (data.final_minimum != null) meta.push(`Final-exam minimum: ${data.final_minimum}%`);
       for (const rule of data.rules || []) meta.push(rule);
-      $('analysisMeta').textContent = meta.join(' · ') || 'Grading components extracted.';
-      $('analysisMeta').classList.add('show');
+      intakeStatus(meta.join(' · ') || 'Grading components extracted.');
+      applyStage();
 
       if (!components.length) {
-        showAlert((data.error || 'No clear grading components were found.') + ' Try a clearer screenshot or PDF, or add each one with "+ Add item".', 'bad');
+        intakeStatus((data.error || 'No clear grading components were found.') + ' Try a clearer screenshot or PDF, or add each one with "+ Add item".', 'bad');
       }
     } catch (err) {
-      showAlert(err.message, 'bad');
+      intakeStatus(err.message, 'bad');
     } finally {
       $('inputPanel').classList.remove('loading');
     }
@@ -616,19 +672,23 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
           body: JSON.stringify({ source_uid: stored.source_uid }),
         }));
       await loadCourse(course);
+      // The picker's label was rendered before this outline existed.
+      const opt = [...$('coursePick').options].find(o => o.value === course);
+      if (opt) opt.textContent = opt.textContent.replace(/\s*·\s*outline not read yet\s*$/, '');
+      const known = COURSES.find(c => c.code === course);
+      if (known) known.analyzed = true;
       const meta = [];
       if (analysed.pass_mark != null) meta.push(`Course pass mark: ${analysed.pass_mark}%`);
       if (analysed.final_minimum != null) meta.push(`Final-exam minimum: ${analysed.final_minimum}%`);
       for (const rule of analysed.rules || []) meta.push(rule);
-      $('analysisMeta').textContent = meta.join(' · ')
-        || 'Outline analyzed. Check the components below, then confirm the policy above.';
+      if (analysed.scale_note) meta.push(analysed.scale_note);
+      intakeStatus(meta.join(' · ')
+        || 'Outline analyzed. Check the components below, then confirm the policy above.');
       if (!components.length) {
-        showAlert('No clear grading components were found. Try a clearer screenshot or PDF, or add each one with "+ Add item".', 'bad');
+        intakeStatus('No clear grading components were found. Try a clearer screenshot or PDF, or add each one with "+ Add item".', 'bad');
       }
     } catch (err) {
-      $('analysisMeta').textContent = '';
-      $('analysisMeta').classList.remove('show');
-      showAlert(err.message, 'bad');
+      intakeStatus(err.message, 'bad');
     } finally {
       $('inputPanel').classList.remove('loading');
     }
@@ -636,7 +696,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 
   const uploadSyllabus = () => {
     const files = [...$('syllabusFile').files];
-    if (!files.length) return showAlert('Choose one or more outline pages first.', 'bad');
+    if (!files.length) return intakeStatus('Choose one or more outline pages first.', 'bad');
     const form = new FormData();
     files.forEach(f => form.append('files', f));
     if (course) {
@@ -648,7 +708,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 
   const parseText = () => {
     const text = $('rawText').value.trim();
-    if (!text) return showAlert('Paste course-outline text first.', 'bad');
+    if (!text) return intakeStatus('Paste course-outline text first.', 'bad');
     const body = { method: 'POST', headers: { 'Content-Type': 'application/json' },
                    body: JSON.stringify({ text }) };
     if (course) {
