@@ -516,13 +516,19 @@ Two traps in that choice, both already paid for:
 importers check it before re-adding, otherwise the next sync undoes the
 student's decision. `load_tasks` filters it out.
 
-**Exam detection is deterministic on purpose** (`_find_date`, `_find_time`,
-`_find_location`, `_looks_like_an_exam`). Dates are the one thing a model must
-not be creative about, and this runs on ordinary page views where a Gemini call
-would eat the quota the outline pipeline needs. Suggestions are *offered*,
-never inserted: a misread date that appeared by itself would be
-indistinguishable from one the university published. `_NOT_AN_EXAM` is what
-stops "practice midterm posted" becoming a midterm -- keep the plurals in it.
+**The "exams found in your course material" panel is gone from the calendar.**
+It read dates out of announcements with a regular expression and offered them
+for the calendar. Once the extension imported every term, it read every old
+announcement too, and the dates it finds carry no year -- so a MATH 1004 test
+from first year was offered as "Tue, Sep 29" this September, ten of them at
+the top of the page, above the calendar itself. The owner called it useless
+and asked for it removed, and he was right: a suggested date that is wrong is
+the same class of thing as a stored date that is wrong, just one click
+further away. The deterministic helpers (`_find_date`, `_find_time`,
+`_find_location`, `_looks_like_an_exam`, `_NOT_AN_EXAM`) and the two routes
+(`/api/exams/suggestions`, `/api/exams/accept`) remain, tested, called by
+nothing. If it ever comes back it has to be current-term only, future-dated
+only, and year-aware -- and probably not at all.
 
 **The `.ics` feed is how Google Calendar connects**, because Google cannot sign
 in to Nexora. The token in the path is the entire credential, so it is

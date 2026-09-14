@@ -73,27 +73,6 @@
 }
 .evs{display:flex;flex-direction:column;gap:5px;min-width:0}
 
-/* ---- exams Nexora found but has not added ---- */
-.found{border:1px solid var(--line-2);border-radius:10px;background:var(--surface);
-  padding:16px 18px;margin-bottom:18px}
-.found[hidden]{display:none}
-.found h2{font-family:var(--serif);font-weight:400;font-size:1.1rem;margin:0 0 4px}
-.found > p{color:var(--fg-2);font-size:13px;margin:0 0 14px;line-height:1.55}
-.found ul{list-style:none;margin:0;padding:0;display:grid;gap:7px}
-.found li{display:flex;align-items:flex-start;gap:11px;padding:10px 12px;border-radius:7px;
-  background:var(--surface-2);border:1px solid var(--line)}
-.found li input{margin:2px 0 0;accent-color:var(--amber);flex:none}
-.found li .who{display:block;font-size:13.5px;font-weight:500}
-.found li .when{display:block;font-family:var(--mono);font-size:10.5px;color:var(--fg-3);
-  margin-top:3px;letter-spacing:.04em}
-.found .acts{display:flex;gap:9px;align-items:center;margin-top:14px;flex-wrap:wrap}
-.found button{border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);
-  color:var(--fg-2);font:inherit;font-size:13px;padding:8px 13px;cursor:pointer}
-.found button:hover{border-color:var(--fg-3);color:var(--fg)}
-.found button.primary{background:var(--amber);border-color:var(--amber);color:#140F09;font-weight:600}
-.found button.primary:hover{filter:brightness(1.06)}
-.found .note{font-size:12px;color:var(--fg-3);margin:12px 0 0;line-height:1.55}
-
 /* ---- the editor ---- */
 dialog.sheet{border:1px solid var(--line-2);border-radius:12px;background:var(--surface);
   color:var(--fg);padding:0;width:min(440px,calc(100vw - 32px));box-shadow:0 24px 70px #00000066}
@@ -141,20 +120,6 @@ dialog.sheet::backdrop{background:#0B0908cc}
     <button type="button" class="add" id="addEvent">+ Add event</button>
   </div>
 </div>
-
-<section class="found" id="found" hidden aria-live="polite">
-  <h2 id="foundTitle">Exams in your course material</h2>
-  <p>
-    Read out of your course outlines and announcements. Nothing is added until
-    you say so &mdash; check each date against the source before you rely on it.
-  </p>
-  <ul id="foundList"></ul>
-  <div class="acts">
-    <button type="button" class="primary" id="foundAdd">Add to my calendar</button>
-    <button type="button" id="foundNone">Not now</button>
-  </div>
-  <p class="note" id="foundNote" hidden></p>
-</section>
 
 <div class="cal">
   <div class="weekhead" aria-hidden="true">
@@ -360,96 +325,6 @@ dialog.sheet::backdrop{background:#0B0908cc}
     hideToast();
     if (action) await action();
   };
-
-  /* ---- exams Nexora found in the course material ----
-     Offered, never inserted. These come out of prose with a regular
-     expression: a misread date that appeared on the calendar by itself would
-     be indistinguishable from one the university actually published. */
-  const DISMISSED = 'nexora-exam-suggestions-hidden';
-
-  function note(text) {
-    const el = $('foundNote');
-    el.textContent = text || '';
-    el.hidden = !text;
-  }
-
-  function describe(item) {
-    const when = new Date(item.date + 'T00:00:00').toLocaleDateString(undefined,
-      { weekday: 'short', month: 'short', day: 'numeric' });
-    const bits = [when];
-    if (item.time) bits.push(item.time);
-    if (item.location) bits.push(item.location);
-    bits.push(item.source);
-    return bits.join(' · ');
-  }
-
-  (async () => {
-    let dismissed = '';
-    try { dismissed = localStorage.getItem(DISMISSED) || ''; } catch (_) {}
-
-    let data;
-    try {
-      const res = await fetch('/api/exams/suggestions');
-      if (!res.ok) return;
-      data = await res.json();
-    } catch (_) { return; }
-
-    const items = data.suggestions || [];
-    if (!items.length) return;
-
-    // "Not now" should stay quiet until something new turns up, not until the
-    // student clears their browser.
-    const fingerprint = items.map(i => `${i.course}|${i.date}|${i.title}`).join('~');
-    if (dismissed === fingerprint) return;
-
-    const list = $('foundList');
-    items.forEach((item, index) => {
-      const row = document.createElement('li');
-      const box = document.createElement('input');
-      box.type = 'checkbox'; box.checked = true; box.id = `found-${index}`;
-      box.dataset.index = String(index);
-      const label = document.createElement('label');
-      label.htmlFor = box.id;
-      const who = document.createElement('span');
-      who.className = 'who';
-      // Course titles and announcement text come out of the LMS, so they are
-      // set as text and never concatenated into markup.
-      who.textContent = `${item.course} · ${item.title}`;
-      const when = document.createElement('span');
-      when.className = 'when';
-      when.textContent = describe(item);
-      label.append(who, when);
-      row.append(box, label);
-      list.append(row);
-    });
-    $('foundTitle').textContent = items.length === 1
-      ? 'An exam in your course material'
-      : `${items.length} exams in your course material`;
-    $('found').hidden = false;
-
-    $('foundNone').onclick = () => {
-      try { localStorage.setItem(DISMISSED, fingerprint); } catch (_) {}
-      $('found').hidden = true;
-    };
-
-    $('foundAdd').onclick = async () => {
-      const chosen = [...list.querySelectorAll('input:checked')]
-        .map(box => items[Number(box.dataset.index)]);
-      if (!chosen.length) { note('Tick at least one first.'); return; }
-      $('foundAdd').disabled = true;
-      try {
-        const res = await fetch('/api/exams/accept', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ events: chosen }),
-        });
-        if (!res.ok) throw new Error('rejected');
-        location.reload();
-      } catch (_) {
-        note('Those could not be added. Try again.');
-        $('foundAdd').disabled = false;
-      }
-    };
-  })();
 
   $('evDelete').onclick = async () => {
     if (!editing) return;
