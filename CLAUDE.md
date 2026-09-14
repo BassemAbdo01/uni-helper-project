@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 801 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 813 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -185,6 +185,40 @@ thing Nexora does, and CLAUDE.md's older finding still stands -- on a real
 Carleton outline flash got every weight right and missed a cap the prompt never
 asked for. Prompts and availability first; Pro is the last lever, and the
 corpus is how to tell whether it bought anything.
+
+## Thinking is for the outline pipeline; everything else runs fast
+
+`_gemini_json(mode=...)`: `None` keeps the reasoning chain; `"fast"` starts
+from `gemini-3.5-flash-lite` (`_FAST_MODELS`); `"quick"` starts from
+`gemini-3.6-flash` with `thinkingConfig.thinkingLevel = "low"`
+(`_QUICK_MODELS`). The level is sent only to models matching
+`_THINKING_LEVEL_MODELS` -- `thinkingBudget: 0` is a 400 on this family, and a
+config the model rejects reads as the model failing.
+
+Measured 2026-09-14, a 1,500-word lecture summary, live key:
+
+| Path | Time |
+|---|---|
+| the default chain, as a student experienced it | **46.8s** |
+| `gemini-3.7-flash`, first in that chain | 503, retry, park |
+| `gemini-3.6-flash`, default thinking | 10.8s (1,241 thinking tokens) |
+| `gemini-3.6-flash`, thinking low | 5.0s, same eight concepts |
+| `gemini-3.5-flash-lite` | 2.5s, same eight concepts |
+
+Study tools use `"fast"`: summary 46.8s -> 3.5s, flashcards 3.3s, and with a
+real brief per tool (`_STUDY_TOOL_BRIEFS`) instead of one generic sentence,
+twelve concepts with full-sentence explanations instead of eight headings.
+
+**The tutor (`/api/copilot`) was the worst case.** One hardcoded model
+(`GEMINI_MODEL`, default 3.6-flash) with full thinking and an 8,192-token
+budget, and on a 429 it slept and retried the *same* model three times --
+4.5s of sleeping then an error, on a key where 3.6 answers 429 two calls in
+three. It now walks `_QUICK_MODELS` with low thinking, parks a failing model
+the way `_gemini_json` does, and moves on without sleeping. A full lecture
+explanation is 13s, all of it output; a follow-up that uses the conversation
+is 3.6s. What is left is the model writing 1,700 words before the page shows
+any of it -- which is what streaming is for, and the one thing that still
+separates this from the Gemini app.
 
 ## Gemini quota behaviour
 

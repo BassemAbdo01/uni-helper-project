@@ -2113,12 +2113,46 @@ def _gemini_http_detail(exc):
     return re.sub(r"\s+", " ", message)[:500]
 
 
-def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2, reasoning=False, used_model=None):
-    """Call Gemini for strict JSON with retries and a model fallback on transient 5xx errors."""
+# Model orders for work that is not the outline pipeline. Measured 2026-09-14
+# on a 1,500-word lecture summary, live key:
+#
+#   the default chain, as a student experiences it     46.8s
+#   gemini-3.7-flash (first in that chain)              503, then a retry, then parked
+#   gemini-3.6-flash, default thinking                  10.8s  -- 1,241 tokens of thinking
+#   gemini-3.6-flash, thinkingLevel "low"                5.0s  -- same eight concepts
+#   gemini-3.5-flash-lite                                2.5s  -- same eight concepts
+#
+# Thinking is the right tool for reading a grading policy and the wrong one for
+# "summarise this lecture": it bought nothing visible and cost most of the
+# wait. So a summary, a set of flashcards or a tutor answer starts from the
+# models that answer in seconds, and the outline pipeline keeps the reasoning
+# chain it was built on. `_usable_gemini_models` still skips anything parked.
+_FAST_MODELS = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-lite-latest",
+                "gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"]
+_QUICK_MODELS = ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash",
+                 "gemini-flash-lite-latest", "gemini-flash-latest"]
+# Only the models that accept it. Sending thinkingConfig to one that does not
+# is a 400, which reads as the model failing and burns a retry.
+_THINKING_LEVEL_MODELS = re.compile(r"^gemini-3\.\d+-flash$")
+
+
+def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2, reasoning=False, used_model=None, mode=None):
+    """Call Gemini for strict JSON with retries and a model fallback on transient 5xx errors.
+
+    `mode` is None for the outline pipeline and anything else that needs the
+    reasoning chain; "fast" starts from flash-lite (summaries, flashcards,
+    quizzes -- 2-3s); "quick" starts from 3.6-flash with low thinking (the
+    tutor -- ~5s, a little more reasoning). See _FAST_MODELS.
+    """
     api_key = (os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip())
     if not api_key:
         raise RuntimeError("Gemini is not configured")
-    models = _usable_gemini_models(_gemini_model_candidates(vision=False, reasoning=reasoning))
+    if mode == "fast":
+        models = _usable_gemini_models(list(_FAST_MODELS))
+    elif mode == "quick":
+        models = _usable_gemini_models(list(_QUICK_MODELS))
+    else:
+        models = _usable_gemini_models(_gemini_model_candidates(vision=False, reasoning=reasoning))
     body = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -2144,6 +2178,10 @@ def _gemini_json(system_prompt, user_prompt, max_tokens=4096, temperature=0.2, r
                 # maxOutputTokens, so a reply can be cut off before the JSON
                 # closes. Retry with a larger budget instead of replaying the
                 # same one that already ran out.
+                if mode and _THINKING_LEVEL_MODELS.match(model):
+                    body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "low"}
+                else:
+                    body["generationConfig"].pop("thinkingConfig", None)
                 body["generationConfig"]["maxOutputTokens"] = (
                     max_tokens if attempt == 0 else max(max_tokens * 2, 8192)
                 )
@@ -3262,7 +3300,13 @@ def copilot():
         user_parts.append({"inline_data": {"mime_type": image['mime_type'], "data": image['data']}})
     contents.append({"role": "user", "parts": user_parts})
 
-    model = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash").strip()
+    # The chain, not one model. This called gemini-3.6-flash alone, with full
+    # thinking, and on a 429 slept and retried the SAME model three times --
+    # 4.5s of sleeping and then an error, on a key where 3.6 answers 429 two
+    # calls in three. A tutor that fails or takes forty seconds is one nobody
+    # asks twice. GEMINI_MODEL, if set, still goes first.
+    preferred = os.environ.get("GEMINI_MODEL", "").strip()
+    models = _usable_gemini_models(([preferred] if preferred else []) + [m for m in _QUICK_MODELS if m != preferred])
     system_instruction = (
         "You are Nexora AI, a high-quality conversational academic tutor for university students. "
         "Answer naturally, directly, and intelligently. Explain academic topics, brainstorm, write, reason, "
@@ -3287,42 +3331,52 @@ def copilot():
         f"CURRENT STUDENT CONTEXT:\n{json.dumps(semester_context, ensure_ascii=False)}"
     )
 
-    body = json.dumps({
-        "system_instruction": {"parts": [{"text": system_instruction}]},
-        "contents": contents,
-        "generationConfig": {
+    def request_for(model):
+        config = {
             "temperature": 0.7,
             "maxOutputTokens": 8192 if lecture_intent else 2200,
-        },
-    }).encode("utf-8")
-    endpoint = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{urllib.parse.quote(model, safe='')}:generateContent?key="
-        f"{urllib.parse.quote(api_key, safe='')}"
-    )
-    req = urllib.request.Request(
-        endpoint,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+        }
+        # Low thinking: measured at half the latency of the default on an
+        # explanation task with the same coverage. Full thinking is for the
+        # outline pipeline, where the reasoning is the product.
+        if _THINKING_LEVEL_MODELS.match(model):
+            config["thinkingConfig"] = {"thinkingLevel": "low"}
+        body = json.dumps({
+            "system_instruction": {"parts": [{"text": system_instruction}]},
+            "contents": contents,
+            "generationConfig": config,
+        }).encode("utf-8")
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{urllib.parse.quote(model, safe='')}:generateContent?key="
+            f"{urllib.parse.quote(api_key, safe='')}"
+        )
+        return urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"}, method="POST")
 
     try:
         result = None
         last_http_error = None
-        for attempt in range(3):
+        for model in models:
             try:
-                with urllib.request.urlopen(req, timeout=90) as response:
+                with urllib.request.urlopen(request_for(model), timeout=90) as response:
                     result = json.loads(response.read().decode("utf-8"))
                 break
             except urllib.error.HTTPError as retry_exc:
                 last_http_error = retry_exc
-                if retry_exc.code in (429, 500, 502, 503, 504) and attempt < 2:
-                    time.sleep(1.5 * (attempt + 1))
+                if retry_exc.code in (429, 500, 502, 503, 504):
+                    # Park it the way _gemini_json does and move straight on;
+                    # the next model answers in the time a sleep would have cost.
+                    _mark_gemini_model_unavailable(
+                        model, _QUOTA_COOLDOWN_SECONDS if retry_exc.code == 429 else _OVERLOADED_COOLDOWN_SECONDS)
                     continue
                 raise
+            except (urllib.error.URLError, TimeoutError):
+                _mark_gemini_model_unavailable(model, _OVERLOADED_COOLDOWN_SECONDS)
+                continue
         if result is None and last_http_error:
             raise last_http_error
+        if result is None:
+            raise urllib.error.URLError("every model timed out")
 
         candidates = result.get("candidates") or []
         if not candidates:
@@ -8403,6 +8457,61 @@ def confirm_course_outline_policy(course_code):
     return jsonify({'ok':True})
 
 
+_STUDY_TOOL_BRIEFS = {
+    "summary": (
+        "Write the summary a strong teaching assistant would hand a student the night before a test. "
+        "Follow the material's own order. For each key concept: name it the way the lecture does, explain it in "
+        "plain words as if to a student meeting it for the first time, say why it matters or where it is used, and "
+        "give the material's own example when there is one. Define every technical term the first time it appears. "
+        "Keep the slide or page reference the material gives. The overview is three or four sentences that say what "
+        "the lecture was about and how its parts connect. Takeaways are the six to ten things most likely to be "
+        "examined, each one sentence, each something a student could be asked."
+    ),
+    "flashcards": (
+        "Write flashcards a student would actually drill with. One idea per card. The front is a question or a term, "
+        "never a heading; the back is the answer in one to three sentences, in plain words, with the material's own "
+        "example where it helps. Cover every concept in the material, not only the first half. Include cards for "
+        "definitions, for 'why' and 'when' questions, and for the distinctions the lecture draws between similar "
+        "things -- those are what tests ask. Keep the slide or page reference on each card."
+    ),
+    "quiz": (
+        "Write a quiz that tests understanding, not recall of phrasing. Four options each, exactly one correct, and "
+        "the wrong options must be plausible -- the mistakes a student would actually make. Mix the kinds of question: "
+        "define, apply to a small scenario, pick the exception, predict what happens. Cover the whole material. The "
+        "explanation says why the right answer is right AND why the tempting wrong one is wrong, in plain words. "
+        "Keep the slide or page reference."
+    ),
+    "study_guide": (
+        "Write a study guide a student can revise from without the slides. Sections follow the material's order; each "
+        "one explains its topic in plain words, with definitions, the material's own examples, and how it connects to "
+        "the sections around it. Key takeaways are the ideas to know cold. Practice prompts are questions a student "
+        "should be able to answer from memory before an exam -- write ones that need understanding, not lookup."
+    ),
+}
+
+
+def _study_tool_prompt(artifact_type, schema, course, title):
+    """The system prompt for one study tool.
+
+    It was one sentence -- "create a high-quality summary" -- and the output
+    read like one: a list of headings with a clause each. A good summary,
+    flashcard set or quiz is a specific thing, and the model has to be told
+    what it is. The rules that hold for all four: every item grounded in the
+    material, nothing invented, plain words, the student's level, and the
+    material's own slide or page references kept so a card can be checked
+    against the source.
+    """
+    brief = _STUDY_TOOL_BRIEFS.get(artifact_type, _STUDY_TOOL_BRIEFS["summary"])
+    return (
+        f"You are a strong university teaching assistant for {course}. The material is titled \"{title}\". "
+        f"{brief} "
+        "Write for a student who attended the lecture but is not yet confident with it: plain words, no filler, "
+        "no praise of the material, and never a fact that is not in it. If the material is a slide deck, use its "
+        "slide numbers; if a document, its section or page. "
+        f"Return strict JSON matching exactly this shape and nothing else: {schema}"
+    )
+
+
 @app.route("/api/course/<course_code>/study-tools/generate", methods=["POST"])
 @limiter.limit(AI_LIMIT)
 @login_required
@@ -8427,10 +8536,12 @@ def generate_study_tool(course_code):
       'study_guide':'{"title":"","sections":[{"heading":"","content":"","source":"Slide 1"}],"key_takeaways":[],"practice_prompts":[]}',
       'summary':'{"title":"","overview":"","key_concepts":[{"concept":"","explanation":"","source":"Slide 1"}],"takeaways":[]}'
     }
-    instruction=f"Create a high-quality {artifact_type.replace('_',' ')} from the supplied university material. Return strict JSON matching: {schemas[artifact_type]}. Ground every item in the source, preserve slide/page references when available, cover the whole source, and do not invent facts."
+    instruction=_study_tool_prompt(artifact_type, schemas[artifact_type], course, row.title)
     used_fallback = False
     try:
-        parsed=_gemini_json(instruction, _sanitize_extracted_text(row.content_text)[:120000], 7000, 0.35)
+        # "fast": flash-lite first. A summary does not need a thinking model,
+        # and the default chain was measured at 46.8s for one lecture.
+        parsed=_gemini_json(instruction, _sanitize_extracted_text(row.content_text)[:120000], 5000, 0.35, mode="fast")
         if not isinstance(parsed, dict):
             raise ValueError('Invalid study-tool response')
     except Exception as exc:
