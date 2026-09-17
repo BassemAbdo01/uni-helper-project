@@ -90,7 +90,7 @@ def test_a_plan_built_in_the_afternoon_does_not_offer_the_morning(toronto, monke
         pref.earliest_min = 9 * 60
         pref.latest_min = 22 * 60
         nexora.db.session.commit()
-        slots = nexora._free_slots(toronto, pref, nexora._student_today(toronto), 2)
+        slots = nexora._free_slots(toronto, pref, nexora._student_today(toronto), 2, from_now=True)
         today = [(a, b) for d, a, b in slots if d.isoformat() == "2026-09-15"]
         assert today, "no window left today at all"
         assert min(a for a, _ in today) >= 15 * 60
@@ -107,7 +107,7 @@ def test_the_first_slot_starts_on_the_next_quarter_hour(toronto, monkeypatch):
         pref = nexora._study_preference(toronto)
         pref.earliest_min, pref.latest_min = 9 * 60, 22 * 60
         nexora.db.session.commit()
-        slots = nexora._free_slots(toronto, pref, nexora._student_today(toronto), 1)
+        slots = nexora._free_slots(toronto, pref, nexora._student_today(toronto), 1, from_now=True)
         assert slots[0][1] == 15 * 60 + 15
 
 

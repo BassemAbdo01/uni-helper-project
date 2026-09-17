@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 813 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 818 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -1120,10 +1120,13 @@ marked the untouched Tuesday blocks **missed** while the student still had the
 whole evening. "Every date is the student's day, not UTC", missing from the one
 feature that is entirely about which day it is.
 
-**Today's window opens at the next quarter-hour after now.** A plan built at
-3 PM used to offer 9 AM today. Only the real today is cut; a `today=` passed in
-(tests, the insight page) is a whole day, so a fixed-date plan stays
-deterministic.
+**Today's window opens at the next quarter-hour after now** -- only when the
+caller is planning from the real clock. `_build_plan` passes
+`from_now=(today is None)` to `_free_slots`; a fixed date handed in (a test,
+the insight page) is a whole day even when it happens to be today. The first
+version cut on "start equals today", and a biweekly-lab test written around
+10 September silently changed meaning on 17 September when its second week
+landed on the real date.
 
 ## Nexora measuring what actually happened
 
@@ -1327,6 +1330,22 @@ A whole paying student is well under a dollar a term. Flash prices double on
 `PUBLIC_CAP_MENTIONS_SIGNUP=0` makes the cap message say "try again tomorrow"
 instead of mentioning an account. A rate limit dressed as a sales pitch reads as
 manufactured scarcity.
+
+## Ticking a task off refills the list, and is reversible
+
+"What to do first" renders twelve cards and shows five; ticking one reveals
+the next (`settleQueue`). It sent six and showed five, so two ticks left a
+list of three with nothing moving up -- reported as the feature looking
+broken.
+
+**A completed task has a way back.** `build_grouped_cards(completed=True)`
+builds the list of what has been ticked off, rendered under the queue as
+"Done recently" with a Put back button per row. Before that, a completed task
+was dropped before any view was built, a sync never un-completes one
+(`_import_deadlines` does not touch `completed`), and the undo toast lasts
+nine seconds -- so a student testing the feature who clicked Done on six
+things had lost them from Nexora for good. Put back re-reads the page rather
+than guessing where the task belongs in the queue: order is the server's.
 
 ## The first-run tour
 

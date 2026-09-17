@@ -100,6 +100,24 @@
   color:var(--fg-3);font-weight:500;margin:0}
 .termhead b{font-size:12px;color:var(--fg-3);font-weight:400}
 
+/* What has been ticked off, with a way back. Toggled with the native
+   <details>; nothing here sets display on a class it also hides. */
+.done{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.done[hidden]{display:none}
+.done summary{cursor:pointer;font-size:12.5px;color:var(--fg-3);list-style:none;display:flex;gap:8px;align-items:center}
+.done summary::-webkit-details-marker{display:none}
+.done summary b{font-family:var(--mono);font-weight:400;font-size:11px;padding:1px 7px;border-radius:10px;
+  border:1px solid var(--line-2);color:var(--fg-2)}
+.done summary:hover{color:var(--fg)}
+.donerow{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}
+.donerow:last-child{border-bottom:0}
+.donerow .t{flex:1;min-width:0}
+.donerow .t strong{display:block;font-size:13.5px;font-weight:500;color:var(--fg-2);text-decoration:line-through}
+.donerow .t small{display:block;color:var(--fg-3);font-size:11.5px;margin-top:1px}
+.putback{flex:none;border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);color:var(--fg-2);
+  font:inherit;font-size:12px;padding:5px 10px;cursor:pointer}
+.putback:hover{border-color:var(--fg-3);color:var(--fg)}
+
 .due{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
   padding:12px 0;border-bottom:1px solid var(--line)}
 .due:last-child{border-bottom:0}
@@ -200,8 +218,8 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
       </header>
       <div class="body">
         {% if task_preview %}
-          {% for t in task_preview[:5] %}
-            <button class="task" type="button" data-group="{{ t.group_id }}" aria-pressed="false">
+          {% for t in task_preview %}
+            <button class="task" type="button" data-group="{{ t.group_id }}" aria-pressed="false"{% if loop.index > 5 %} hidden{% endif %}>
               <span class="box" aria-hidden="true">&check;</span>
               <span class="t">
                 <strong>{{ t.title }}</strong>
@@ -216,6 +234,19 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
             <a href="{{ url_for('connect_brightspace') }}">Connect Brightspace</a> to pull your deadlines in.
           </div>
         {% endif %}
+        {# Ticked off. A wrong click used to be recoverable for nine seconds
+           and then gone from every view for good. #}
+        <details class="done" id="doneList"{% if not done_cards %} hidden{% endif %}>
+          <summary>Done recently <b id="doneCount">{{ done_cards|length }}</b></summary>
+          <div id="doneItems">
+            {% for t in done_cards %}
+              <div class="donerow" data-group="{{ t.group_id }}">
+                <span class="t"><strong>{{ t.title }}</strong><small>{{ t.course_full }}{% if t.main_due_pretty %} &middot; {{ t.main_due_pretty }}{% endif %}</small></span>
+                <button type="button" class="putback">Put back</button>
+              </div>
+            {% endfor %}
+          </div>
+        </details>
       </div>
     </section>
 
@@ -573,7 +604,41 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
   }
 
   /* ---- ticking a priority off ---- */
-  $$('.task').forEach(btn => btn.addEventListener('click', async () => {
+  // Five on screen; the rest of the queue is rendered hidden behind them.
+  // Ticking one reveals the next, so two ticks leave five things, not three.
+  const SHOWN = 5;
+  const queue = () => $$('#tasks .task');
+  function settleQueue() {
+    let visible = 0;
+    for (const b of queue()) {
+      if (visible < SHOWN) { b.hidden = false; visible++; } else { b.hidden = true; }
+    }
+  }
+  // The done list under the queue, so a wrong click has a way back after the
+  // undo toast has gone.
+  function addToDone(group, title, sub) {
+    const list = $('#doneList'), items = $('#doneItems');
+    const row = document.createElement('div');
+    row.className = 'donerow'; row.dataset.group = group;
+    const t = document.createElement('span'); t.className = 't';
+    const strong = document.createElement('strong'); strong.textContent = title;
+    const small = document.createElement('small'); small.textContent = sub;
+    t.append(strong, small);
+    const back = document.createElement('button'); back.type = 'button'; back.className = 'putback'; back.textContent = 'Put back';
+    row.append(t, back);
+    items.prepend(row);
+    list.hidden = false;
+    $('#doneCount').textContent = String(items.children.length);
+  }
+  function removeFromDone(group) {
+    const row = $(`#doneItems .donerow[data-group="${CSS.escape(group)}"]`);
+    if (row) row.remove();
+    const n = $('#doneItems').children.length;
+    $('#doneCount').textContent = String(n);
+    if (!n) $('#doneList').hidden = true;
+  }
+
+  queue().forEach(btn => btn.addEventListener('click', async () => {
     const done = btn.getAttribute('aria-pressed') !== 'true';
     btn.setAttribute('aria-pressed', String(done));
     try {
@@ -583,12 +648,15 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
       // the bottom of the list.
       const parent = btn.parentNode, next = btn.nextSibling;
       const label = $('strong', btn)?.textContent || 'Task';
-      setTimeout(() => btn.remove(), 420);
+      const sub = $('small', btn)?.textContent || '';
+      setTimeout(() => { btn.remove(); settleQueue(); addToDone(btn.dataset.group, label, sub); }, 420);
       showUndo(`Marked "${label}" done.`, async () => {
         try {
           await setCompleted(btn.dataset.group, false);
           btn.setAttribute('aria-pressed', 'false');
           parent.insertBefore(btn, next);
+          settleQueue();
+          removeFromDone(btn.dataset.group);
         } catch {
           showUndo('That could not be undone. Refresh and try again.', null);
         }
@@ -597,6 +665,22 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
       btn.setAttribute('aria-pressed', String(!done));   // put it back; nothing was saved
     }
   }));
+
+  // "Put back" restores a ticked task. The page re-reads rather than guessing
+  // where it belongs in the queue: order is the server's to decide.
+  $('#doneItems')?.addEventListener('click', async e => {
+    const back = e.target.closest('.putback');
+    if (!back) return;
+    const row = back.closest('.donerow');
+    back.disabled = true;
+    try {
+      await setCompleted(row.dataset.group, false);
+      location.reload();
+    } catch {
+      back.disabled = false;
+      showUndo('That could not be put back. Refresh and try again.', null);
+    }
+  });
 
   /* ---- course menus ---- */
   const closeMenus = keep => $$('.cmenu').forEach(m => {

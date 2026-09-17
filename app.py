@@ -1579,11 +1579,16 @@ def make_group_id(course_full, base):
 # ============================
 # Convert raw tasks to grouped cards
 # ============================
-def build_grouped_cards(raw_tasks):
+def build_grouped_cards(raw_tasks, completed=False):
+    """Group task rows into cards. `completed=True` builds the OTHER list --
+    the things a student has ticked off -- which used to exist nowhere: a
+    completed task was dropped before any view was built, a sync never
+    un-completes one, and the undo toast lasts nine seconds. One wrong click
+    after that and the deadline was gone from Nexora for good."""
     grouped = {}
 
     for t in raw_tasks:
-        if t.get("kind") == "junk" or t.get("completed"):
+        if t.get("kind") == "junk" or bool(t.get("completed")) != completed:
             continue
 
         course_full = (t.get("course_full") or "OTHER").strip().upper() or "OTHER"
@@ -4042,7 +4047,15 @@ def home():
         course_card["art"] = course_art[index % len(course_art)]
         course_card["due_status"] = course_card.get("next_due") or "No date"
 
-    task_preview = dashboard_cards[:6]
+    # Twelve, of which the page shows five and reveals the next as one is
+    # ticked off. It sent six and showed five, so two ticks left a list of
+    # three with nothing moving up to fill it.
+    task_preview = dashboard_cards[:12]
+    # What has been ticked off, newest deadline first, so a wrong click can be
+    # put back after the undo toast has gone.
+    done_cards = sorted(
+        [decorate_card(c) for c in build_grouped_cards(raw_tasks, completed=True)],
+        key=lambda c: c.get("main_due_raw") or "", reverse=True)[:12]
 
     upcoming_cards = []
 
@@ -4144,6 +4157,7 @@ def home():
         current_term_label=current_term_label,
         show_tour=not bool(getattr(current_user, "tour_done", False)),
         task_preview=task_preview,
+        done_cards=done_cards,
         upcoming_cards=upcoming_cards,
         month_title=month_title,
         month_days=month_days,
@@ -4878,7 +4892,7 @@ def _block_occurs_on(block, day):
     return ((week_of_day - week_of_anchor).days // 7) % 2 == 0
 
 
-def _free_slots(user_id, pref, start, days):
+def _free_slots(user_id, pref, start, days, from_now=False):
     """Windows of a day with nothing already in them.
 
     Classes are subtracted with a buffer either side, because a block that
@@ -4893,9 +4907,15 @@ def _free_slots(user_id, pref, start, days):
     buffer_min = max(0, int(pref.buffer_min or 0))
     # A plan built at 3 PM must not offer 9 AM today. The first day's window
     # opens at the next quarter-hour after now, on the student's clock; every
-    # later day is whole.
-    now = _student_now(user_id)
-    now_min = (now.hour * 60 + now.minute + 14) // 15 * 15 if start == now.date() else 0
+    # later day is whole. Only when the caller is planning from the REAL
+    # clock (`from_now`): a fixed date handed in -- a test, the insight page
+    # -- is a whole day even when it happens to be today, or a test written
+    # around 10 September silently changed meaning on 17 September.
+    now_min = 0
+    if from_now:
+        now = _student_now(user_id)
+        if start == now.date():
+            now_min = (now.hour * 60 + now.minute + 14) // 15 * 15
     slots = []
     for offset in range(days):
         day = start + timedelta(days=offset)
@@ -5282,10 +5302,11 @@ def _build_plan(user_id, today=None, days=None):
     nobody could argue with -- and nobody could follow, because they could not
     see why any block was where it was.
     """
+    from_now = today is None
     today = today or _student_today(user_id)
     days = days or STUDY_HORIZON_DAYS
     pref = _study_preference(user_id)
-    slots = _free_slots(user_id, pref, today, days)
+    slots = _free_slots(user_id, pref, today, days, from_now=from_now)
     items = _study_items(user_id, today, pref)
     if not items or not slots:
         return []
