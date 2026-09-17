@@ -8,6 +8,10 @@
 .grid{display:grid;grid-template-columns:minmax(0,1fr) 336px;gap:22px;align-items:start}
 @media (max-width:1180px){.grid{grid-template-columns:1fr}}
 
+/* The queue past the fifth card is rendered hidden. `.task{display:grid}`
+   out-ranks the [hidden] attribute -- the same trap as #courseState -- so
+   without this line all twelve showed and the "five at a time" was a fiction. */
+.task[hidden]{display:none}
 .task{display:grid;grid-template-columns:auto 1fr auto;gap:13px;align-items:center;
   padding:13px 0;border-bottom:1px solid var(--line);width:100%;background:none;border-left:0;
   border-right:0;border-top:0;color:inherit;font:inherit;text-align:left;cursor:pointer}

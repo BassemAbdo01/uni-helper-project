@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 818 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 819 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -1334,7 +1334,11 @@ manufactured scarcity.
 ## Ticking a task off refills the list, and is reversible
 
 "What to do first" renders twelve cards and shows five; ticking one reveals
-the next (`settleQueue`). It sent six and showed five, so two ticks left a
+the next (`settleQueue`). `.task[hidden]{display:none}` is what makes the
+hiding real: `.task{display:grid}` out-ranks the attribute (the `#courseState`
+trap again), and the first version shipped with all twelve painted while a
+test that checked the *attribute* passed. Verify visibility by computed
+`display`, never by `el.hidden`. It sent six and showed five, so two ticks left a
 list of three with nothing moving up -- reported as the feature looking
 broken.
 

@@ -82,3 +82,13 @@ def test_build_grouped_cards_default_is_unchanged():
     done = nexora.build_grouped_cards(rows, completed=True)
     assert [c["title"] for c in live] == ["A"]
     assert [c["title"] for c in done] == ["B"]
+
+
+def test_the_hidden_queue_is_actually_hidden(client):
+    """`.task{display:grid}` out-ranked the [hidden] attribute, so all twelve
+    rendered and the page showed nine, not five. The same trap as
+    #courseState: a class that sets display must have a [hidden] rule that
+    beats it."""
+    seed(client, 12)
+    body = client.get("/dashboard").get_data(as_text=True)
+    assert ".task[hidden]{display:none}" in body
