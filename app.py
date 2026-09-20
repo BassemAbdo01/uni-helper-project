@@ -9210,9 +9210,13 @@ def calendar_page():
         if c.course_code and not bool(getattr(c, "is_hidden", False))
     } | {c.get("course_full") for c in cards if c.get("course_full") and c.get("course_full") != "OTHER"})
 
+    # The existing feed address, if there is one; the page creates it on the
+    # first press of Sync rather than on every visit.
+    feed_token = _calendar_token(current_user)
     return render_template(
         "calendar.html",
         weeks=weeks,
+        calendar_feed_url=url_for("calendar_feed", token=feed_token, _external=True) if feed_token else "",
         month_title=current_month.strftime("%B %Y"),
         prev_month=prev_month.strftime("%Y-%m"),
         next_month=next_month.strftime("%Y-%m"),

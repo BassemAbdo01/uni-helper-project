@@ -22,6 +22,9 @@
 .monthnav .add{background:var(--amber);border-color:var(--amber);color:#140F09;font-weight:600;
   width:auto;padding:0 14px;font-size:13px}
 .monthnav .add:hover{filter:brightness(1.06);color:#140F09}
+.monthnav .sync{width:auto;padding:0 12px;font-size:12.5px;gap:7px;grid-auto-flow:column}
+.monthnav .sync svg{width:14px;height:14px}
+@media (max-width:760px){ .monthnav .sync span{display:none} }
 
 .weekhead,.month{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px}
 .weekhead{padding:0 0 8px}
@@ -101,6 +104,27 @@ dialog.sheet::backdrop{background:#0B0908cc}
 .sheet .open a{font-size:12.5px;color:var(--amber);text-decoration:none}
 .sheet .open a:hover{text-decoration:underline}
 
+/* ---- keep it in Google Calendar ---- */
+.sheet .body{padding:20px 22px 18px;display:grid;gap:13px}
+.sheet .body p{margin:0;font-size:13px;color:var(--fg-2);line-height:1.55}
+.sheet .body p.fine{font-size:12px;color:var(--fg-3)}
+.sheet a.big{display:flex;align-items:center;justify-content:center;gap:9px;padding:12px 14px;
+  border-radius:7px;background:var(--amber);color:#140F09;font-weight:600;font-size:14px;text-decoration:none}
+.sheet a.big:hover{filter:brightness(1.06)}
+.sheet a.big:not([href]){opacity:.5;pointer-events:none}
+.sheet a.big svg{width:16px;height:16px}
+.sheet .others{display:flex;gap:9px;flex-wrap:wrap}
+.sheet .others a,.sheet .others button{flex:1;display:grid;place-items:center;border-radius:6px;
+  border:1px solid var(--line-2);background:var(--surface-2);color:var(--fg-2);font:inherit;
+  font-size:12.5px;padding:8px 10px;text-decoration:none;cursor:pointer;text-align:center}
+.sheet .others a:hover,.sheet .others button:hover{border-color:var(--fg-3);color:var(--fg)}
+.sheet .addr{font-family:var(--mono);font-size:11px;color:var(--fg-3);word-break:break-all;
+  padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+.sheet .body .status{min-height:1em;font-size:12.5px;color:var(--fg-3)}
+.sheet .body .status.ok{color:#7FB08A}
+.sheet .body .status.err{color:#C9705C}
+.sheet .body a.plain{color:var(--fg-3);text-decoration:underline}
+
 </style>
 {% endblock %}
 
@@ -117,6 +141,10 @@ dialog.sheet::backdrop{background:#0B0908cc}
     <a href="{{ url_for('calendar_page') }}?month={{ next_month }}" aria-label="Next month" title="Next month">&rsaquo;</a>
     <a class="today" href="{{ url_for('calendar_page') }}?month={{ this_month }}"
        {% if is_this_month %}aria-disabled="true" tabindex="-1" style="opacity:.4;pointer-events:none"{% endif %}>Today</a>
+    <button type="button" class="sync" id="syncCal" title="Keep this calendar in Google Calendar, Apple Calendar or Outlook">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+      <span>Sync to Google Calendar</span>
+    </button>
     <button type="button" class="add" id="addEvent">+ Add event</button>
   </div>
 </div>
@@ -224,6 +252,44 @@ dialog.sheet::backdrop{background:#0B0908cc}
   </form>
 </dialog>
 
+{# One click, not six steps. Google accepts a subscribe link, so the
+   student lands on "Add this calendar?" with the feed already filled in.
+   Nothing is created until the sheet opens: pressing Sync is the intent. #}
+<dialog class="sheet" id="syncSheet" aria-labelledby="syncTitle">
+  <div class="body">
+    <h2 id="syncTitle">Keep this calendar in Google Calendar</h2>
+    <p>Google subscribes to your private Nexora calendar, so every deadline, midterm
+       and exam here shows up there &mdash; and each time Nexora syncs with your LMS,
+       Google picks up the changes on its own.</p>
+
+    <a class="big" id="gcalLink" target="_blank" rel="noopener noreferrer">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M12 14v4M10 16h4"/></svg>
+      Add to Google Calendar
+    </a>
+    <p class="fine">Google opens with your calendar filled in; press <strong>Add</strong> there and
+       you are done. If you are signed in to more than one Google account, it uses the one that is
+       open.</p>
+
+    <div class="others">
+      <a id="webcalLink">Apple Calendar / Outlook</a>
+      <button type="button" id="copyFeedLink">Copy the address</button>
+    </div>
+    <div class="addr" id="feedAddr" aria-label="Your private calendar address"></div>
+    <p class="status" id="syncStatus" role="status"></p>
+
+    <p class="fine">Google refreshes subscribed calendars on its own schedule, up to once a day,
+       so a deadline synced tonight may only appear there tomorrow &mdash; Nexora itself is
+       always current. Events are read-only on the Google side; edit them here.
+       The address is private: anyone who has it can read your deadlines.
+       <a class="plain" href="{{ url_for('settings') }}#calendar-feed">Reset or turn it off in Settings.</a></p>
+
+    <div class="row">
+      <span class="spacer"></span>
+      <button type="button" id="syncClose">Close</button>
+    </div>
+  </div>
+</dialog>
+
 <div class="toast" id="toast" role="status">
   <span id="toastText"></span>
   <button type="button" id="toastUndo">Undo</button>
@@ -237,6 +303,53 @@ dialog.sheet::backdrop{background:#0B0908cc}
   const $ = id => document.getElementById(id);
   const sheet = $('sheet');
   let editing = null;          // the event being edited, or null when adding
+
+  /* ---- keep it in Google Calendar ---- */
+  const syncSheet = $('syncSheet');
+  let feedUrl = '';
+  function showSyncLinks(url) {
+    feedUrl = url;
+    // Google's own subscribe link: it opens "Add this calendar?" with the
+    // address filled in, instead of the student pasting it into a menu
+    // three clicks deep. Apple and Outlook take webcal:// directly.
+    // Google wants the webcal:// form in cid, and the feed must be https.
+    const webcal = url.replace(/^https?:\/\//, 'webcal://');
+    $('gcalLink').href = 'https://calendar.google.com/calendar/r?cid=' + encodeURIComponent(webcal);
+    $('webcalLink').href = webcal;
+    $('feedAddr').textContent = url;
+  }
+  function syncStatus(text, cls) {
+    const el = $('syncStatus');
+    el.textContent = text;
+    el.className = 'status' + (cls ? ' ' + cls : '');
+  }
+  $('syncCal').addEventListener('click', async () => {
+    syncStatus('', '');
+    if (!feedUrl) $('feedAddr').textContent = 'Creating your private calendar address\u2026';
+    syncSheet.showModal();
+    if (feedUrl) return;
+    try {
+      const res = await fetch('/api/calendar/feed');
+      if (!res.ok) throw new Error('failed');
+      showSyncLinks((await res.json()).url);
+    } catch {
+      $('feedAddr').textContent = '';
+      syncStatus('Could not create the calendar address. Close this and try again.', 'err');
+    }
+  });
+  $('syncClose').onclick = () => syncSheet.close();
+  $('copyFeedLink').onclick = async () => {
+    if (!feedUrl) return;
+    try {
+      await navigator.clipboard.writeText(feedUrl);
+      syncStatus('Copied. In any calendar app, subscribe to a calendar by URL and paste it.', 'ok');
+    } catch {
+      // Clipboard access is refused in plenty of ordinary situations; the
+      // address is on screen, so say so rather than just failing.
+      syncStatus('Could not copy automatically \u2014 select the address above and press Ctrl+C.', '');
+    }
+  };
+  {% if calendar_feed_url %}showSyncLinks({{ calendar_feed_url|tojson }});{% endif %}
 
   /* ---- the editor ---- */
   function open(event, dateIso) {

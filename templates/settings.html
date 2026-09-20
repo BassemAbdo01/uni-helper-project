@@ -115,9 +115,10 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     <header><div><span class="k">Google Calendar</span><h2>Subscribe to your deadlines</h2></div></header>
     <div class="body pad">
       <p class="hint">
-        Nexora gives you a private calendar address. Paste it into Google Calendar
-        once and every deadline, midterm and exam shows up there, and keeps updating
-        on its own. It works in Apple Calendar and Outlook the same way.
+        Nexora gives you a private calendar address. The quickest way to use it is
+        the <strong>Sync to Google Calendar</strong> button on the
+        <a href="{{ url_for('calendar_page') }}">calendar</a>; this is where you reset
+        or turn the address off. It works in Apple Calendar and Outlook the same way.
       </p>
 
       <div id="feedOff" {% if calendar_feed_url %}hidden{% endif %}>

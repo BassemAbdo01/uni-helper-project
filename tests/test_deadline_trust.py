@@ -105,9 +105,15 @@ def test_a_timestamp_with_no_offset_is_read_as_utc():
 # ------------------------------------- the deadline has to exist at all
 
 def test_a_synced_assignment_becomes_a_visible_deadline(synced, client):
+    # A date a few days out, not a fixed one: the calendar hides work more
+    # than a week overdue, so a pinned September date failed on its own once
+    # September wore on. 03:59Z is 11:59 PM Eastern the evening before.
+    from datetime import date, timedelta
+    due = date.today() + timedelta(days=3)
     push(client, synced, [{"content_type": "assignment", "title": "Lab Report 1",
-                           "source_uid": "a1", "due_at": "2026-09-11T03:59:00Z"}])
-    for page in ("/calendar", "/dashboard"):
+                           "source_uid": "a1", "due_at": f"{due.isoformat()}T03:59:00Z"}])
+    shown = due - timedelta(days=1)
+    for page in (f"/calendar?month={shown.strftime('%Y-%m')}", "/dashboard"):
         assert "Lab Report 1" in client.get(page).get_data(as_text=True), \
             f"the deadline never reached {page}"
 

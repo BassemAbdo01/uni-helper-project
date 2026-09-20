@@ -565,7 +565,18 @@ nothing. If it ever comes back it has to be current-term only, future-dated
 only, and year-aware -- and probably not at all.
 
 **The `.ics` feed is how Google Calendar connects**, because Google cannot sign
-in to Nexora. The token in the path is the entire credential, so it is
+in to Nexora. **It is offered on the calendar page itself** -- a Sync button
+beside "+ Add event" whose sheet carries Google's own subscribe link
+(`calendar.google.com/calendar/r?cid=webcal://...`), a `webcal://` link for
+Apple and Outlook, and the address. For a long time the only way to it was a
+six-step copy-and-paste on Settings, and nobody found it. Visiting the
+calendar never mints a token -- the address is a credential -- so the page
+ships an existing one in and creates it on the first press of Sync through
+the same `/api/calendar/feed` route Settings uses. The sheet says Google
+refreshes on its own schedule, up to once a day, because "auto sync" on
+Google's side means that and not live; the feed already sends
+`REFRESH-INTERVAL` as a hint. Google will only fetch an https feed, which
+production is and localhost is not. The token in the path is the entire credential, so it is
 rotatable and the route is deliberately unauthenticated. iCalendar is fussy in
 ways that fail silently: an unescaped comma ends a property early, lines are
 limited to 75 **octets** (fold without splitting a UTF-8 sequence), and `DTEND`
