@@ -3193,6 +3193,85 @@ def process_course_content_file():
     })
 
 
+def _copilot_course(prompt, history, user_id):
+    """Which course the student means: the workspace prefix, a code in the
+    message, then a code anywhere in the recent conversation."""
+    known = _known_course_codes(user_id)
+    def _find(text):
+        for m in re.finditer(r"\b([A-Za-z]{2,5})\s*[- ]?\s*(\d{3,4}[A-Za-z]?)\b", text or ""):
+            code = _normalize_course_code(f"{m.group(1)} {m.group(2)}")
+            if code in known:
+                return code
+        return ""
+    m = re.match(r"\s*Course:\s*([A-Za-z0-9 -]{4,20})\.", prompt or "")
+    if m and _normalize_course_code(m.group(1)) in known:
+        return _normalize_course_code(m.group(1))
+    found = _find(prompt)
+    if found:
+        return found
+    for item in reversed(history or []):
+        if isinstance(item, dict):
+            found = _find(str(item.get("content") or ""))
+            if found:
+                return found
+    return ""
+
+
+def _copilot_amend_outline(user_id, prompt, history, images):
+    """The tutor's side of "add this to the outline": find the text, find the
+    course, amend, and say what changed."""
+    course = _copilot_course(prompt, history, user_id)
+    question = re.sub(r"^\s*Course:\s*[A-Za-z0-9 -]{4,20}\.\s*(?:Student question:\s*)?", "", prompt or "", flags=re.I)
+    # The text to add: what came with the message, a screenshot attached to
+    # it, or -- "add it" -- what the student pasted a turn earlier.
+    without_command = _AMEND_INTENT.sub("", question).strip(" .:\n")
+    text, label = "", "Added by the student"
+    if len(without_command) >= 40:
+        text = without_command
+    elif images:
+        parts = []
+        for image in images[:4]:
+            try:
+                parts.append(_gemini_image_to_outline_text(base64.b64decode(image["data"]), image["mime_type"]))
+            except Exception as exc:
+                app.logger.warning("Amendment screenshot read failed: %s", exc)
+        text, label = "\n".join(p for p in parts if p).strip(), "Added by the student from a screenshot"
+    else:
+        turns = [t for t in (history or []) if isinstance(t, dict) and str(t.get("content") or "").strip()]
+        for turn in reversed(turns):
+            content = str(turn.get("content") or "").strip()
+            if turn.get("role") == "user" and len(content) >= 40 and not _wants_outline_amendment(content) \
+                    and not content.lower().startswith("explain the attached image"):
+                text = content
+                break
+            if turn.get("role") == "assistant" and len(content) >= 40:
+                # The student showed a screenshot and the tutor read it back;
+                # that reading is the only copy of the text we have.
+                text, label = content, "Added by the student, as the tutor read it from a screenshot"
+                break
+    if not course:
+        return {"answer": "Which course is this for? Say the course code with it -- for example \"add this to the BIOL 1103 outline\".",
+                "grounded": True, "sources": []}
+    if not text:
+        return {"answer": f"Paste the text you want added to the {course} outline (or attach the screenshot) and say \"add this to the outline\".",
+                "grounded": True, "sources": []}
+    try:
+        result = _amend_course_outline(user_id, course, text, label)
+    except ValueError as exc:
+        return {"answer": str(exc), "grounded": True, "sources": []}
+    link = url_for("grade_calculator", course=course)
+    if result["changed"]:
+        lines = "\n".join(f"- {c}" for c in result["changed"])
+        answer = (f"Done — added to the **{course}** grading policy on file:\n\n{lines}\n\n"
+                  f"{result['summary']}\n\n"
+                  f"Check it in the [grade calculator]({link}); a bonus is additive, so it only ever adds to your mark.")
+    else:
+        answer = (f"I have kept that with the **{course}** outline, but nothing in it changes the grading scheme "
+                  f"({result['summary'] or 'no weights, bonuses or minimums are stated'}). "
+                  f"If it should have, tell me what the text says in one sentence -- for example \"a 1% bonus on the lab grade for completing 6 of 8 quizzes\".")
+    return {"answer": answer, "grounded": True, "sources": [], "outline_changed": result["changed"], "course": course}
+
+
 @app.route("/api/copilot", methods=["POST"])
 @limiter.limit(AI_LIMIT)
 @login_required
@@ -3240,6 +3319,13 @@ def copilot():
         history = []
     history = history[-10:]
     first_name = (current_user.name or "Student").split()[0]
+
+    # "Add this to the course outline" is an instruction, not a question. It
+    # used to reach the model, which answered that it had no access to edit
+    # the outline. It does now: the text is read, the scheme on file is
+    # amended, and the reply says exactly what changed. No chat call is made.
+    if _wants_outline_amendment(prompt):
+        return jsonify(_copilot_amend_outline(current_user.id, prompt, history, validated_images))
 
     api_key = (
         os.environ.get("GEMINI_API_KEY", "").strip()
@@ -8208,27 +8294,45 @@ def analyze_course_outline(course_code):
                     "scale_configured":bool(scale_profile.get("configured")),"scale_note":scale_note})
 
 
-@app.route("/api/course/<course_code>/outline/correct", methods=["POST"])
-@limiter.limit(AI_LIMIT)
-@login_required
-def correct_course_outline_policy(course_code):
-    """Let a student fix a specific detected value, or a wrongly-extracted
-    component, without re-uploading the whole outline: adjust a weight or
-    pass-rule threshold, remove a component that shouldn't exist (e.g. a
-    duplicate created by a degenerate 1-item selection rule), or add one
-    that's genuinely missing (e.g. a second midterm the AI missed). A wrong
-    structure that's more than a component or two still needs a fresh
-    upload, which the outline-replacement flow already covers.
-    """
-    course=_normalize_course_code(course_code)
-    profile=CourseOutlineProfile.query.filter_by(user_id=current_user.id,course_full=course).first()
-    if not profile:
-        return jsonify({'error':'Analyze a course outline first.'}),404
-    try: analysis=json.loads(profile.grading_json or '{}')
-    except Exception: analysis={}
-    if analysis.get('confirmed'):
-        return jsonify({'error':'This grading policy is already confirmed. Upload a new outline to replace it instead.'}),409
-    data=request.get_json(silent=True) or {}
+def _scheme_groups(analysis, components):
+    """The derived components of a scheme with the weight each one carries --
+    the sum of its real members, since a group has no weight of its own."""
+    out=[]
+    for group in (analysis.get('derived_components') or []) if isinstance(analysis,dict) else []:
+        if not isinstance(group,dict) or not group.get('name'): continue
+        members=_expand_group_members(analysis,group.get('components') or group.get('includes') or [])
+        total=0.0
+        for member in members:
+            key=_grade_key(member)
+            row=next((c for c in components if isinstance(c,dict) and _component_keys_match(key,_grade_key(c.get('name')))),None)
+            if row: total+=float(row.get('weight') or 0)
+        out.append({"name":str(group.get('name')),"components":[str(m) for m in members],"weight":round(total,2)})
+    return out
+
+
+def _scheme_part_weight(analysis, components, name):
+    """(name, weight of the course) for the part of the scheme `name` denotes:
+    a derived group if one matches, else a single component, else (name, 0)."""
+    key=_grade_key(name)
+    for group in _scheme_groups(analysis,components):
+        if _component_keys_match(key,_grade_key(group['name'])) and group['weight']>0:
+            return group['name'],group['weight']
+    row=next((c for c in components if isinstance(c,dict) and c.get('name')
+              and _component_keys_match(key,_grade_key(c.get('name')))),None)
+    if row and float(row.get('weight') or 0)>0:
+        return str(row.get('name')),float(row.get('weight'))
+    return str(name),0.0
+
+
+def _apply_outline_edits(user_id, course, profile, analysis, data):
+    """Apply a set of structured edits to a saved grading policy and keep the
+    grade rows in step: weights, renames, removals, additions, pass rules.
+    Returns the list of changes made (empty when nothing in `data` applied),
+    committing only when there was something to commit.
+
+    The body of the correction route, factored out so an amendment read from
+    an announcement takes exactly the same road as a student's own edit --
+    including the part that never deletes an entered mark."""
     component_edits=data.get('components') if isinstance(data.get('components'),dict) else {}
     pass_rule_edits=data.get('pass_rules') if isinstance(data.get('pass_rules'),list) else []
     pass_mark_edit=data.get('pass_mark')
@@ -8274,9 +8378,33 @@ def correct_course_outline_policy(course_code):
             weight=max(0.0,min(100.0,float(item.get('weight') or 0)))
         except (TypeError,ValueError):
             weight=0.0
-        components.append({"name":name[:255],"weight":weight,"category":str(item.get('category') or _component_category(name))[:80]})
+        # A weight stated against a part of the course -- "a bonus 1% is added
+        # to your final lab grade", where the lab is 40% of the course -- is
+        # converted HERE. The model that read the sentence names the component
+        # it applies to; the server does the sum, and the note shows it.
+        raw_basis=item.get('weight_of')
+        bases=[str(b).strip() for b in (raw_basis if isinstance(raw_basis,list) else [raw_basis]) if str(b or '').strip()]
+        bases=[b for b in bases if _norm_key(b) not in ('course','final grade','course grade','final course grade')]
+        basis_note=''
+        if bases:
+            # A group first: "your final lab grade" in a 60/40 course is the
+            # whole lab component (reports + lab exam), not its largest row.
+            # A part the scheme never named as a group arrives as a list of
+            # the rows that make it up, and is summed here.
+            parts=[_scheme_part_weight(analysis,components,b) for b in bases]
+            parts=[(n,w) for n,w in parts if w>0]
+            parent_weight=round(sum(w for _,w in parts),2)
+            if parent_weight>0:
+                parent_name=' + '.join(n for n,_ in parts)
+                course_weight=round(weight*parent_weight/100.0,2)
+                basis_note=f"{weight:g}% of {parent_name} ({parent_weight:g}% of the course) = {course_weight:g}% of the course grade."
+                weight=course_weight
+        category=str(item.get('category') or _component_category(name))[:80]
+        if re.search(r'bonus|extra credit',f'{name} {category}',re.I): category='bonus'
+        notes=(str(item.get('notes') or '').strip()+(' '+basis_note if basis_note else '')).strip()[:255]
+        components.append({"name":name[:255],"weight":weight,"category":category,"notes":notes})
         existing_keys.add(key)
-        changed.append(f"Added: {name} ({weight}%)")
+        changed.append(f"Added: {name} ({weight:g}%)"+(f" — {basis_note}" if basis_note else ''))
 
     # Weight edits on whatever components remain.
     for comp in components:
@@ -8408,6 +8536,16 @@ def correct_course_outline_policy(course_code):
 
     analysis['pass_rules']=pass_rules
 
+    # A condition with no number in it -- "quizzes are open for two weeks",
+    # "the survey opens late November" -- is still part of the policy and is
+    # kept in the outline's own words, next to the rules the analysis found.
+    rules=[str(r) for r in (analysis.get('rules') or []) if str(r).strip()] if isinstance(analysis.get('rules'),list) else []
+    for sentence in (data.get('rules') if isinstance(data.get('rules'),list) else []):
+        sentence=str(sentence or '').strip()[:500]
+        if sentence and sentence not in rules:
+            rules.append(sentence); changed.append(f"Noted: {sentence}")
+    analysis['rules']=rules
+
     if pass_mark_edit is not None:
         try:
             new_pass_mark=max(0.0,min(100.0,float(pass_mark_edit)))
@@ -8418,7 +8556,7 @@ def correct_course_outline_policy(course_code):
             pass
 
     if not changed:
-        return jsonify({'error':'No valid corrections were provided.'}),400
+        return []
 
     analysis=_normalize_advanced_grading_model(analysis)
     analysis['ambiguities']=_outline_model_validation(analysis)
@@ -8436,7 +8574,7 @@ def correct_course_outline_policy(course_code):
     # avoid silently destroying a real recorded grade), rename in place
     # (never delete+recreate) so a rename never loses an already-entered
     # mark, and create rows for newly added components.
-    rows=GradeEntry.query.filter_by(user_id=current_user.id,course_full=course).all()
+    rows=GradeEntry.query.filter_by(user_id=user_id,course_full=course).all()
     row_map={_norm_key(r.name):r for r in rows}
     for key in remove_keys:
         row=row_map.get(key)
@@ -8453,12 +8591,208 @@ def correct_course_outline_policy(course_code):
             if lookup_key!=key or row.name!=new_name[:255]:
                 row.name=new_name[:255]
         else:
-            db.session.add(GradeEntry(id=uuid4().hex,user_id=current_user.id,course_full=course,
+            db.session.add(GradeEntry(id=uuid4().hex,user_id=user_id,course_full=course,
                                        name=new_name[:255],
                                        weight=float(comp.get('weight') or 0),score=None,max_score=100.0,
-                                       category=str(comp.get('category') or 'assessment')[:80]))
+                                       category=str(comp.get('category') or 'assessment')[:80],
+                                       notes=str(comp.get('notes') or '')[:255]))
     db.session.commit()
+    return changed
+
+
+@app.route("/api/course/<course_code>/outline/correct", methods=["POST"])
+@limiter.limit(AI_LIMIT)
+@login_required
+def correct_course_outline_policy(course_code):
+    """Let a student fix a specific detected value, or a wrongly-extracted
+    component, without re-uploading the whole outline: adjust a weight or
+    pass-rule threshold, remove a component that shouldn't exist (e.g. a
+    duplicate created by a degenerate 1-item selection rule), or add one
+    that's genuinely missing (e.g. a second midterm the AI missed). A wrong
+    structure that's more than a component or two still needs a fresh
+    upload, which the outline-replacement flow already covers.
+    """
+    course=_normalize_course_code(course_code)
+    profile=CourseOutlineProfile.query.filter_by(user_id=current_user.id,course_full=course).first()
+    if not profile:
+        return jsonify({'error':'Analyze a course outline first.'}),404
+    try: analysis=json.loads(profile.grading_json or '{}')
+    except Exception: analysis={}
+    if analysis.get('confirmed'):
+        return jsonify({'error':'This grading policy is already confirmed. Upload a new outline to replace it instead.'}),409
+    data=request.get_json(silent=True) or {}
+    changed=_apply_outline_edits(current_user.id,course,profile,analysis,data)
+    if not changed:
+        return jsonify({'error':'No valid corrections were provided.'}),400
     return jsonify({'ok':True,'changed':changed})
+
+
+# ---- Adding to an outline that is already on file ---------------------------
+#
+# A grading policy changes after the outline is read: a bonus announced on
+# Brightspace, an email moving weight from a cancelled quiz onto the final, a
+# minimum stated in a lab manual. The student's move is to paste it and say
+# "add this to the outline" -- and the tutor answered that it had no access
+# to edit the outline, which is the app refusing the one thing it is for.
+#
+# The model reads the addition and returns the EDITS it makes, as structured
+# data; the server applies them through the same code as a student's own
+# correction, so an entered mark is never lost, and any amount stated against
+# a part of the course is converted here rather than by the model.
+
+_AMEND_INTENT = re.compile(
+    r"\b(add|put|include|record|apply|save|update|attach)\b[^.?!\n]{0,60}\b(outline|syllabus|grading|grade (?:scheme|policy|calculator)|course policy|my grades?)\b"
+    r"|\b(outline|syllabus)\b[^.?!\n]{0,40}\b(add|update|include|record)\b", re.I)
+
+
+def _wants_outline_amendment(prompt):
+    return bool(_AMEND_INTENT.search(prompt or ""))
+
+
+def _outline_amendment_edits(course, analysis, text):
+    """Ask the model what a piece of text changes about the scheme on file --
+    only what it states, in the correction route's own shape."""
+    components = [{"name": c.get("name"), "weight": c.get("weight"), "category": c.get("category")}
+                  for c in (analysis.get("components") or []) if isinstance(c, dict)]
+    system = (
+        "You read a short addition to a university course's grading policy -- an announcement, an email, "
+        "a Brightspace page -- and return ONLY the edits it makes to the grading scheme Nexora already holds, "
+        "as strict JSON in the return_shape given.\n"
+        "1. Record only what the text states. Never invent a weight, a threshold or a component.\n"
+        "2. A bonus with a stated amount is a component with category \"bonus\". Two bonuses are two components.\n"
+        "3. Weights are percent of the FINAL COURSE GRADE. If the text states an amount against a part of the "
+        "course instead (\"1% added to your final lab grade\"), give that number as weight and put the EXACT "
+        "existing component OR group (see current_groups -- a whole lab or theory component) it applies to in "
+        "weight_of; Nexora converts it. If that part is not one component or group -- \"the lab grade\" when "
+        "the scheme has In-Lab Assignments and Final Lab Exam -- make weight_of a list of every existing "
+        "component that makes it up. Otherwise weight_of is \"course\".\n"
+        "4. A stated change to an existing component's weight goes in components, keyed by its exact existing name.\n"
+        "5. A stated minimum (\"must score at least 50% on the final\") goes in add_pass_rules.\n"
+        "6. A condition that has no number, or that only says when something is available, goes in rules, "
+        "one short sentence each, in the text's own words. Do not repeat what the scheme already holds.\n"
+        "7. notes on a component is the condition for earning it, in the text's own words.\n"
+        "8. summary is one plain sentence to the student saying what changed -- or that nothing in the text "
+        "changes the grading scheme, if so. Return empty lists rather than guessing.\n"
+        "9. The same marks must never count twice. If the scheme already holds a general entry for what the "
+        "text spells out (\"Bonus Opportunities 2%\" when the text describes two 1% bonuses), put that general "
+        "entry's exact name in remove_components and add the specific ones. If the text only repeats what the "
+        "scheme already holds, return empty lists."
+    )
+    shape = {
+        "add_components": [{"name": "string", "weight": 0, "weight_of": "course | an existing component or group name | [several component names]",
+                            "category": "bonus | assignment | quiz | lab | exam | other", "notes": "string"}],
+        "components": {"existing component name": 0},
+        "add_pass_rules": [{"components": ["existing component name"], "minimum_percent": 0, "message": "string"}],
+        "remove_components": ["existing component name the text replaces with more specific ones"],
+        "rules": ["string"],
+        "summary": "string",
+    }
+    user = json.dumps({"course": course, "current_components": components,
+                       "current_groups": _scheme_groups(analysis, analysis.get("components") or []),
+                       "current_rules": (analysis.get("rules") or [])[:30],
+                       "pass_mark": analysis.get("pass_mark"),
+                       "text_to_add": text[:12000], "return_shape": shape}, ensure_ascii=False)
+    parsed = _gemini_json(system, user, 2500, 0.1, mode="fast")
+    # flash-lite now and then wraps the object in a one-element list. Read
+    # through that rather than treating it as "nothing changes", which is
+    # the one answer here that would look like the feature not working.
+    if isinstance(parsed, list):
+        parsed = next((x for x in parsed if isinstance(x, dict)), None)
+    if not isinstance(parsed, dict):
+        raise ValueError("amendment reply was not an object")
+    return parsed
+
+
+def _amend_course_outline(user_id, course, text, label="Added by the student"):
+    """Add `text` to a course's outline on file and apply what it changes.
+    Returns {"changed": [...], "summary": str}. Raises ValueError with a
+    sentence for the student when it cannot."""
+    course = _normalize_course_code(course)
+    text = _sanitize_extracted_text(text or "").strip()
+    if len(text) < 20:
+        raise ValueError("Paste the text you want added to the outline -- the announcement or the sentence -- and say what course it is for.")
+    profile = CourseOutlineProfile.query.filter_by(user_id=user_id, course_full=course).first()
+    if not profile:
+        raise ValueError(f"{course} has no outline on file yet. Add the outline first (grade calculator → add the course outline), then add this to it.")
+    try:
+        analysis = json.loads(profile.grading_json or "{}")
+    except Exception:
+        analysis = {}
+    if not isinstance(analysis, dict):
+        analysis = {}
+    try:
+        edits = _outline_amendment_edits(course, analysis, text)
+    except Exception as exc:
+        app.logger.warning("Outline amendment read failed for %s: %s", course, exc)
+        if _looks_like_quota_error(exc):
+            raise ValueError("Nexora's AI has hit its usage limit for now, so it could not read this. Please try again later.")
+        raise ValueError("Nexora could not read that just now. Please try again in a minute.")
+    # The addendum itself is kept, in the student's words, on the policy and
+    # on the outline text -- so Ask can quote it and a later re-analysis of
+    # the outline still sees it.
+    stamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    addenda = analysis.get("addenda") if isinstance(analysis.get("addenda"), list) else []
+    addenda.append({"at": stamp, "label": label, "text": text[:6000]})
+    analysis["addenda"] = addenda[-20:]
+    row = None
+    if profile.source_uid:
+        row = CourseContent.query.filter_by(user_id=user_id, course_full=course, source_uid=profile.source_uid).first()
+    if not row:
+        row = (CourseContent.query.filter_by(user_id=user_id, course_full=course, content_type="outline")
+               .order_by(CourseContent.updated_at.desc()).first())
+    if row is not None:
+        marker = f"\n\n===== {label.upper()} ({stamp[:10]}) =====\n"
+        if text not in (row.content_text or ""):
+            row.content_text = (row.content_text or "") + marker + text
+            row.updated_at = datetime.utcnow()
+    data = {
+        "add_components": edits.get("add_components") if isinstance(edits.get("add_components"), list) else [],
+        "components": edits.get("components") if isinstance(edits.get("components"), dict) else {},
+        "add_pass_rules": edits.get("add_pass_rules") if isinstance(edits.get("add_pass_rules"), list) else [],
+        "remove_components": edits.get("remove_components") if isinstance(edits.get("remove_components"), list) else [],
+        "rules": edits.get("rules") if isinstance(edits.get("rules"), list) else [],
+    }
+    # A row the amendment replaces keeps its grade row if a mark was entered
+    # on it (the correction code never destroys a mark). The calculator reads
+    # rows, so the student is told rather than left with two entries.
+    kept = []
+    for name in data["remove_components"]:
+        row = next((r for r in GradeEntry.query.filter_by(user_id=user_id, course_full=course).all()
+                    if _grade_key(r.name) == _grade_key(name)), None)
+        if row is not None and row.score is not None:
+            kept.append(f"{row.name} still carries the mark you entered ({row.score:g}/{row.max_score:g}); "
+                        f"remove it in the course workspace if the new entries now cover it")
+    changed = _apply_outline_edits(user_id, course, profile, analysis, data)
+    if changed:
+        changed.extend(kept)
+    if not changed:
+        # Nothing structural, but the words are on file: save that much.
+        profile.grading_json = json.dumps(analysis, ensure_ascii=False)
+        profile.updated_at = datetime.utcnow()
+        db.session.commit()
+    summary = str(edits.get("summary") or "").strip()[:400]
+    return {"changed": changed, "summary": summary}
+
+
+@app.route("/api/course/<course_code>/outline/amend", methods=["POST"])
+@limiter.limit(AI_LIMIT)
+@login_required
+@requires_active
+def amend_course_outline(course_code):
+    """Add a piece of text -- an announcement, an email -- to the outline on
+    file and apply whatever it changes about the grading scheme."""
+    course = _normalize_course_code(course_code)
+    body = request.get_json(silent=True) or {}
+    try:
+        result = _amend_course_outline(current_user.id, course, str(body.get("text") or ""))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 422
+    profile = CourseOutlineProfile.query.filter_by(user_id=current_user.id, course_full=course).first()
+    try:
+        analysis = json.loads(profile.grading_json or "{}") if profile else {}
+    except Exception:
+        analysis = {}
+    return jsonify({"ok": True, "changed": result["changed"], "summary": result["summary"], "analysis": analysis})
 
 
 @app.route("/api/course/<course_code>/outline/confirm", methods=["POST"])

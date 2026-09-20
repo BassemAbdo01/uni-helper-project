@@ -94,6 +94,13 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .linkish:hover{color:var(--fg);border-bottom-color:var(--fg-3)}
 #inputPanel.done .byhand{display:none}
 #onFile[hidden]{display:none}
+/* "Add to it": an announcement, an email, a bonus -- pasted, read, applied
+   to the scheme on file without replacing it or losing an entered mark. */
+.hdrbtns{display:flex;gap:8px;flex-wrap:wrap}
+#amend{margin-top:14px}
+#amend[hidden]{display:none}
+#amend textarea{min-height:88px}
+#amend .rowbtns{display:flex;gap:8px;align-items:center;margin-top:8px}
 .askrow{margin-top:20px}
 .need{margin-top:14px;border:1px solid var(--line-2);border-radius:9px;background:var(--surface-2);
   padding:17px 18px}
@@ -222,10 +229,23 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 <section class="card" id="inputPanel">
   <header>
     <div><span class="k">Step two</span><h2 id="intakeTitle">Add the course outline</h2></div>
-    <button class="btn quiet sm" id="replaceOutline" type="button" hidden>Replace the outline</button>
+    <div class="hdrbtns">
+      <button class="btn quiet sm" id="addToOutline" type="button" hidden>Add to it</button>
+      <button class="btn quiet sm" id="replaceOutline" type="button" hidden>Replace the outline</button>
+    </div>
   </header>
   <div class="body pad">
     <p class="note meta show" id="onFile" hidden></p>
+    <div id="amend" hidden>
+      <div class="field">
+        <label for="amendText">Something the outline did not say &mdash; a bonus, a changed weight, a new rule</label>
+        <textarea id="amendText" placeholder="Paste the announcement or email. For example: a bonus 1% is added to your final lab grade if you complete 6 of 8 content quizzes with at least 80%…"></textarea>
+      </div>
+      <div class="rowbtns">
+        <button class="btn sm" id="amendBtn" type="button">Add it to the outline</button>
+        <button class="btn quiet sm" id="amendCancel" type="button">Cancel</button>
+      </div>
+    </div>
     <div class="intake">
       <div>
         <p class="or">Upload it</p>
@@ -590,7 +610,9 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     $('askPanel').hidden = !has;
     $('inputPanel').classList.toggle('done', !!has);
     $('replaceOutline').hidden = !has;
+    $('addToOutline').hidden = !has;
     $('onFile').hidden = !has;
+    if (!has) $('amend').hidden = true;
     if (has) $('onFile').textContent = course + "'s outline is on file. Your marks below are saved as you type.";
     if (!has) { $('need').hidden = true; $('askBtn').textContent = 'What do I need on the rest?'; $('askBtn').setAttribute('aria-expanded', 'false'); }
   }
@@ -603,8 +625,35 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   $('replaceOutline').onclick = () => {
     $('inputPanel').classList.remove('done');
     $('replaceOutline').hidden = true;
+    $('addToOutline').hidden = true;
+    $('amend').hidden = true;
     $('onFile').hidden = true;
     $('syllabusFile').focus();
+  };
+
+  // Add to the outline on file. The model reads what the text changes; the
+  // server applies it through the same code as a correction, so the marks
+  // already entered stay put and any amount stated against part of the
+  // course is converted on the server.
+  $('addToOutline').onclick = () => { $('amend').hidden = false; $('amendText').focus(); };
+  $('amendCancel').onclick = () => { $('amend').hidden = true; };
+  $('amendBtn').onclick = async () => {
+    const text = $('amendText').value.trim();
+    if (text.length < 20) { intakeStatus('Paste the announcement or sentence you want added.', 'bad'); return; }
+    $('amendBtn').disabled = true;
+    intakeStatus('Reading it…');
+    try {
+      const d = await readResponse(await fetch(`/api/course/${encodeURIComponent(course)}/outline/amend`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }));
+      await loadCourse(course);
+      $('amend').hidden = true; $('amendText').value = '';
+      intakeStatus(d.changed.length ? 'Added to the outline: ' + d.changed.join(' · ')
+        : 'Kept with the outline, but nothing in it changes the grading scheme' + (d.summary ? ' — ' + d.summary : '.'), d.changed.length ? '' : 'bad');
+    } catch (e) {
+      intakeStatus(e.message || 'Nexora could not read that just now.', 'bad');
+    } finally {
+      $('amendBtn').disabled = false;
+    }
   };
 
   // An analysis error belongs beside the button that caused it. It used to go

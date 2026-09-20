@@ -696,6 +696,57 @@ call: it is the riskiest file in the repo and this change is about where
 things live, not how they are calculated. Remove its outline/grades tabs only
 once he has said the new page is better.
 
+## Adding to an outline that is already on file
+
+`/api/course/<code>/outline/amend` and, on the tutor, "add this to the
+outline". A grading policy changes after the outline is read -- a bonus
+announced on Brightspace, weight moved off a cancelled test, a minimum in a
+lab manual. The student pasted the announcement into the tutor, said "add it
+to the course outline", and the tutor answered that it had no access to edit
+the outline. That is the app refusing the one thing it exists for, and it
+was reported as extremely important.
+
+**The model reads the addition; the server changes the scheme.**
+`_outline_amendment_edits` asks a fast model what the text changes, in the
+correction route's own shape -- components to add, weights to change, pass
+rules, sentences for `rules`, entries to replace -- and
+`_apply_outline_edits` applies it. That helper is the body of
+`/outline/correct`, factored out so an amendment takes exactly the road a
+student's own edit does, including the part that never deletes an entered
+mark. The tutor does not call the chat model for this turn at all
+(`_wants_outline_amendment`, `_copilot_amend_outline`): it finds the course
+(workspace prefix, a code in the message, a code earlier in the
+conversation) and the text (in the message, in an attached screenshot, or a
+turn earlier when the student says "add it"), amends, and replies with the
+change list.
+
+**An amount stated against part of the course is converted on the server.**
+"A bonus 1% is added to your final lab grade" in a course whose lab is 40%
+is 0.4% of the course. The model names what the amount applies to
+(`weight_of`: a component, a derived group, or a list of the rows that make
+up the part); `_scheme_part_weight` looks the weight up, group first, and
+the note on the component shows the sum. The measured failure this guards
+against: with only single rows offered, flash-lite picked the largest lab
+row (24%) as "the lab grade" four times out of four.
+
+**The same marks must never count twice.** The BIOL 1103 outline already
+carries "Bonus Opportunities 2%"; the announcement is the detail of it. The
+model may put the general entry in `remove_components` when it adds the
+specific ones, and does so consistently. A removed row with a mark on it is
+kept -- the calculator reads rows -- and the change list says so.
+
+The addendum text is kept twice: on the policy (`addenda`) and appended to
+the outline row, so Ask can quote it and a re-analysis still sees it. It
+does not un-confirm a confirmed policy; the student asked for it.
+
+The grade calculator has the same thing without the tutor: **Add to it**
+beside **Replace the outline**. Measured on the live key: ~1.2s per read,
+correct on five of five passes for the bonus text and four of four for the
+demo scheme. flash-lite occasionally wraps its object in a one-element
+list; `_outline_amendment_edits` unwraps that rather than reading it as
+"nothing changes", which is the one wrong answer that looks like the feature
+not working.
+
 ## Ask the outline a question
 
 `/api/course/<code>/ask`, on the **course workspace and the grade calculator**.
