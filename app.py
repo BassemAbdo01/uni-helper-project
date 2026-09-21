@@ -3973,6 +3973,41 @@ def logout():
     return redirect(url_for("landing"))
 
 
+# Content that is news when it is published, not when it is imported. An
+# assignment's published_at is its DUE date in the extension, so those are
+# left to the deadline lists; here it is what a student would read.
+_UPDATE_CONTENT_TYPES = ("announcement", "lecture", "page", "resource", "practice")
+
+
+def _recent_updates(user, limit=4, within_days=None):
+    """The newest things Brightspace published in this student's courses,
+    dated on the student's own day and each carrying the link Brightspace
+    gave, checked by _lms_link. Ordered by the item's own date; a row with
+    no date is not "recent" and is left out rather than dated by the sync."""
+    zone = _user_zone(user)
+    today = _student_today(user)
+    rows = (CourseContent.query.filter_by(user_id=user.id)
+            .filter(CourseContent.content_type.in_(_UPDATE_CONTENT_TYPES))
+            .filter(CourseContent.published_at != "")
+            .order_by(CourseContent.updated_at.desc()).limit(1500).all())
+    out = []
+    for row in rows:
+        day = parse_iso_date(local_date_iso(row.published_at, zone))
+        if not day or day > today:
+            continue
+        if within_days is not None and (today - day).days > within_days:
+            continue
+        out.append({
+            "title": row.title or "Untitled", "course_full": row.course_full or "",
+            # "Sep 12" on a notice from two years ago reads as this September.
+            "kind": row.content_type, "day": day,
+            "pretty": day.strftime("%b %d") if day.year == today.year else day.strftime("%b %d, %Y"),
+            "link": _lms_link(row.source_url),
+        })
+    out.sort(key=lambda u: (u["day"], u["title"]), reverse=True)
+    return out[:limit]
+
+
 @app.route("/dashboard", methods=["GET", "POST"])
 @login_required
 def home():
@@ -4191,7 +4226,13 @@ def home():
     prefixes, fulls = get_course_options(raw_tasks)
     feed_url = load_feed_url()
     last_sync = load_last_sync()
-    academic_updates = AcademicUpdate.query.filter_by(user_id=current_user.id).order_by(AcademicUpdate.created_at.desc()).limit(4).all()
+    # "Recent" by the item's own date, never by when it was imported. The
+    # AcademicUpdate rows are stamped at sync time, and "import every term"
+    # brought first-year announcements in on the same afternoon as this
+    # week's -- so a CHEM 1101 notice from two years ago led the panel,
+    # dated today, above anything from the term in progress.
+    academic_updates = _recent_updates(current_user, limit=4)
+    updates_this_week = _recent_updates(current_user, limit=50, within_days=7)
 
     # The student's clock, not the server's. See local_stamp.
     last_sync_text = local_stamp(last_sync, "%b %d, %Y at %I:%M %p") or "Never"
@@ -4248,6 +4289,7 @@ def home():
         month_title=month_title,
         month_days=month_days,
         academic_updates=academic_updates,
+        updates_this_week=len(updates_this_week),
         show_all_courses=show_all_courses,
     )
 

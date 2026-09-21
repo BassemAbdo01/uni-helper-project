@@ -1413,6 +1413,37 @@ nine seconds -- so a student testing the feature who clicked Done on six
 things had lost them from Nexora for good. Put back re-reads the page rather
 than guessing where the task belongs in the queue: order is the server's.
 
+## "Recent updates" is recent by Brightspace's date
+
+`_recent_updates(user, limit, within_days)`. The panel used to show the four
+newest `AcademicUpdate` rows, which are stamped at **sync** time. Once the
+extension imported every term, first-year CHEM 1101 announcements arrived on
+the same afternoon as this week's and led the panel dated "Sep 21", above
+anything from the term in progress. Reported with a screenshot.
+
+It reads the content rows now: `published_at` (what Brightspace said), on
+the student's day via `local_date_iso`, newest first, and each one links to
+the page Brightspace gave through `_lms_link`. Only reading material counts
+(`_UPDATE_CONTENT_TYPES`): an assignment's `published_at` is its **due
+date** in the extension, and a deadline belongs to the deadline lists. A row
+with no date is not "recent" -- dating it by the sync is the bug. **A date
+from another year shows the year**; "Sep 12" on a 2024 notice reads as this
+September, which is the confusion that was reported.
+
+The stat cell counts items published in the last seven days
+(`updates_this_week`), not the panel's length.
+
+## A task has two actions: tick it, or go and do it
+
+"What to do first" was one `<button>` per row: the whole card ticked the
+task off, and there was no way to reach the work. It is a `div.task` now
+with a `button.box` that ticks and, when the LMS gave a link, the title is
+an anchor into the LMS (`t.source_link`, `_lms_link`-checked, never
+constructed). The row's click handler returns early on a click inside an
+anchor, so opening the work is not ticking it off. `aria-pressed` lives on
+the row (the CSS reads it) and is mirrored onto the box for a screen reader.
+The toast label strips the link's arrow glyph.
+
 ## The first-run tour
 
 **Ten steps, and one of them is the study planner.** For a long time there
