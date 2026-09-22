@@ -1444,6 +1444,63 @@ anchor, so opening the work is not ticking it off. `aria-pressed` lives on
 the row (the CSS reads it) and is mirrored onto the box for a screen reader.
 The toast label strips the link's arrow glyph.
 
+## The study room is where a plan block gets done
+
+`templates/study_room.html`, `/study-room`. A real room in three.js --
+PBR materials under a `RoomEnvironment` map, procedural wood, plaster,
+paper and sky drawn on canvases at load (the page owns no image files),
+soft shadows from a desk lamp and moonlight through the window, bloom on
+the screen and the lamp, ACES tone mapping, a cinematic entry. Everything
+on the desk is the student's real work with the identity the drawer needs
+to act on it: the notebook ticks a task through
+`/api/tasks/<group>/complete`, the wall calendar links into the LMS, the
+shelf opens course workspaces, the monitor shows the plan.
+
+**The desk clock is the point of the room.** A block is started from the
+monitor's plan, the clock counts it, and when it ends the session is posted
+`done` with the minutes that really passed -- the fact `_learned_effort`
+turns into better estimates. Nothing about the schedule is decided in this
+file; the planner's arithmetic still owns the week.
+
+**The screen shows the next day that has blocks.** At 23:50 with nothing
+left today it says "Tomorrow" rather than "no plan" -- the route sends
+today's blocks and the next two days', and `planDay()` picks. That is also
+why the page never says "Tonight" when it means tomorrow morning.
+
+Things that were found in the browser and are worth keeping:
+
+- **A screen must be matte.** A rough-.28 emissive plane under a 14 cd spot
+  rendered a hard specular disc that read as a sun on the monitor. Roughness
+  .78 with the environment turned down; the glow comes from the emissive map
+  and bloom, not from reflection.
+- **Paper blows out under the lamp.** The page and the calendar carry a
+  darker `color` multiplier so the texture stays legible at the lamp's
+  brightness.
+- **The window is on the back wall** so the overview camera can see it. On
+  the side wall it was invisible from every default view, and the four
+  lighting moods looked identical.
+- **Portrait widens the field of view (72°) rather than backing the camera
+  up** -- a phone held upright otherwise sees a slit of desk, and there is a
+  wall behind the camera.
+- **A `<label>` is a form caption in the design system**; the notebook's
+  rows reset it or every task prints in uppercase mono.
+- **The flat room.** `?flat=1`, or no WebGL2, lays the same panels out on
+  the page. The 3D half of the module is skipped with a never-resolving
+  top-level `await`, so the panels, the clock and the sound engine -- which
+  are defined first -- keep working. `textures` is declared before that
+  branch on purpose: it was declared after it once and the clock threw in
+  flat mode. A 15 s watchdog offers the flat room if three.js never loads.
+- **The render loop pauses when the tab is hidden**, so a measurement taken
+  while the pane is collapsed reads a stale frame, not the room.
+- Rain and brown noise are synthesised in WebAudio (filtered and integrated
+  noise); nothing to host. The context is only created on a gesture.
+
+`window.__room` exposes the renderer, timer, ambience and sound for checks
+from the console. `tests/test_study_room.py` pins the data contract; the
+rendering is verified in a browser, and `.claude/launch.json` has a
+`nexora-ai` entry (`scripts/run_with_env.py`) that starts the app with
+`.env` loaded so the tutor works in the preview.
+
 ## The first-run tour
 
 **Ten steps, and one of them is the study planner.** For a long time there

@@ -10,6 +10,7 @@ whichever LMS a student is on.
 
 import os
 import sys
+from datetime import date, timedelta
 
 import pytest
 
@@ -124,7 +125,7 @@ CANVAS_FIXTURE = {
         "image_download_url": "https://canvas.school.edu/img/101.png",
     }],
     "courses/101/assignments": [
-        {"id": 11, "name": "Lab 6 - Inheritance", "due_at": "2026-09-14T03:59:00Z",
+        {"id": 11, "name": "Lab 6 - Inheritance", "due_at": f"{(date.today() + timedelta(days=5)).isoformat()}T03:59:00Z",
          "html_url": "https://canvas.school.edu/courses/101/assignments/11",
          "description": "<p>Write a <b>subclass</b>.</p><script>alert(1)</script>"},
         {"id": 12, "name": "Reading (no due date)", "due_at": None,
@@ -179,7 +180,7 @@ def test_sync_writes_into_the_same_tables_brightspace_uses(canvas_client):
         # calendar work without a Canvas-specific code path
         task = nexora.Task.query.filter_by(course_full="SYSC2004").first()
         assert task is not None
-        assert task.due_raw == "2026-09-14"
+        assert task.due_raw == (date.today() + timedelta(days=5)).isoformat()   # no zone on this account: the UTC day
         assert task.source == "canvas"
 
         # one without a due date is content only, never a phantom deadline
@@ -619,7 +620,7 @@ def test_a_session_import_lands_exactly_like_a_token_import(client):
         assert course is not None and course.term == "Winter 2026"
 
         task = nexora.Task.query.filter_by(course_full="SYSC2004").first()
-        assert task is not None and task.due_raw == "2026-09-14"
+        assert task is not None and task.due_raw == (date.today() + timedelta(days=5)).isoformat()
         assert task.source == "canvas"
 
         titles = {c.title for c in nexora.CourseContent.query.all()}

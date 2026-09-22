@@ -4298,6 +4298,10 @@ def home():
 @app.route("/study-room")
 @login_required
 def study_room():
+    """The room is the place a plan block gets done. Everything on the desk
+    is the student's real work, with the identity the drawer needs to act on
+    it: a task's group to tick it, a deadline's link to open it, tonight's
+    plan blocks to run the clock against."""
     raw_tasks = load_tasks()
     cards = [decorate_card(c) for c in sort_cards(view_filter(build_grouped_cards(raw_tasks), "all"))]
     active = [c for c in cards if not c.get("completed")][:12]
@@ -4308,12 +4312,17 @@ def study_room():
                 "title": c.get("title", "Task"),
                 "course": c.get("course_full", "OTHER"),
                 "due": c.get("main_due_pretty") or c.get("status_label") or "Upcoming",
+                "status": c.get("status", ""),
+                "status_label": c.get("status_label", ""),
+                "link": c.get("source_link") or "",
             })
     tasks = [{
+        "group_id": c.get("group_id", ""),
         "title": c.get("title", "Task"),
         "course": c.get("course_full", "OTHER"),
         "due": c.get("main_due_pretty") or "No date",
         "status": c.get("status_label") or "Active",
+        "link": c.get("source_link") or "",
     } for c in active]
     # One entry per course, named by the newest offering -- the same rule the
     # dashboard and the grade calculator use.
@@ -4328,11 +4337,25 @@ def study_room():
             if code not in seen:
                 seen.append(code)
                 courses.append({"code": code, "name": "Course workspace"})
-    room_data = {"tasks": tasks, "deadlines": deadlines[:8], "courses": courses}
+    # Tonight's plan, on the student's clock. The desk clock runs a block and
+    # records what actually happened, which is the fact the planner learns
+    # from (see _learned_effort).
+    today = _student_today(current_user)
+    # Today's blocks, and the next two days': at 23:50 with nothing left
+    # today, the screen shows tomorrow rather than "no plan".
+    horizon = (today + timedelta(days=2)).isoformat()
+    blocks = _sessions_json(StudySession.query.filter_by(user_id=current_user.id)
+                            .filter(StudySession.on_date >= today.isoformat(), StudySession.on_date <= horizon)
+                            .order_by(StudySession.on_date.asc(), StudySession.start_min.asc()).all())
+    now = _student_now(current_user)
+    room_data = {
+        "tasks": tasks, "deadlines": deadlines[:8], "courses": courses, "blocks": blocks,
+        "today": today.isoformat(), "now_min": now.hour * 60 + now.minute,
+        "first_name": (current_user.name or "Student").split()[0],
+    }
     return render_template(
         "study_room.html", user=current_user, tasks=tasks, deadlines=deadlines[:8], courses=courses,
-        room_data=room_data, streak_days=min(30, max(1, len(active) + 4)),
-        streak_bars=[32, 48, 40, 72, 58, 84, 66]
+        blocks=blocks, room_data=room_data,
     )
 
 
