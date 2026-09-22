@@ -1467,8 +1467,29 @@ left today it says "Tomorrow" rather than "no plan" -- the route sends
 today's blocks and the next two days', and `planDay()` picks. That is also
 why the page never says "Tonight" when it means tomorrow morning.
 
-**The first version was reported as "extremely poor quality" and "boring",
-and both were fair.** It rendered at 1.6x with no anti-aliasing inside the
+**The room is lit by many small warm sources, not by one lamp.** Two
+rounds of "extremely poor quality" came down to the same thing: the walls
+were unlit, so the room read as objects floating in a void, and no amount
+of anti-aliasing fixes that. The third pass copied what every cosy-desk
+photograph does -- **LED strips under every shelf edge**, under the desk
+and on the bookcase, glowing orb lamps, a monitor light bar, a candle, and
+a **dusk city skyline** outside instead of a black night. `strip()` makes
+one: an emissive bar plus the point light it throws. The strips and orbs
+stay lit in every mood, because they are what makes the room a room.
+`skyTexture('dusk')` is the default -- deep blue through mauve to amber,
+two ranks of buildings so the skyline has depth, and lit windows.
+
+**The shot is composed, not just pointed.** The reference the owner sent
+frames it in from the left: window and a floor plant on one side, the
+bookcase wall on the other, the desk across the middle, an armchair
+cropped into the bottom corner. Getting everything inside a 54-degree
+frame took arithmetic, not guesswork -- project a candidate position with
+`v.project(camera)` and read off the screen percentage, which is how the
+corkboard and the cabinet were found to be sitting outside the frame
+entirely while looking fine in the scene graph. The bookcase was narrowed
+to 1.9m and pushed into the back corner to make wall room for them.
+
+**The earlier report, for the record:** It rendered at 1.6x with no anti-aliasing inside the
 post chain, 1K textures across a whole desk, no ambient occlusion (things
 floated), and nothing moved. What changed: full device pixel ratio (to 2x),
 MSAA on the composer's own target (`samples: 4`, half-float), a `GTAOPass`
