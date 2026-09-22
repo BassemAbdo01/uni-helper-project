@@ -791,7 +791,7 @@ let composer = null, bloom = null;
 if (!isSmall) {
   composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), .42, .55, 1.0);
+  bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), .42, .55, 1.25);
   composer.addPass(bloom); composer.addPass(new OutputPass());
 }
 function resize() {
@@ -891,7 +891,7 @@ async function buildRoom() {
   mesh(rbox(.058, .03, .1, .015, 4), keyMat, [.52, .785, -1.85]);
 
   /* notebook: the to-do list, a real page */
-  const paper = M.std({map: textures.notebook.tex, roughness: .9, color: 0x9A9286});
+  const paper = M.std({map: textures.notebook.tex, roughness: .92, color: 0x8C8579});
   const nb = new THREE.Group(); nb.position.set(-.5, .74, -1.84); nb.rotation.y = .14; root.add(nb);
   mesh(rbox(.32, .022, .42, .004), M.std({color: 0x8F8570, roughness: .9}), [0, .012, 0], {parent: nb});
   const page = mesh(new THREE.PlaneGeometry(.3, .4), paper, [0, .0245, 0], {parent: nb, shadow: false, name: 'notebook'}); page.rotation.x = -Math.PI / 2;
@@ -922,8 +922,8 @@ async function buildRoom() {
   shade.rotation.z = .5; shade.rotation.x = .1; shade.userData.key = 'lamp'; interactive.push(shade);
   const bulbMat = M.std({color: 0xFFE9C4, emissive: 0xFFD79A, emissiveIntensity: 3.2, roughness: .4});
   const bulb = mesh(new THREE.SphereGeometry(.035, 24, 16), bulbMat, [.33, .48, .07], {parent: lamp, shadow: false, receive: false});
-  const lampLight = new THREE.SpotLight(0xFFC98A, 14, 3.2, .78, .6, 1.4);
-  lampLight.position.set(-.66, 1.24, -2.2); lampLight.target.position.set(-.35, .74, -1.85);
+  const lampLight = new THREE.SpotLight(0xFFC98A, 7.5, 3.4, .85, .7, 1.2);
+  lampLight.position.set(-.66, 1.24, -2.2); lampLight.target.position.set(-.15, .74, -1.75);
   lampLight.castShadow = !isSmall; lampLight.shadow.mapSize.set(1024, 1024); lampLight.shadow.bias = -.0004; lampLight.shadow.radius = 4;
   root.add(lampLight, lampLight.target);
 
@@ -998,7 +998,7 @@ const ambience = {
   setLamp(on, silent) {
     this.lamp = on; localStorage.setItem('nexora-room-lamp', on ? '1' : '0');
     const strength = this.mode === 'focus' ? 1.35 : this.mode === 'dawn' ? .55 : 1;
-    lights.lampLight.intensity = on ? 14 * strength : 0; lights.bulbMat.emissiveIntensity = on ? 3.2 * strength : 0;
+    lights.lampLight.intensity = on ? 7.5 * strength : 0; lights.bulbMat.emissiveIntensity = on ? 3.2 * strength : 0;
     if (!silent) toast(on ? 'Lamp on.' : 'Lamp off.', 1400);
   },
 };
@@ -1080,7 +1080,7 @@ function frame(now) {
   controls.update();
   if (!flight) { raycaster.setFromCamera(pointer, camera); setHover(raycaster.intersectObjects(interactive, false)[0]?.object || null); }
   // the bulb breathes very slightly; a perfectly constant light reads as fake
-  if (lights.lampLight && ambience.lamp) lights.lampLight.intensity = (14 * (ambience.mode === 'focus' ? 1.35 : ambience.mode === 'dawn' ? .55 : 1)) * (1 + Math.sin(now * .0021) * .012);
+  if (lights.lampLight && ambience.lamp) lights.lampLight.intensity = (7.5 * (ambience.mode === 'focus' ? 1.35 : ambience.mode === 'dawn' ? .55 : 1)) * (1 + Math.sin(now * .0021) * .012);
   placeLabels();
   composer ? composer.render() : renderer.render(scene, camera);
   last = now;
