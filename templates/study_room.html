@@ -285,6 +285,7 @@ import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
 import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
 import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
 import {GTAOPass} from 'three/addons/postprocessing/GTAOPass.js';
+import {BokehPass} from 'three/addons/postprocessing/BokehPass.js';
 
 /* =====================================================================
    0. Data, DOM, helpers
@@ -741,6 +742,62 @@ function glowTexture() {
   g.addColorStop(0, 'rgba(255,255,255,.9)'); g.addColorStop(.35, 'rgba(255,255,255,.25)'); g.addColorStop(1, 'rgba(255,255,255,0)');
   x.fillStyle = g; x.fillRect(0, 0, 128, 128); return c;
 }
+/* A monstera leaf, drawn as a silhouette with an alpha channel: the split
+   fronds are the whole reason these plants read as plants. A sphere scaled
+   flat, which is what the first version used, reads as a green pebble. */
+function leafTexture(kind) {
+  const [c, x] = makeCanvas(256, 340);
+  x.clearRect(0, 0, 256, 340);
+  const grad = x.createLinearGradient(0, 0, 0, 340);
+  grad.addColorStop(0, '#5C8A4E'); grad.addColorStop(.55, '#456F3C'); grad.addColorStop(1, '#2F5230');
+  x.fillStyle = grad;
+  x.beginPath();
+  if (kind === 'monstera') {
+    x.moveTo(128, 334);
+    x.bezierCurveTo(52, 300, 14, 210, 24, 120);
+    x.bezierCurveTo(34, 46, 86, 8, 128, 8);
+    x.bezierCurveTo(170, 8, 222, 46, 232, 120);
+    x.bezierCurveTo(242, 210, 204, 300, 128, 334);
+  } else {
+    x.moveTo(128, 336);
+    x.bezierCurveTo(64, 290, 40, 190, 60, 110);
+    x.bezierCurveTo(78, 40, 110, 6, 128, 6);
+    x.bezierCurveTo(146, 6, 178, 40, 196, 110);
+    x.bezierCurveTo(216, 190, 192, 290, 128, 336);
+  }
+  x.closePath(); x.fill();
+  if (kind === 'monstera') {   // the splits, cut back out of the leaf
+    x.globalCompositeOperation = 'destination-out';
+    for (let i = 0; i < 4; i++) {
+      const y = 70 + i * 62, len = 74 - i * 6;
+      for (const dir of [-1, 1]) {
+        x.beginPath(); x.moveTo(128 + dir * 16, y);
+        x.quadraticCurveTo(128 + dir * (16 + len * .7), y - 12, 128 + dir * (16 + len), y + 8);
+        x.quadraticCurveTo(128 + dir * (16 + len * .7), y + 22, 128 + dir * 16, y + 16);
+        x.closePath(); x.fill();
+      }
+    }
+    if (Math.random() < .5) { x.beginPath(); x.ellipse(128, 150, 13, 20, 0, 0, 7); x.fill(); }
+    x.globalCompositeOperation = 'source-over';
+  }
+  x.strokeStyle = 'rgba(28,54,30,.55)'; x.lineWidth = 4;
+  x.beginPath(); x.moveTo(128, 330); x.lineTo(128, 20); x.stroke();
+  x.lineWidth = 2; x.strokeStyle = 'rgba(28,54,30,.32)';
+  for (let i = 0; i < 9; i++) { const y = 46 + i * 31;
+    for (const dir of [-1, 1]) { x.beginPath(); x.moveTo(128, y + 22); x.quadraticCurveTo(128 + dir * 50, y + 6, 128 + dir * 96, y - 6); x.stroke(); } }
+  const sheen = x.createLinearGradient(60, 0, 200, 340);
+  sheen.addColorStop(0, 'rgba(255,255,255,.1)'); sheen.addColorStop(.5, 'rgba(255,255,255,0)');
+  x.globalCompositeOperation = 'source-atop'; x.fillStyle = sheen; x.fillRect(0, 0, 256, 340); x.globalCompositeOperation = 'source-over';
+  return c;
+}
+function labelTexture(lines, {bg = '#1B1815', fg = '#F2EDE2', accent = '#E8A94A', font = 'Archivo', size = 34} = {}) {
+  const [c, x] = makeCanvas(512, 512); x.scale(2, 2);
+  x.fillStyle = bg; x.fillRect(0, 0, 256, 256);
+  x.fillStyle = fg; x.textAlign = 'center';
+  lines.forEach((l, i) => { x.font = `${i ? 400 : 500} ${i ? size - 6 : size}px ${font}`; x.fillText(l, 128, 108 + i * (size + 8)); });
+  x.strokeStyle = accent; x.lineWidth = 2; x.beginPath(); x.moveTo(104, 188); x.lineTo(152, 188); x.stroke();
+  x.textAlign = 'left'; return c;
+}
 function paperLines(x, w, h, top, step, color) { x.strokeStyle = color; x.lineWidth = 1.5; for (let y = top; y < h - 20; y += step) { x.beginPath(); x.moveTo(40, y); x.lineTo(w - 40, y); x.stroke(); } }
 function wrap(x, text, px, py, maxW, lh, maxLines) {
   const words = String(text).split(' '); let line = '', lines = 0;
@@ -760,41 +817,85 @@ function liveTexture(w, h, draw) {
 }
 const dayName = iso => new Date(iso + 'T12:00:00').toLocaleDateString('en', {weekday: 'short'});
 function buildLiveTextures() {
-  textures.screen = liveTexture(1024, 600, (x, w, h) => {
-    const g = x.createLinearGradient(0, 0, w, h); g.addColorStop(0, '#15130F'); g.addColorStop(1, '#221D17');
-    x.fillStyle = g; x.fillRect(0, 0, w, h);
-    x.fillStyle = '#E8A94A'; x.font = '500 22px "JetBrains Mono"'; x.fillText('N E X O R A', 56, 58);
-    const now = new Date(); x.textAlign = 'right'; x.fillStyle = '#A9A297'; x.font = '500 26px "JetBrains Mono"'; x.fillText(`${pad(now.getHours())}${now.getSeconds() % 2 ? ' ' : ':'}${pad(now.getMinutes())}`, w - 56, 60); x.textAlign = 'left';
-    const day = planDay();
-    x.fillStyle = '#F5F2ED'; x.font = '300 60px Fraunces'; x.fillText(`${day.label}, ${D.first_name}.`, 56, 138);
-    x.fillStyle = '#A9A297'; x.font = '500 18px "JetBrains Mono"'; x.fillText(day.today ? 'PLAN' : `PLAN · ${day.label.toUpperCase()}`, 56, 200);
-    const open = day.blocks.filter(b => b.state !== 'skipped');
-    if (!open.length) { x.fillStyle = '#F5F2ED'; x.font = '400 28px Archivo'; x.fillText('No blocks planned.', 56, 250); x.fillStyle = '#A9A297'; x.font = '400 24px Archivo'; x.fillText('Build your week in Study plan.', 56, 290); }
-    open.slice(0, 4).forEach((b, i) => {
-      const y = 246 + i * 62, live = isLive(b, day) || (timer.block && timer.block.id === b.id && timer.running), done = b.state === 'done';
-      x.fillStyle = done ? '#7FB08A' : live ? '#E8A94A' : '#3A342D'; x.beginPath(); x.arc(66, y - 9, 7, 0, 7); x.fill();
-      x.fillStyle = '#A9A297'; x.font = '500 22px "JetBrains Mono"'; x.fillText(hhmm(b.start), 90, y);
-      const label = `${b.course} · ${b.title}`.slice(0, 34);
-      x.fillStyle = done ? '#A9A297' : '#F5F2ED'; x.font = '500 26px Archivo'; x.fillText(label, 178, y);
-      if (done) { x.strokeStyle = '#A9A297'; x.lineWidth = 2; x.beginPath(); x.moveTo(178, y - 9); x.lineTo(178 + x.measureText(label).width, y - 9); x.stroke(); }
+  /* The monitor, laid out like the reference: a rail of nav icons, a
+     greeting, today's list with real checkboxes, and the focus ring. It is
+     the focal point of the whole room, so it is drawn at 2x and redrawn
+     every second. */
+  textures.screen = liveTexture(1120, 630, (x, w, h) => {
+    const RAIL = 168, PAD = 40;
+    x.fillStyle = '#100E0C'; x.fillRect(0, 0, w, h);
+    const g = x.createLinearGradient(RAIL, 0, w, h); g.addColorStop(0, '#17140F'); g.addColorStop(1, '#221C15');
+    x.fillStyle = g; x.fillRect(RAIL, 0, w - RAIL, h);
+
+    /* --- the rail --- */
+    x.fillStyle = '#0B0A08'; x.fillRect(0, 0, RAIL, h);
+    x.fillStyle = '#E8A94A'; x.beginPath();                       // the mark
+    x.moveTo(30, 44); x.lineTo(44, 32); x.lineTo(58, 44); x.lineTo(58, 60); x.lineTo(30, 60); x.closePath(); x.fill();
+    x.fillStyle = '#100E0C'; x.fillRect(40, 48, 8, 12);
+    const items = [['Home', 1], ['Focus', 0], ['Tasks', 0], ['Plan', 0], ['Notes', 0], ['Stats', 0]];
+    items.forEach(([label, on], i) => {
+      const y = 108 + i * 46;
+      if (on) { x.fillStyle = 'rgba(232,169,74,.13)'; x.beginPath(); x.roundRect(14, y - 17, RAIL - 28, 34, 8); x.fill(); }
+      x.strokeStyle = on ? '#E8A94A' : '#6B6255'; x.lineWidth = 1.6;
+      x.beginPath(); x.roundRect(30, y - 7, 14, 14, 3); x.stroke();
+      x.fillStyle = on ? '#F5F2ED' : '#8A8275'; x.font = `${on ? 500 : 400} 17px Archivo`;
+      x.fillText(label, 58, y + 6);
     });
-    x.fillStyle = '#3A342D'; x.fillRect(660, 190, 1, 300);
-    if (timer.running || timer.left < timer.total) {
-      // the running block: a ring that fills as the minutes pass
-      const cx = 820, cy = 330, r = 92, frac = 1 - timer.left / timer.total;
-      x.fillStyle = '#A9A297'; x.font = '500 18px "JetBrains Mono"'; x.fillText(timer.block ? 'RUNNING' : 'FOCUS', 700, 200);
-      x.lineWidth = 12; x.strokeStyle = '#2A2621'; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.stroke();
-      x.strokeStyle = timer.running ? '#7FB08A' : '#E8A94A'; x.beginPath(); x.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2); x.stroke();
-      x.fillStyle = '#F5F2ED'; x.font = '500 44px "JetBrains Mono"'; x.textAlign = 'center'; x.fillText(timer.text(), cx, cy + 16); x.textAlign = 'left';
-      x.fillStyle = '#A9A297'; x.font = '400 20px Archivo'; wrap(x, timer.block ? `${timer.block.course} · ${timer.block.title}` : 'Focus sprint', 700, 455, 290, 24, 2);
-    } else {
-      x.fillStyle = '#A9A297'; x.font = '500 18px "JetBrains Mono"'; x.fillText('NEXT DEADLINE', 700, 200);
-      const d = D.deadlines[0];
-      if (d) { x.fillStyle = '#F5F2ED'; x.font = '300 40px Fraunces'; wrap(x, d.title, 700, 250, 290, 44, 3); x.fillStyle = '#E8A94A'; x.font = '500 22px "JetBrains Mono"'; x.fillText((d.status_label || d.due).toUpperCase(), 700, 400); x.fillStyle = '#A9A297'; x.font = '400 22px Archivo'; x.fillText(d.course, 700, 434); }
-      else { x.fillStyle = '#F5F2ED'; x.font = '300 34px Fraunces'; x.fillText('Nothing due.', 700, 250); }
+    x.fillStyle = '#3A342D'; x.fillRect(RAIL - 1, 0, 1, h);
+
+    /* --- the greeting --- */
+    const hr = new Date().getHours(), part = hr < 12 ? 'morning' : hr < 18 ? 'afternoon' : 'evening';
+    x.fillStyle = '#A9A297'; x.font = '300 34px Fraunces'; x.fillText(`Good ${part},`, RAIL + PAD, 76);
+    x.fillStyle = '#F5F2ED'; x.font = '300 46px Fraunces'; x.fillText(`${D.first_name}.`, RAIL + PAD, 122);
+    x.fillStyle = '#7E766B'; x.font = '400 19px Archivo'; x.fillText('Small steps. Big progress.', RAIL + PAD, 152);
+
+    /* --- today --- */
+    const day = planDay();
+    x.fillStyle = '#A9A297'; x.font = '500 15px "JetBrains Mono"'; x.fillText(day.today ? 'TODAY' : day.label.toUpperCase(), RAIL + PAD, 202);
+    const open = day.blocks.filter(b => b.state !== 'skipped').slice(0, 5);
+    if (!open.length) {
+      x.fillStyle = '#8A8275'; x.font = '400 20px Archivo'; x.fillText('Nothing planned.', RAIL + PAD, 244);
+      x.fillStyle = '#6B6255'; x.font = '400 17px Archivo'; x.fillText('Build your week in Study plan.', RAIL + PAD, 272);
     }
-    x.fillStyle = '#A9A297'; x.font = '400 20px Archivo'; x.fillText(`${D.tasks.length} open · ${D.deadlines.length} dated · ${D.courses.length} courses`, 56, h - 44);
-    if (now.getSeconds() % 2 === 0) { x.fillStyle = '#E8A94A'; x.fillRect(56 + x.measureText(`${D.tasks.length} open · ${D.deadlines.length} dated · ${D.courses.length} courses`).width + 10, h - 60, 10, 20); }   // a cursor, blinking
+    open.forEach((b, i) => {
+      const y = 242 + i * 40, done = b.state === 'done', live = isLive(b, day) || (timer.block && timer.block.id === b.id && timer.running);
+      x.strokeStyle = done ? '#7FB08A' : live ? '#E8A94A' : '#4A443C'; x.lineWidth = 1.8;
+      x.beginPath(); x.arc(RAIL + PAD + 9, y - 6, 9, 0, 7); x.stroke();
+      if (done) { x.strokeStyle = '#7FB08A'; x.lineWidth = 2.2; x.beginPath(); x.moveTo(RAIL + PAD + 4, y - 6); x.lineTo(RAIL + PAD + 8, y - 2); x.lineTo(RAIL + PAD + 15, y - 11); x.stroke(); }
+      const label = `${b.title}`.slice(0, 30);
+      x.fillStyle = done ? '#7E766B' : '#F5F2ED'; x.font = '400 20px Archivo';
+      x.fillText(label, RAIL + PAD + 30, y);
+      if (done) { x.strokeStyle = '#7E766B'; x.lineWidth = 1.4; x.beginPath(); x.moveTo(RAIL + PAD + 30, y - 6); x.lineTo(RAIL + PAD + 30 + x.measureText(label).width, y - 6); x.stroke(); }
+      x.fillStyle = '#6B6255'; x.font = '500 14px "JetBrains Mono"'; x.fillText(hhmm(b.start), RAIL + PAD + 30 + 320, y);
+    });
+
+    /* --- the focus ring --- */
+    const cx = w - 190, cy = 250, r = 86;
+    const running = timer.running || timer.left < timer.total;
+    const frac = running ? 1 - timer.left / timer.total : 0;
+    x.lineWidth = 11; x.strokeStyle = '#26221C'; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.stroke();
+    x.strokeStyle = timer.running ? '#7FB08A' : '#E8A94A'; x.lineCap = 'round';
+    x.beginPath(); x.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.max(.02, frac) * Math.PI * 2); x.stroke(); x.lineCap = 'butt';
+    x.textAlign = 'center';
+    x.fillStyle = '#F5F2ED'; x.font = '500 42px "JetBrains Mono"'; x.fillText(timer.text(), cx, cy + 12);
+    x.fillStyle = '#7E766B'; x.font = '400 17px Archivo'; x.fillText(running ? (timer.running ? 'Focus' : 'Paused') : 'Ready', cx, cy + 40);
+    x.textAlign = 'left';
+    // the quote above it
+    x.fillStyle = '#6B6255'; x.font = 'italic 300 19px Fraunces';
+    wrap(x, '"A focused mind builds a brighter you."', cx - 120, 96, 250, 26, 2);
+    // what the ring is counting
+    x.fillStyle = timer.running ? '#7FB08A' : '#6B6255'; x.beginPath(); x.arc(cx - 108, cy + 82, 5, 0, 7); x.fill();
+    x.fillStyle = '#8A8275'; x.font = '400 17px Archivo';
+    x.fillText(timer.block ? `${timer.block.course}`.slice(0, 22) : running ? 'Deep work' : 'Start a block', cx - 92, cy + 88);
+
+    /* --- the foot --- */
+    x.fillStyle = '#3A342D'; x.fillRect(RAIL + PAD, h - 66, w - RAIL - PAD * 2, 1);
+    x.fillStyle = '#6B6255'; x.font = '400 17px Archivo';
+    x.fillText(`${D.tasks.length} open · ${D.deadlines.length} dated · ${D.courses.length} courses`, RAIL + PAD, h - 34);
+    const d0 = D.deadlines[0];
+    if (d0) { x.textAlign = 'right'; x.fillStyle = '#E8A94A'; x.font = '500 14px "JetBrains Mono"';
+      x.fillText(`NEXT · ${(d0.status_label || d0.due).toUpperCase()} · ${d0.title.slice(0, 26).toUpperCase()}`, w - PAD, h - 34); x.textAlign = 'left'; }
+    if (new Date().getSeconds() % 2 === 0) { x.fillStyle = '#E8A94A'; x.fillRect(RAIL + PAD + x.measureText(`${D.tasks.length} open · ${D.deadlines.length} dated · ${D.courses.length} courses`).width + 9, h - 48, 9, 18); }
   });
   textures.notebook = liveTexture(512, 680, (x, w, h) => {
     x.fillStyle = '#EFE7D6'; x.fillRect(0, 0, w, h); paperLines(x, w, h, 120, 52, '#D8CDB4');
@@ -893,7 +994,7 @@ controls.minDistance = .6; controls.maxDistance = 5.2; controls.minPolarAngle = 
 controls.minAzimuthAngle = -1.9; controls.maxAzimuthAngle = 1.9; controls.rotateSpeed = .6; controls.zoomSpeed = .7;
 camera.position.set(...VIEW.entry.pos); controls.target.set(...VIEW.entry.look);
 
-let composer = null, bloom = null, gtao = null;
+let composer = null, bloom = null, gtao = null, bokeh = null;
 if (!isSmall) {
   // MSAA inside the post chain (a plain composer target has none), ambient
   // occlusion so things sit on surfaces instead of floating, then bloom.
@@ -905,15 +1006,22 @@ if (!isSmall) {
   gtao.updateGtaoMaterial({radius: .22, distanceExponent: 1, thickness: .6, scale: 1.1, samples: 12, distanceFallOff: 1, screenSpaceRadius: false});
   gtao.updatePdMaterial({lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 4, radiusExponent: 1, rings: 2, samples: 12});
   composer.addPass(gtao);
-  bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), .5, .65, 1.1);
-  composer.addPass(bloom); composer.addPass(new OutputPass());
+  bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), .55, .7, 1.45);
+  composer.addPass(bloom);
+  // A shallow focus on the desk. It is most of what separates a render from
+  // a screenshot: the foreground plant and the far wall go soft, the work
+  // stays sharp. The focus distance follows the camera, so it stays on
+  // whatever the view is pointed at rather than on a fixed plane.
+  bokeh = new BokehPass(scene, camera, {focus: 3.6, aperture: .0013, maxblur: .0085});
+  composer.addPass(bokeh);
+  composer.addPass(new OutputPass());
 }
 function resize() {
   const w = stage.clientWidth, h = stage.clientHeight;
   renderer.setSize(w, h, false); camera.aspect = w / h;
   camera.fov = h > w ? 74 : 54;   // upright, the vertical field would show a slit of desk; open it up
   camera.updateProjectionMatrix();
-  if (composer) { composer.setSize(w, h); gtao.setSize(w, h); bloom.resolution.set(w / 2, h / 2); }
+  if (composer) { composer.setSize(w, h); gtao.setSize(w, h); bloom.resolution.set(w / 2, h / 2); bokeh.setSize(w, h); }
 }
 addEventListener('resize', resize);
 
@@ -1031,7 +1139,7 @@ async function buildRoom() {
   mesh(rbox(.42, .022, .22, .01), dark, [.15, .776, -2.3]);
   mesh(rbox(.075, .34, .05, .014), dark, [.15, .95, -2.34]);
   const screenBody = tag(mesh(rbox(1.22, .72, .04, .015), dark, [.15, 1.27, -2.3]), 'screen'); screenBody.rotation.x = -.05;
-  const screenMat = M.std({map: textures.screen.tex, emissiveMap: textures.screen.tex, emissive: 0xffffff, emissiveIntensity: 1.25, roughness: .8, metalness: 0, envMapIntensity: .12});
+  const screenMat = new THREE.MeshBasicMaterial({map: textures.screen.tex, toneMapped: false});
   const screen = tag(mesh(new THREE.PlaneGeometry(1.15, .655), screenMat, [.15, 1.275, -2.279], {shadow: false, receive: false, name: 'screen'}), 'screen'); screen.rotation.x = -.05;
   anchors.screen = screen;
   const bar = new THREE.Group(); bar.position.set(.15, 1.63, -2.3); root.add(bar);      // monitor light bar
@@ -1087,7 +1195,7 @@ async function buildRoom() {
   /* desk clock: the focus timer */
   const clockBody = tag(mesh(rbox(.26, .14, .07, .018), M.std({color: 0x18160F, roughness: .28, metalness: .55}), [.96, .815, -2.28], {name: 'clock'}), 'clock');
   anchors.clock = clockBody;
-  tag(mesh(new THREE.PlaneGeometry(.22, .11), M.std({map: textures.clock.tex, emissiveMap: textures.clock.tex, emissive: 0xffffff, emissiveIntensity: 1.7, roughness: .2}), [.96, .82, -2.243], {shadow: false, receive: false, name: 'clock'}), 'clock');
+  tag(mesh(new THREE.PlaneGeometry(.22, .11), new THREE.MeshBasicMaterial({map: textures.clock.tex, toneMapped: false}), [.96, .82, -2.243], {shadow: false, receive: false, name: 'clock'}), 'clock');
 
   /* mug, with steam */
   const mugMat = M.std({color: 0x22201C, roughness: .35});
@@ -1095,6 +1203,7 @@ async function buildRoom() {
   mesh(new THREE.CylinderGeometry(.044, .044, .004, 40), M.std({color: 0x3A2618, roughness: .12}), [-.12, .877, -1.93], {shadow: false});
   mesh(new THREE.CylinderGeometry(.05, .05, .004, 40), mugMat, [-.12, .775, -1.93], {shadow: false});
   const handle = mesh(new THREE.TorusGeometry(.032, .008, 14, 32, Math.PI * 1.4), mugMat, [-.166, .83, -1.93]); handle.rotation.y = Math.PI / 2; handle.rotation.z = -.3;
+  mesh(new THREE.CylinderGeometry(.0505, .0505, .07, 40, 1, true), M.std({map: texFrom(labelTexture(['Better', 'Students', 'Brighter'], {bg: '#22201C', size: 30}), {repeat: [1, 1]}), roughness: .4, side: THREE.DoubleSide, transparent: true}), [-.12, .832, -1.93], {shadow: false});
   const glowTex = new THREE.CanvasTexture(glowTexture());
   motion.steam = [0, 1, 2].map(i => { const s = new THREE.Sprite(new THREE.SpriteMaterial({map: glowTex, color: 0xFFF3E0, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending})); s.scale.set(.05, .07, 1); s.userData.phase = i / 3; root.add(s); return s; });
 
@@ -1158,6 +1267,14 @@ async function buildRoom() {
   }
   mesh(new THREE.SphereGeometry(.07, 16, 12), M.std({color: 0x4E7343, roughness: .7}), [1.15, 2.08, -2.84], {shadow: false}).scale.set(1, .8, 1);
   mesh(new THREE.CylinderGeometry(.055, .045, .09, 20), M.std({color: 0xD8CFC0, roughness: .6}), [1.15, 2.05, -2.84]);
+  { const astro = new THREE.Group(); astro.position.set(.78, 2.005, -2.83); astro.rotation.y = -.4; root.add(astro);
+    const suit = M.std({color: 0xF2EDE4, roughness: .55});
+    mesh(new THREE.SphereGeometry(.036, 20, 14), suit, [0, .125, 0], {parent: astro});
+    mesh(new THREE.SphereGeometry(.03, 20, 14), M.std({color: 0x16181F, roughness: .18, metalness: .5}), [0, .125, .014], {parent: astro, shadow: false});
+    mesh(rbox(.056, .07, .042, .018), suit, [0, .06, 0], {parent: astro});
+    for (const sx of [-.042, .042]) mesh(new THREE.CapsuleGeometry(.014, .045, 6, 10), suit, [sx, .07, 0], {parent: astro}).rotation.z = sx > 0 ? -.5 : .5;
+    for (const sx of [-.018, .018]) mesh(new THREE.CapsuleGeometry(.015, .035, 6, 10), suit, [sx, .02, 0], {parent: astro});
+    mesh(new THREE.TorusGeometry(.02, .005, 8, 20), M.std({color: 0xE8A94A, roughness: .4, metalness: .4}), [0, .098, 0], {parent: astro}).rotation.x = Math.PI / 2; }
 
   /* ---------- the bookcase wall on the right, lit shelf by shelf ---------- */
   const caseWood = M.std({map: deskWood, normalMap: deskN, normalScale: new THREE.Vector2(.2, .2), roughness: .45, color: 0xBBA184});
@@ -1216,7 +1333,11 @@ async function buildRoom() {
     mesh(rbox(.32, .035, .24, .004), [pages, side, side, side, pages, side], [-.32, .875 + i * .035, 0], {parent: cab});
   });
   for (let i = 0; i < 5; i++) mesh(new THREE.CylinderGeometry(.004, .004, .3, 6), M.std({color: 0x6A5A46, roughness: .7}), [.42 + (i - 2) * .012, 1.0, .02 * (i % 2)], {parent: cab}).rotation.z = (i - 2) * .06;
+  // a reed diffuser, the way the reference dresses its cabinet
   mesh(new THREE.CylinderGeometry(.05, .06, .13, 20), M.std({color: 0x2E2820, roughness: .4, metalness: .35}), [.42, .905, 0], {parent: cab});
+  for (let i = 0; i < 6; i++) { const a = (i / 6) * 6.28;
+    const reed = mesh(new THREE.CylinderGeometry(.003, .003, .28, 6), M.std({color: 0xC9B48A, roughness: .8}), [.42 + Math.cos(a) * .02, 1.06, Math.sin(a) * .02], {parent: cab, shadow: false});
+    reed.rotation.z = Math.cos(a) * .22; reed.rotation.x = Math.sin(a) * .22; }
 
   /* ---------- corkboard on the right wall, above the cabinet ---------- */
   const cork = new THREE.Group(); cork.position.set(3.28, 1.72, -.85); cork.rotation.y = -Math.PI / 2; root.add(cork);
@@ -1260,19 +1381,23 @@ async function buildRoom() {
   mesh(new THREE.CylinderGeometry(.007, .007, .03, 10), M.std({color: 0x24201B, metalness: .6, roughness: .4}), [-1.95, 1.76, -2.985]);
 
   /* ---------- floor plants: a big one by the window, one in the corner ---------- */
-  function leafyPlant(pos, scale, leaves) {
+  const leafTex = {monstera: texFrom(leafTexture('monstera')), plain: texFrom(leafTexture('plain'))};
+  const leafMatFor = kind => M.std({map: leafTex[kind], transparent: true, alphaTest: .45, roughness: .55, side: THREE.DoubleSide, color: 0xE8E4D8});
+  function leafyPlant(pos, scale, leaves, kind = 'monstera') {
     const g = new THREE.Group(); g.position.set(...pos); g.scale.setScalar(scale); root.add(g);
-    mesh(new THREE.CylinderGeometry(.22, .17, .4, 32), M.std({color: 0x4A3628, roughness: .8}), [0, .2, 0], {parent: g});
-    mesh(new THREE.CylinderGeometry(.225, .215, .045, 32), M.std({color: 0x5A4232, roughness: .75}), [0, .39, 0], {parent: g});
-    mesh(new THREE.CylinderGeometry(.2, .2, .02, 32), M.std({color: 0x241C14, roughness: 1}), [0, .405, 0], {parent: g, shadow: false});
-    const leafMat = M.std({color: 0x4E7343, roughness: .62, side: THREE.DoubleSide});
+    // a woven basket pot, as in the reference
+    mesh(new THREE.CylinderGeometry(.23, .18, .42, 32), M.std({map: texFrom(fabricTexture('#6B5136'), {repeat: [4, 2]}), roughness: .92, color: 0xCCB89A}), [0, .21, 0], {parent: g});
+    mesh(new THREE.TorusGeometry(.228, .016, 10, 32), M.std({color: 0x8A6E4A, roughness: .85}), [0, .41, 0], {parent: g}).rotation.x = Math.PI / 2;
+    mesh(new THREE.CylinderGeometry(.205, .205, .02, 32), M.std({color: 0x241C14, roughness: 1}), [0, .4, 0], {parent: g, shadow: false});
+    const lm = leafMatFor(kind);
     for (let i = 0; i < leaves; i++) {
-      const a = (i / leaves) * Math.PI * 2 + Math.random() * .4, len = .55 + Math.random() * .6;
-      const stalk = new THREE.Group(); stalk.position.set(0, .405, 0); g.add(stalk);
-      const stem = mesh(new THREE.CylinderGeometry(.008, .013, len, 8), M.std({color: 0x3E6136, roughness: .7}), [Math.cos(a) * .05, len / 2, Math.sin(a) * .05], {parent: stalk});
-      stem.rotation.z = -Math.cos(a) * .5; stem.rotation.x = Math.sin(a) * .5;
-      const leaf = mesh(new THREE.SphereGeometry(.17, 18, 12), leafMat, [Math.cos(a) * (.05 + len * .5), len * .93, Math.sin(a) * (.05 + len * .5)], {parent: stalk});
-      leaf.scale.set(1, .15, .6); leaf.rotation.y = -a; leaf.rotation.z = .3 + Math.random() * .2;
+      const a = (i / leaves) * Math.PI * 2 + Math.random() * .5, len = .5 + Math.random() * .65;
+      const stalk = new THREE.Group(); stalk.position.set(0, .41, 0); stalk.rotation.y = -a; g.add(stalk);
+      const stem = mesh(new THREE.CylinderGeometry(.009, .015, len, 8), M.std({color: 0x3E6136, roughness: .7}), [0, len / 2, .05], {parent: stalk});
+      const lean = .3 + Math.random() * .45; stem.rotation.x = lean;
+      const size = .34 + Math.random() * .2;
+      const leaf = mesh(new THREE.PlaneGeometry(size, size * 1.3), lm, [0, len * .92, .05 + Math.sin(lean) * len * .6], {parent: stalk, shadow: false});
+      leaf.rotation.x = lean + .25; leaf.rotation.z = (Math.random() - .5) * .7;
       stalk.userData.phase = i; motion.plant.push(stalk);
     }
     return g;
@@ -1289,6 +1414,8 @@ async function buildRoom() {
   mesh(rbox(1.1, .62, .26, .12, 4), knitMat, [0, .62, -.42], {parent: sofa});
   for (const sx of [-.48, .48]) mesh(rbox(.2, .46, .9, .09, 4), knitMat, [sx, .48, 0], {parent: sofa});
   const cushion = mesh(rbox(.42, .42, .16, .07, 4), M.std({map: knit, roughness: .98, color: 0x8A7F70}), [-.18, .66, -.2], {parent: sofa}); cushion.rotation.z = .2; cushion.rotation.x = -.3;
+  const cushionFace = mesh(new THREE.PlaneGeometry(.3, .3), M.std({map: texFrom(labelTexture(['A Brighter', 'You'], {bg: '#3A332C', fg: '#E8C98A', size: 32, font: 'Fraunces'})), roughness: .95, transparent: true, color: 0xC8BCA8}), [-.18, .66, -.12], {parent: sofa, shadow: false});
+  cushionFace.rotation.z = .2; cushionFace.rotation.x = -.3;
   mesh(rbox(.72, .1, .5, .05, 4), M.std({map: texFrom(fabricTexture('#5A5148'), {repeat: [3, 3]}), roughness: .98, color: 0xA89C8C}), [.2, .56, .12], {parent: sofa}).rotation.z = -.06;
 
   /* a side table with a candle */
@@ -1462,6 +1589,8 @@ function animateRoom(now) {
     if (motion.candleLight) motion.candleLight.intensity = 1.8 * f; }
   // the phone lights up now and then
   if (motion.phone) motion.phone.material.emissiveIntensity = (Math.sin(t * .25) > .96) ? 1.6 : .3;
+  // the focus plane follows what the camera is looking at
+  if (bokeh) bokeh.uniforms.focus.value += (camera.position.distanceTo(controls.target) - bokeh.uniforms.focus.value) * .08;
   // once a second: the screen's clock and cursor, the desk clock's colon
   const sec = Math.floor(t); if (sec !== lastSecond) { lastSecond = sec; textures.screen.redraw(); if (timer.running) textures.clock.redraw(); }
   // idle: a slow drift, so the room never freezes into a screenshot

@@ -1504,6 +1504,31 @@ on the left with the week's plan as a wall planner (the route now sends a
 week of blocks), a bookcase in the corner. The overview camera looks in
 from the left so both side walls are in frame on a wide screen.
 
+**The monitor is the focal point, so it carries a real UI.** Laid out like
+the reference the owner sent: a rail of nav items, "Good evening, <name>.",
+today's blocks as circular checkboxes with their times, and the focus ring
+that fills as the clock runs. It is a `MeshBasicMaterial`, not a lit one --
+a screen emits and does not reflect the room, and as a standard material
+the lamp and the light bar landed on the white UI text and bloomed it into
+solid bars.
+
+**A leaf is a silhouette with holes in it.** The plants were flattened
+spheres, which read as green pebbles. `leafTexture('monstera')` draws the
+split-frond shape and cuts the splits back out with
+`destination-out`; the leaves are alpha-tested planes. That one change does
+more for "is this a real room" than any amount of extra polygons.
+
+**Depth of field is most of what separates a render from a screenshot.** A
+`BokehPass` after bloom, with the focus distance eased toward
+`camera.position.distanceTo(controls.target)` each frame, so it follows
+whatever the view is pointed at rather than sitting on a fixed plane.
+
+An exact match for an AI-generated reference image is not reachable in
+real-time WebGL -- that image has photographic focus, subsurface scattering
+through the leaves and woven fabric. What is reachable is the composition,
+the lighting scheme, the props and the UI, which is what these passes went
+after.
+
 Things that were found in the browser and are worth keeping:
 
 - **A screen must be matte.** A rough-.28 emissive plane under a 14 cd spot
