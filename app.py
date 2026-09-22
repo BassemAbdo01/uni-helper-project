@@ -4341,9 +4341,9 @@ def study_room():
     # records what actually happened, which is the fact the planner learns
     # from (see _learned_effort).
     today = _student_today(current_user)
-    # Today's blocks, and the next two days': at 23:50 with nothing left
-    # today, the screen shows tomorrow rather than "no plan".
-    horizon = (today + timedelta(days=2)).isoformat()
+    # A week of blocks: the screen shows today (or, at 23:50 with nothing
+    # left, tomorrow), and the whiteboard on the wall shows the week.
+    horizon = (today + timedelta(days=6)).isoformat()
     blocks = _sessions_json(StudySession.query.filter_by(user_id=current_user.id)
                             .filter(StudySession.on_date >= today.isoformat(), StudySession.on_date <= horizon)
                             .order_by(StudySession.on_date.asc(), StudySession.start_min.asc()).all())

@@ -1467,6 +1467,22 @@ left today it says "Tomorrow" rather than "no plan" -- the route sends
 today's blocks and the next two days', and `planDay()` picks. That is also
 why the page never says "Tonight" when it means tomorrow morning.
 
+**The first version was reported as "extremely poor quality" and "boring",
+and both were fair.** It rendered at 1.6x with no anti-aliasing inside the
+post chain, 1K textures across a whole desk, no ambient occlusion (things
+floated), and nothing moved. What changed: full device pixel ratio (to 2x),
+MSAA on the composer's own target (`samples: 4`, half-float), a `GTAOPass`
+before bloom, 2K wood with a normal map generated from the grain
+(`normalFrom`), every text surface drawn at 2x, and a room that breathes --
+dust in the two lights, steam off the mug, twinkling fairy lights and
+stars, the plant swaying, a blinking cursor and a live progress ring on the
+screen, a slow camera drift after four idle seconds, rain behind the glass
+when the rain sound is on. And more of the student's own data on the walls:
+a corkboard on the right wall with deadlines as sticky notes, a whiteboard
+on the left with the week's plan as a wall planner (the route now sends a
+week of blocks), a bookcase in the corner. The overview camera looks in
+from the left so both side walls are in frame on a wide screen.
+
 Things that were found in the browser and are worth keeping:
 
 - **A screen must be matte.** A rough-.28 emissive plane under a 14 cd spot
