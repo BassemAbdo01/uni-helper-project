@@ -1504,7 +1504,41 @@ on the left with the week's plan as a wall planner (the route now sends a
 week of blocks), a bookcase in the corner. The overview camera looks in
 from the left so both side walls are in frame on a wide screen.
 
-**The monitor is the focal point, so it carries a real UI.** Laid out like
+**The monitor is a screen, not a picture of one.** Its nav rail is
+clickable: the pointer handler reads `intersection.uv` off the screen plane,
+`railHit` maps that to a rail item, and the screen switches view -- Home,
+Focus, Tasks, Plan, Stats. A click that lands on the rail does not open the
+drawer, because that is not what clicking a screen does.
+
+**Stats is the room paying back what the clock recorded.** `_room_stats`
+reads `StudySession.actual_minutes`, which until now was written by Done
+and read only by `_learned_effort`: hours this week, a day streak, four
+weeks of sessions, a seven-day bar chart and a per-course split. Only
+finished sessions with a real duration count, the same rule the estimator
+follows, and **the streak does not break on a morning with nothing done
+yet** -- counting strictly back from today would read every morning as a
+lost streak. No other screen in Nexora tells a student what their week
+actually was.
+
+**Sharpness is supersampling, and DOF costs it.** The renderer draws at
+`devicePixelRatio x QUALITY[quality]` (Ultra 2.6, High 1.9, Battery 1.35)
+and lets the browser scale down -- on a 1432x900 window at High that is
+2720x1710 real pixels. The `BokehPass` had been set wide enough to soften
+the whole frame, which reads as low resolution rather than as focus; it is
+`aperture: .00035, maxblur: .0035` now, enough for the far wall and no
+more. The quality switch lives in Ambience and prints the numbers.
+
+**A room lit in one colour reads flat however bright it is.** The dusk
+through the window is a cool source (`cool`, `coolFill`) and the lamps and
+strips are warm; the contrast between them is what makes either read. Every
+mood carries a `coolI` alongside its warm values.
+
+**A test dates its fixtures on the student's clock**, via
+`_student_today`, not `date.today()`. The two differ across midnight and on
+any account whose timezone is not the server's, and three of these tests
+failed at 00:0x for a reason that had nothing to do with what they test.
+
+**The monitor carries a real UI.** Laid out like
 the reference the owner sent: a rail of nav items, "Good evening, <name>.",
 today's blocks as circular checkboxes with their times, and the focus ring
 that fills as the clock runs. It is a `MeshBasicMaterial`, not a lit one --

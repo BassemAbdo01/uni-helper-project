@@ -299,7 +299,9 @@ const hhmm = m => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const isSmall = matchMedia('(max-width: 900px)').matches;
 const COURSE_HUES = [0x8A5A2B, 0x3E5A4A, 0x6B3F3A, 0x3F4C6B, 0x5B4A6B, 0x6B6236, 0x2F5C63, 0x744B2E];
+const COURSE_HEX = ['#C9843F', '#5C8A6E', '#A85F55', '#5C719E', '#8A6FA0', '#A29A52', '#458C97', '#B0713F'];
 const textures = {};        // the live surfaces; filled once the room is built
+let maxAniso = () => 16;   // replaced once the renderer exists
 let flat = false;           // no WebGL: the same panels, laid out on the page
 
 let toastTimer = null;
@@ -453,15 +455,22 @@ const PANELS = {
           <div class="switch"><span>Desk lamp</span><button type="button" id="lampToggle" class="${ambience.lamp ? 'on' : ''}">${ambience.lamp ? 'On' : 'Off'}</button></div></div>
         <div class="sec"><h3>Sound</h3><p class="meta">Generated in the browser — nothing to download, nothing to buffer.</p>
           <div class="sounds" id="sounds">${[['off', 'Quiet'], ['rain', 'Rain'], ['brown', 'Brown noise']].map(([k, n]) => `<button type="button" data-sound="${k}" class="${sound.kind === k ? 'on' : ''}">${n}</button>`).join('')}</div></div>
+        <div class="sec"><h3>Render quality</h3><p class="meta">Ultra draws far more pixels than your screen has and scales them down, which is what makes edges look sharp. Drop it if the room stutters.</p>
+          <div class="sounds" id="quality">${[['ultra', 'Ultra'], ['high', 'High'], ['balanced', 'Battery']].map(([k, n]) => `<button type="button" data-quality="${k}" class="${quality === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+          <p class="meta" id="qualityNote" style="margin-top:8px"></p></div>
       </div>`;
     },
     bind(root) {
       root.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { ambience.setMode(b.dataset.mode); showPanel('lamp'); });
       root.querySelector('#lampToggle').onclick = () => { ambience.setLamp(!ambience.lamp); showPanel('lamp'); };
       root.querySelectorAll('[data-sound]').forEach(b => b.onclick = () => { sound.set(b.dataset.sound); showPanel('lamp'); });
+      root.querySelectorAll('[data-quality]').forEach(b => b.onclick = () => { setQuality(b.dataset.quality); showPanel('lamp'); });
+      const note = root.querySelector('#qualityNote');
+      if (note) note.textContent = `Drawing ${Math.round(stage.clientWidth * renderer.getPixelRatio())}x${Math.round(stage.clientHeight * renderer.getPixelRatio())} for a ${stage.clientWidth}x${stage.clientHeight} window.`;
     },
   },
 };
+let railHit = () => null, setScreenView = () => {};   // bound once the screen texture is built
 function showPanel(key) {
   const p = PANELS[key]; if (!p) return;
   if (flat) {   // re-render that card in place
@@ -594,7 +603,7 @@ if (!gl) {
 function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d', {willReadFrequently: true})]; }
 function texFrom(c, {repeat = [1, 1], srgb = true} = {}) {
   const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(...repeat);
-  if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 16; return t;
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = maxAniso(); return t;
 }
 function speckle(x, w, h, alpha) {
   const img = x.getImageData(0, 0, w, h), d = img.data;
@@ -811,91 +820,194 @@ function wrap(x, text, px, py, maxW, lh, maxLines) {
 
 /* live surfaces, drawn at 2x: redraw() whenever their data changes */
 function liveTexture(w, h, draw) {
-  const [c, x] = makeCanvas(w * 2, h * 2); x.scale(2, 2);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 16;
+  const SS = 2.5;   // the screen and the board are read close up
+  const [c, x] = makeCanvas(Math.round(w * SS), Math.round(h * SS)); x.scale(SS, SS);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = maxAniso();
   const o = {tex: t, redraw() { x.clearRect(0, 0, w, h); draw(x, w, h); t.needsUpdate = true; }}; o.redraw(); return o;
 }
 const dayName = iso => new Date(iso + 'T12:00:00').toLocaleDateString('en', {weekday: 'short'});
 function buildLiveTextures() {
-  /* The monitor, laid out like the reference: a rail of nav icons, a
-     greeting, today's list with real checkboxes, and the focus ring. It is
-     the focal point of the whole room, so it is drawn at 2x and redrawn
-     every second. */
-  textures.screen = liveTexture(1120, 630, (x, w, h) => {
-    const RAIL = 168, PAD = 40;
-    x.fillStyle = '#100E0C'; x.fillRect(0, 0, w, h);
-    const g = x.createLinearGradient(RAIL, 0, w, h); g.addColorStop(0, '#17140F'); g.addColorStop(1, '#221C15');
+  /* The monitor is a real interface, not a picture of one: the nav rail on
+     it is clickable (see the UV hit test in the pointer handler), so the
+     screen switches views in the room the way it would on a desk. */
+  const SCREEN_W = 1120, SCREEN_H = 630, RAIL = 168, PAD = 40;
+  const SCREEN_NAV = [['Home', 'home'], ['Focus', 'focus'], ['Tasks', 'tasks'], ['Plan', 'plan'], ['Stats', 'stats']];
+  railHit = uv => {                            // which rail item a click landed on, or null
+    const px = uv.x * SCREEN_W, py = (1 - uv.y) * SCREEN_H;
+    if (px > RAIL) return null;
+    const i = Math.round((py - 108) / 46);
+    return (i >= 0 && i < SCREEN_NAV.length && Math.abs(py - (108 + i * 46)) < 20) ? SCREEN_NAV[i][1] : null;
+  };
+  let screenView = 'home';
+  setScreenView = v => { screenView = v; textures.screen.redraw(); };
+
+  const hrs = m => m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ' ' + (m % 60) + 'm' : ''}` : `${m}m`;
+
+  textures.screen = liveTexture(SCREEN_W, SCREEN_H, (x, w, h) => {
+    x.fillStyle = '#0D0C0A'; x.fillRect(0, 0, w, h);
+    const g = x.createLinearGradient(RAIL, 0, w, h); g.addColorStop(0, '#16130F'); g.addColorStop(1, '#231D16');
     x.fillStyle = g; x.fillRect(RAIL, 0, w - RAIL, h);
 
     /* --- the rail --- */
-    x.fillStyle = '#0B0A08'; x.fillRect(0, 0, RAIL, h);
-    x.fillStyle = '#E8A94A'; x.beginPath();                       // the mark
+    x.fillStyle = '#090807'; x.fillRect(0, 0, RAIL, h);
+    x.fillStyle = '#E8A94A'; x.beginPath();
     x.moveTo(30, 44); x.lineTo(44, 32); x.lineTo(58, 44); x.lineTo(58, 60); x.lineTo(30, 60); x.closePath(); x.fill();
-    x.fillStyle = '#100E0C'; x.fillRect(40, 48, 8, 12);
-    const items = [['Home', 1], ['Focus', 0], ['Tasks', 0], ['Plan', 0], ['Notes', 0], ['Stats', 0]];
-    items.forEach(([label, on], i) => {
-      const y = 108 + i * 46;
-      if (on) { x.fillStyle = 'rgba(232,169,74,.13)'; x.beginPath(); x.roundRect(14, y - 17, RAIL - 28, 34, 8); x.fill(); }
+    x.fillStyle = '#0D0C0A'; x.fillRect(40, 48, 8, 12);
+    SCREEN_NAV.forEach(([label, key], i) => {
+      const y = 108 + i * 46, on = key === screenView;
+      if (on) { x.fillStyle = 'rgba(232,169,74,.15)'; x.beginPath(); x.roundRect(12, y - 17, RAIL - 24, 34, 8); x.fill();
+        x.fillStyle = '#E8A94A'; x.beginPath(); x.roundRect(12, y - 17, 3, 34, 2); x.fill(); }
       x.strokeStyle = on ? '#E8A94A' : '#6B6255'; x.lineWidth = 1.6;
-      x.beginPath(); x.roundRect(30, y - 7, 14, 14, 3); x.stroke();
+      x.beginPath(); x.roundRect(32, y - 7, 14, 14, 3); x.stroke();
       x.fillStyle = on ? '#F5F2ED' : '#8A8275'; x.font = `${on ? 500 : 400} 17px Archivo`;
-      x.fillText(label, 58, y + 6);
+      x.fillText(label, 60, y + 6);
     });
-    x.fillStyle = '#3A342D'; x.fillRect(RAIL - 1, 0, 1, h);
+    x.fillStyle = '#6B6255'; x.font = '400 13px "JetBrains Mono"'; x.fillText('CLICK TO SWITCH', 22, h - 26);
+    x.fillStyle = '#332E27'; x.fillRect(RAIL - 1, 0, 1, h);
 
-    /* --- the greeting --- */
+    const day = planDay(), S = D.stats;
+    const title = (a, b) => { x.fillStyle = '#A9A297'; x.font = '300 32px Fraunces'; x.fillText(a, RAIL + PAD, 74);
+                              x.fillStyle = '#F5F2ED'; x.font = '300 44px Fraunces'; x.fillText(b, RAIL + PAD, 118); };
+
+    if (screenView === 'stats') {
+      /* ---------- what the clock has actually recorded ---------- */
+      title('Your study,', 'measured.');
+      x.fillStyle = '#7E766B'; x.font = '400 18px Archivo'; x.fillText('Only blocks you really ran. Nothing estimated.', RAIL + PAD, 148);
+      const cards = [[hrs(S.week_minutes), 'THIS WEEK'], [String(S.streak), S.streak === 1 ? 'DAY STREAK' : 'DAY STREAK'], [String(S.sessions), 'SESSIONS · 4 WKS']];
+      cards.forEach(([big, small], i) => {
+        const cx = RAIL + PAD + i * 200;
+        x.fillStyle = '#1C1813'; x.beginPath(); x.roundRect(cx, 176, 184, 96, 10); x.fill();
+        x.strokeStyle = '#332E27'; x.lineWidth = 1; x.stroke();
+        x.fillStyle = '#F5F2ED'; x.font = '500 38px "JetBrains Mono"'; x.fillText(big, cx + 18, 226);
+        x.fillStyle = '#7E766B'; x.font = '500 12px "JetBrains Mono"'; x.fillText(small, cx + 18, 252);
+      });
+      // the week, as bars
+      x.fillStyle = '#A9A297'; x.font = '500 14px "JetBrains Mono"'; x.fillText('LAST 7 DAYS', RAIL + PAD, 312);
+      const top = Math.max(60, S.best), bx = RAIL + PAD, bw = 66, bh = 150, by = 486;
+      S.week.forEach((d, i) => {
+        const hgt = Math.max(3, (d.minutes / top) * bh), px = bx + i * bw;
+        x.fillStyle = '#1C1813'; x.beginPath(); x.roundRect(px, by - bh, 44, bh, 5); x.fill();
+        x.fillStyle = d.today ? '#E8A94A' : d.minutes ? '#7FB08A' : '#2A251F';
+        x.beginPath(); x.roundRect(px, by - hgt, 44, hgt, 5); x.fill();
+        x.fillStyle = d.today ? '#E8A94A' : '#7E766B'; x.font = '500 13px "JetBrains Mono"'; x.fillText(d.label, px + 17, by + 22);
+        if (d.minutes) { x.fillStyle = '#A9A297'; x.font = '500 12px "JetBrains Mono"'; x.fillText(hrs(d.minutes), px + 2, by - hgt - 8); }
+      });
+      // per course
+      x.fillStyle = '#A9A297'; x.font = '500 14px "JetBrains Mono"'; x.fillText('BY COURSE', w - 330, 312);
+      if (!S.courses.length) { x.fillStyle = '#6B6255'; x.font = '400 17px Archivo'; x.fillText('Run a block and it lands here.', w - 330, 346); }
+      S.courses.forEach((c, i) => {
+        const y = 348 + i * 34, frac = c.minutes / (S.courses[0].minutes || 1);
+        x.fillStyle = '#F5F2ED'; x.font = '400 16px Archivo'; x.fillText(c.course.slice(0, 12), w - 330, y);
+        x.fillStyle = '#231D16'; x.beginPath(); x.roundRect(w - 200, y - 12, 150, 8, 4); x.fill();
+        x.fillStyle = COURSE_HEX[i % COURSE_HEX.length]; x.beginPath(); x.roundRect(w - 200, y - 12, Math.max(6, 150 * frac), 8, 4); x.fill();
+        x.fillStyle = '#7E766B'; x.font = '500 13px "JetBrains Mono"'; x.fillText(hrs(c.minutes), w - 200, y + 8);
+      });
+      return;
+    }
+
+    if (screenView === 'plan') {
+      /* ---------- the week ---------- */
+      title('This week,', `${Math.round(D.blocks.filter(b => b.state !== 'skipped').reduce((s, b) => s + b.minutes, 0) / 60)} hours planned.`);
+      const days = [];
+      for (let i = 0; i < 7; i++) { const dt = new Date(D.today + 'T12:00:00'); dt.setDate(dt.getDate() + i); days.push(dt.toISOString().slice(0, 10)); }
+      const colW = (w - RAIL - PAD * 2) / 7;
+      days.forEach((iso, i) => {
+        const cx = RAIL + PAD + i * colW;
+        if (i === 0) { x.fillStyle = 'rgba(232,169,74,.1)'; x.beginPath(); x.roundRect(cx, 170, colW - 8, 400, 8); x.fill(); }
+        x.fillStyle = i === 0 ? '#E8A94A' : '#7E766B'; x.font = '500 14px "JetBrains Mono"'; x.fillText(dayName(iso).toUpperCase(), cx + 10, 194);
+        x.fillStyle = '#F5F2ED'; x.font = '400 20px Archivo'; x.fillText(String(+iso.slice(8)), cx + 10, 220);
+        D.blocks.filter(b => b.date === iso && b.state !== 'skipped').slice(0, 5).forEach((b, k) => {
+          const y = 244 + k * 62, ci = Math.max(0, D.courses.findIndex(c => c.code === b.course));
+          x.fillStyle = COURSE_HEX[ci % COURSE_HEX.length]; x.globalAlpha = b.state === 'done' ? .4 : .9;
+          x.beginPath(); x.roundRect(cx + 6, y, colW - 20, 52, 6); x.fill(); x.globalAlpha = 1;
+          x.fillStyle = '#12100D'; x.font = '500 13px "JetBrains Mono"'; x.fillText(hhmm(b.start), cx + 14, y + 20);
+          x.font = '500 13px Archivo'; x.fillText(String(b.course).slice(0, 10), cx + 14, y + 38);
+        });
+      });
+      if (!D.blocks.length) { x.fillStyle = '#6B6255'; x.font = '400 22px Archivo'; x.fillText('Nothing planned — build your week in Study plan.', RAIL + PAD, 260); }
+      return;
+    }
+
+    if (screenView === 'tasks') {
+      /* ---------- everything open ---------- */
+      title('Open work,', `${D.tasks.length} ${D.tasks.length === 1 ? 'thing' : 'things'}.`);
+      if (!D.tasks.length) { x.fillStyle = '#6B6255'; x.font = '400 20px Archivo'; x.fillText('Nothing open. Connect Brightspace to pull your deadlines in.', RAIL + PAD, 180); return; }
+      D.tasks.slice(0, 10).forEach((t, i) => {
+        const y = 182 + i * 42, col = i > 4 ? 1 : 0;
+        const px = RAIL + PAD + col * 440, py = 182 + (i % 5) * 42;
+        x.strokeStyle = t.completed ? '#7FB08A' : '#4A443C'; x.lineWidth = 1.8;
+        x.beginPath(); x.arc(px + 9, py - 6, 9, 0, 7); x.stroke();
+        if (t.completed) { x.strokeStyle = '#7FB08A'; x.lineWidth = 2.2; x.beginPath(); x.moveTo(px + 4, py - 6); x.lineTo(px + 8, py - 2); x.lineTo(px + 15, py - 11); x.stroke(); }
+        x.fillStyle = t.completed ? '#6B6255' : '#F5F2ED'; x.font = '400 18px Archivo'; x.fillText(String(t.title).slice(0, 26), px + 30, py);
+        x.fillStyle = '#6B6255'; x.font = '500 12px "JetBrains Mono"'; x.fillText(`${t.course} · ${t.due}`.slice(0, 30), px + 30, py + 17);
+      });
+      return;
+    }
+
+    if (screenView === 'focus') {
+      /* ---------- the clock, full screen ---------- */
+      title('Focus.', timer.block ? `${timer.block.course}` : 'Pick a block, or just start.');
+      const cx = RAIL + (w - RAIL) / 2, cy = 380, r = 140;
+      const running = timer.running || timer.left < timer.total, frac = running ? 1 - timer.left / timer.total : 0;
+      x.lineWidth = 16; x.strokeStyle = '#231D16'; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.stroke();
+      x.strokeStyle = timer.running ? '#7FB08A' : '#E8A94A'; x.lineCap = 'round';
+      x.beginPath(); x.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.max(.02, frac) * Math.PI * 2); x.stroke(); x.lineCap = 'butt';
+      x.textAlign = 'center';
+      x.fillStyle = '#F5F2ED'; x.font = '500 76px "JetBrains Mono"'; x.fillText(timer.text(), cx, cy + 22);
+      x.fillStyle = '#7E766B'; x.font = '400 20px Archivo'; x.fillText(timer.running ? 'Running' : running ? 'Paused' : 'Ready', cx, cy + 58);
+      if (timer.block) { x.fillStyle = '#A9A297'; x.font = '400 20px Archivo'; wrap(x, timer.block.title, cx, cy + 200, 460, 26, 2); }
+      x.textAlign = 'left';
+      return;
+    }
+
+    /* ---------- home ---------- */
     const hr = new Date().getHours(), part = hr < 12 ? 'morning' : hr < 18 ? 'afternoon' : 'evening';
-    x.fillStyle = '#A9A297'; x.font = '300 34px Fraunces'; x.fillText(`Good ${part},`, RAIL + PAD, 76);
-    x.fillStyle = '#F5F2ED'; x.font = '300 46px Fraunces'; x.fillText(`${D.first_name}.`, RAIL + PAD, 122);
-    x.fillStyle = '#7E766B'; x.font = '400 19px Archivo'; x.fillText('Small steps. Big progress.', RAIL + PAD, 152);
-
-    /* --- today --- */
-    const day = planDay();
-    x.fillStyle = '#A9A297'; x.font = '500 15px "JetBrains Mono"'; x.fillText(day.today ? 'TODAY' : day.label.toUpperCase(), RAIL + PAD, 202);
+    title(`Good ${part},`, `${D.first_name}.`);
+    x.fillStyle = '#7E766B'; x.font = '400 19px Archivo'; x.fillText('Small steps. Big progress.', RAIL + PAD, 150);
+    x.fillStyle = '#A9A297'; x.font = '500 15px "JetBrains Mono"'; x.fillText(day.today ? 'TODAY' : day.label.toUpperCase(), RAIL + PAD, 200);
     const open = day.blocks.filter(b => b.state !== 'skipped').slice(0, 5);
     if (!open.length) {
-      x.fillStyle = '#8A8275'; x.font = '400 20px Archivo'; x.fillText('Nothing planned.', RAIL + PAD, 244);
-      x.fillStyle = '#6B6255'; x.font = '400 17px Archivo'; x.fillText('Build your week in Study plan.', RAIL + PAD, 272);
+      x.fillStyle = '#8A8275'; x.font = '400 20px Archivo'; x.fillText('Nothing planned.', RAIL + PAD, 242);
+      x.fillStyle = '#6B6255'; x.font = '400 17px Archivo'; x.fillText('Build your week in Study plan.', RAIL + PAD, 270);
     }
     open.forEach((b, i) => {
-      const y = 242 + i * 40, done = b.state === 'done', live = isLive(b, day) || (timer.block && timer.block.id === b.id && timer.running);
+      const y = 240 + i * 40, done = b.state === 'done', live = isLive(b, day) || (timer.block && timer.block.id === b.id && timer.running);
       x.strokeStyle = done ? '#7FB08A' : live ? '#E8A94A' : '#4A443C'; x.lineWidth = 1.8;
       x.beginPath(); x.arc(RAIL + PAD + 9, y - 6, 9, 0, 7); x.stroke();
       if (done) { x.strokeStyle = '#7FB08A'; x.lineWidth = 2.2; x.beginPath(); x.moveTo(RAIL + PAD + 4, y - 6); x.lineTo(RAIL + PAD + 8, y - 2); x.lineTo(RAIL + PAD + 15, y - 11); x.stroke(); }
-      const label = `${b.title}`.slice(0, 30);
-      x.fillStyle = done ? '#7E766B' : '#F5F2ED'; x.font = '400 20px Archivo';
-      x.fillText(label, RAIL + PAD + 30, y);
-      if (done) { x.strokeStyle = '#7E766B'; x.lineWidth = 1.4; x.beginPath(); x.moveTo(RAIL + PAD + 30, y - 6); x.lineTo(RAIL + PAD + 30 + x.measureText(label).width, y - 6); x.stroke(); }
-      x.fillStyle = '#6B6255'; x.font = '500 14px "JetBrains Mono"'; x.fillText(hhmm(b.start), RAIL + PAD + 30 + 320, y);
+      const label = String(b.title).slice(0, 28);
+      x.fillStyle = done ? '#6B6255' : '#F5F2ED'; x.font = '400 20px Archivo'; x.fillText(label, RAIL + PAD + 30, y);
+      if (done) { x.strokeStyle = '#6B6255'; x.lineWidth = 1.4; x.beginPath(); x.moveTo(RAIL + PAD + 30, y - 6); x.lineTo(RAIL + PAD + 30 + x.measureText(label).width, y - 6); x.stroke(); }
+      x.fillStyle = '#6B6255'; x.font = '500 14px "JetBrains Mono"'; x.fillText(hhmm(b.start), RAIL + PAD + 350, y);
     });
 
-    /* --- the focus ring --- */
-    const cx = w - 190, cy = 250, r = 86;
-    const running = timer.running || timer.left < timer.total;
-    const frac = running ? 1 - timer.left / timer.total : 0;
-    x.lineWidth = 11; x.strokeStyle = '#26221C'; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.stroke();
+    const cx = w - 190, cy = 256, r = 86;
+    const running = timer.running || timer.left < timer.total, frac = running ? 1 - timer.left / timer.total : 0;
+    x.lineWidth = 11; x.strokeStyle = '#231D16'; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.stroke();
     x.strokeStyle = timer.running ? '#7FB08A' : '#E8A94A'; x.lineCap = 'round';
     x.beginPath(); x.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.max(.02, frac) * Math.PI * 2); x.stroke(); x.lineCap = 'butt';
     x.textAlign = 'center';
     x.fillStyle = '#F5F2ED'; x.font = '500 42px "JetBrains Mono"'; x.fillText(timer.text(), cx, cy + 12);
-    x.fillStyle = '#7E766B'; x.font = '400 17px Archivo'; x.fillText(running ? (timer.running ? 'Focus' : 'Paused') : 'Ready', cx, cy + 40);
+    x.fillStyle = '#7E766B'; x.font = '400 17px Archivo'; x.fillText(timer.running ? 'Focus' : running ? 'Paused' : 'Ready', cx, cy + 40);
     x.textAlign = 'left';
-    // the quote above it
-    x.fillStyle = '#6B6255'; x.font = 'italic 300 19px Fraunces';
-    wrap(x, '"A focused mind builds a brighter you."', cx - 120, 96, 250, 26, 2);
-    // what the ring is counting
-    x.fillStyle = timer.running ? '#7FB08A' : '#6B6255'; x.beginPath(); x.arc(cx - 108, cy + 82, 5, 0, 7); x.fill();
+    x.fillStyle = '#5E574D'; x.font = 'italic 300 18px Fraunces';
+    wrap(x, '"A focused mind builds a brighter you."', cx - 118, 104, 240, 24, 2);
+    x.fillStyle = timer.running ? '#7FB08A' : '#5E574D'; x.beginPath(); x.arc(cx - 106, cy + 82, 5, 0, 7); x.fill();
     x.fillStyle = '#8A8275'; x.font = '400 17px Archivo';
-    x.fillText(timer.block ? `${timer.block.course}`.slice(0, 22) : running ? 'Deep work' : 'Start a block', cx - 92, cy + 88);
+    x.fillText(timer.block ? String(timer.block.course).slice(0, 20) : running ? 'Deep work' : 'Start a block', cx - 90, cy + 88);
 
-    /* --- the foot --- */
-    x.fillStyle = '#3A342D'; x.fillRect(RAIL + PAD, h - 66, w - RAIL - PAD * 2, 1);
-    x.fillStyle = '#6B6255'; x.font = '400 17px Archivo';
-    x.fillText(`${D.tasks.length} open · ${D.deadlines.length} dated · ${D.courses.length} courses`, RAIL + PAD, h - 34);
-    const d0 = D.deadlines[0];
-    if (d0) { x.textAlign = 'right'; x.fillStyle = '#E8A94A'; x.font = '500 14px "JetBrains Mono"';
-      x.fillText(`NEXT · ${(d0.status_label || d0.due).toUpperCase()} · ${d0.title.slice(0, 26).toUpperCase()}`, w - PAD, h - 34); x.textAlign = 'left'; }
-    if (new Date().getSeconds() % 2 === 0) { x.fillStyle = '#E8A94A'; x.fillRect(RAIL + PAD + x.measureText(`${D.tasks.length} open · ${D.deadlines.length} dated · ${D.courses.length} courses`).width + 9, h - 48, 9, 18); }
+    // a week strip along the foot, from what the clock recorded
+    const S2 = D.stats, top = Math.max(45, S2.best);
+    x.fillStyle = '#332E27'; x.fillRect(RAIL + PAD, h - 92, w - RAIL - PAD * 2, 1);
+    x.fillStyle = '#6B6255'; x.font = '500 12px "JetBrains Mono"';
+    x.fillText(`THIS WEEK ${hrs(S2.week_minutes)}${S2.streak ? '  ·  ' + S2.streak + ' DAY STREAK' : ''}`, RAIL + PAD, h - 66);
+    S2.week.forEach((d, i) => {
+      const px = RAIL + PAD + i * 26, hgt = Math.max(2, (d.minutes / top) * 30);
+      x.fillStyle = d.today ? '#E8A94A' : d.minutes ? '#7FB08A' : '#2A251F';
+      x.beginPath(); x.roundRect(px, h - 28 - hgt, 17, hgt, 3); x.fill();
+    });
+    x.fillStyle = '#6B6255'; x.font = '400 16px Archivo';
+    x.textAlign = 'right'; x.fillText(`${D.tasks.length} open · ${D.deadlines.length} dated · ${D.courses.length} courses`, w - PAD, h - 34); x.textAlign = 'left';
   });
   textures.notebook = liveTexture(512, 680, (x, w, h) => {
     x.fillStyle = '#EFE7D6'; x.fillRect(0, 0, w, h); paperLines(x, w, h, 120, 52, '#D8CDB4');
@@ -966,8 +1078,13 @@ function buildLiveTextures() {
 /* =====================================================================
    6. Renderer, scene, camera, post-processing
    ===================================================================== */
+const QUALITY = {ultra: 2.6, high: 1.9, balanced: 1.35};
+let quality = localStorage.getItem('nexora-room-quality') || (isSmall ? 'balanced' : 'high');
+if (!QUALITY[quality]) quality = 'high';
+const pixelRatio = () => Math.min(devicePixelRatio * QUALITY[quality], isSmall ? 2.2 : 3);
 const renderer = new THREE.WebGLRenderer({canvas, antialias: isSmall, powerPreference: 'high-performance'});
-renderer.setPixelRatio(Math.min(devicePixelRatio, isSmall ? 1.5 : 2));
+renderer.setPixelRatio(pixelRatio());
+maxAniso = () => renderer.capabilities.getMaxAnisotropy();
 renderer.shadowMap.enabled = !isSmall; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0B0A09); scene.fog = new THREE.FogExp2(0x0B0A09, .04);
@@ -1012,7 +1129,7 @@ if (!isSmall) {
   // a screenshot: the foreground plant and the far wall go soft, the work
   // stays sharp. The focus distance follows the camera, so it stays on
   // whatever the view is pointed at rather than on a fixed plane.
-  bokeh = new BokehPass(scene, camera, {focus: 3.6, aperture: .0013, maxblur: .0085});
+  bokeh = new BokehPass(scene, camera, {focus: 3.6, aperture: .00035, maxblur: .0035});
   composer.addPass(bokeh);
   composer.addPass(new OutputPass());
 }
@@ -1445,15 +1562,19 @@ async function buildRoom() {
     dust.userData.seeds = seeds; root.add(dust); motion.dust = dust; }
 
   /* ---------- the light the room is actually lit by ---------- */
-  scene.add(new THREE.HemisphereLight(0x7A6C58, 0x3A2C1E, .72));
+  scene.add(new THREE.HemisphereLight(0x5E6478, 0x3A2C1E, .55));
+  // the cool half: sky light spilling through the window, which is what the
+  // warm lamps read as warm against. Without it everything is one amber wash.
+  const cool = new THREE.PointLight(0x7FA0D8, 2.6, 6.5, 2); cool.position.set(-2.0, 1.7, -2.4); scene.add(cool);
+  const coolFill = new THREE.PointLight(0x6E86B8, 1.1, 7, 2); coolFill.position.set(-1.4, 2.3, -.6); scene.add(coolFill);
   const moon = new THREE.DirectionalLight(0xFFB183, 1.5);   // the sunset through the window
   moon.position.set(-4.2, 2.6, -6.5); moon.target.position.set(-.6, .8, -1.2);
   moon.castShadow = !isSmall; moon.shadow.mapSize.set(2048, 2048);
   moon.shadow.camera.left = moon.shadow.camera.bottom = -4; moon.shadow.camera.right = moon.shadow.camera.top = 4;
   moon.shadow.camera.near = .5; moon.shadow.camera.far = 14; moon.shadow.bias = -.0006; moon.shadow.normalBias = .02;
   scene.add(moon, moon.target);
-  const fill = new THREE.PointLight(0x8A7256, 1.1, 9, 1.7); fill.position.set(.4, 2.2, .3); scene.add(fill);
-  Object.assign(lights, {moon, lampLight, bulbMat, screenGlow, fill, barLight,
+  const fill = new THREE.PointLight(0x8A7256, .9, 9, 1.8); fill.position.set(.4, 2.2, .3); scene.add(fill);
+  Object.assign(lights, {moon, lampLight, bulbMat, screenGlow, fill, barLight, cool, coolFill,
                          strips: [deskUnder, shelfGlow, caseGlow], accents: [corkGlow, boardGlow, candleLight]});
 }
 
@@ -1464,11 +1585,12 @@ const ambience = {
   mode: localStorage.getItem('nexora-room-mode') || 'evening', lamp: localStorage.getItem('nexora-room-lamp') !== '0',
   setMode(mode) {
     this.mode = mode; localStorage.setItem('nexora-room-mode', mode);
-    const {moon, screenGlow, fill, barLight, strips, accents, orbs} = lights, sky = root.userData.skyMat;
+    const {moon, screenGlow, fill, barLight, strips, accents, orbs, cool, coolFill} = lights, sky = root.userData.skyMat;
     // The LED strips and the orbs stay lit in every mood: they are what make
     // the room read as a room rather than a void, which was the whole
     // complaint about the first two versions.
-    const set = ({sun, sunC, exposure, glow, fog, skyT, skyI, fillI, strip, accent, bar}) => {
+    const set = ({sun, sunC, exposure, glow, fog, skyT, skyI, fillI, strip, accent, bar, coolI = 1}) => {
+      cool.intensity = 2.6 * coolI; coolFill.intensity = 1.1 * coolI;
       moon.intensity = sun; moon.color.set(sunC); renderer.toneMappingExposure = exposure;
       screenGlow.intensity = glow; scene.fog.density = fog; fill.intensity = fillI;
       sky.map = sky.emissiveMap = textures.sky[skyT]; sky.emissiveIntensity = skyI; sky.userData.base = skyI; sky.needsUpdate = true;
@@ -1477,10 +1599,10 @@ const ambience = {
       orbs.forEach(o => { o.light.intensity = 2.6 * accent; o.orb.emissiveIntensity = 2.4 * Math.max(.6, accent); });
       barLight.intensity = 5 * bar;
     };
-    if (mode === 'night')      set({sun: .55, sunC: 0x8FA8F0, exposure: 1.02, glow: 1.1, fog: .045, skyT: 'night', skyI: 1.1, fillI: .6, strip: 1.1, accent: 1.1, bar: .9});
-    else if (mode === 'focus') set({sun: .3, sunC: 0x8FA8F0, exposure: .9, glow: 1.6, fog: .055, skyT: 'night', skyI: .7, fillI: .35, strip: .55, accent: .5, bar: 1.3});
-    else if (mode === 'dawn')  set({sun: 2.6, sunC: 0xFFC08A, exposure: 1.18, glow: .6, fog: .022, skyT: 'dawn', skyI: 1.2, fillI: 1.5, strip: .5, accent: .5, bar: .5});
-    else                       set({sun: 1.7, sunC: 0xFFB183, exposure: 1.16, glow: 1.2, fog: .028, skyT: 'dusk', skyI: 1.3, fillI: 1.3, strip: 1.15, accent: 1.15, bar: 1.15});
+    if (mode === 'night')      set({sun: .55, sunC: 0x8FA8F0, exposure: 1.0, glow: 1.1, fog: .045, skyT: 'night', skyI: 1.1, fillI: .5, strip: 1.1, accent: 1.1, bar: .9, coolI: 1.25});
+    else if (mode === 'focus') set({sun: .3, sunC: 0x8FA8F0, exposure: .9, glow: 1.6, fog: .055, skyT: 'night', skyI: .7, fillI: .3, strip: .55, accent: .5, bar: 1.3, coolI: .55});
+    else if (mode === 'dawn')  set({sun: 2.6, sunC: 0xFFC08A, exposure: 1.18, glow: .6, fog: .022, skyT: 'dawn', skyI: 1.2, fillI: 1.3, strip: .5, accent: .5, bar: .5, coolI: .5});
+    else                       set({sun: 1.7, sunC: 0xFFB183, exposure: 1.1, glow: 1.2, fog: .026, skyT: 'dusk', skyI: 1.35, fillI: .9, strip: 1.15, accent: 1.15, bar: 1.15, coolI: 1});
     this.setLamp(this.lamp, true);
   },
   lampStrength() { return this.mode === 'focus' ? 1.35 : this.mode === 'dawn' ? .6 : 1; },
@@ -1511,6 +1633,12 @@ function stepFlight(now) {
 const overview = () => stage.clientHeight > stage.clientWidth ? VIEW.portrait : VIEW.overview;
 function focus(key) { flyTo(VIEW[key] || overview(), 850); }
 $('resetView').onclick = () => { closeDrawer(); flyTo(overview(), 850); };
+function setQuality(q) {
+  if (!QUALITY[q]) return;
+  quality = q; localStorage.setItem('nexora-room-quality', q);
+  renderer.setPixelRatio(pixelRatio()); resize();
+  toast(`Render quality: ${q}.`, 1600);
+}
 const PANEL_FOR = {cork: 'calendar', board: 'screen'};   // objects that open an existing panel
 function openKey(key) { focus(key); showPanel(PANEL_FOR[key] || key); }
 
@@ -1545,7 +1673,14 @@ renderer.domElement.addEventListener('pointerup', e => {
   const r = renderer.domElement.getBoundingClientRect();
   pointer.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  const hit = raycaster.intersectObjects(interactive, false)[0]?.object;
+  const first = raycaster.intersectObjects(interactive, false)[0];
+  const hit = first?.object;
+  // the monitor's own nav rail: a click on it switches what the screen shows
+  // rather than opening the drawer, because that is what a screen does.
+  if (hit && hit.userData.key === 'screen' && first.uv) {
+    const view = railHit(first.uv);
+    if (view) { setScreenView(view); if (view === 'focus') showPanel('clock'); return; }
+  }
   if (hit) openKey(hit.userData.key);
 });
 const v3 = new THREE.Vector3();
@@ -1619,7 +1754,7 @@ buildRoom().then(() => {
   if (wantedSound !== 'off') renderer.domElement.addEventListener('pointerdown', () => startSound(wantedSound), {once: true});
   const origSet = sound.set.bind(sound); sound.set = k => { origSet(k); ambience.setRain(k === 'rain'); };
   requestAnimationFrame(frame);
-  window.__room = {renderer, scene, camera, timer, ambience, sound, textures, motion};   // for checks from the console
+  window.__room = {renderer, scene, camera, timer, ambience, sound, textures, motion, raycaster, interactive, railHit, setQuality, setScreenView: v => setScreenView(v)};   // for checks from the console
   $('loading').classList.add('hide');
   flyTo(overview(), reducedMotion ? 1 : 2200);
   setInterval(() => { const n = new Date(); D.now_min = n.getHours() * 60 + n.getMinutes(); textures.screen.redraw(); textures.board.redraw(); nextLine(); }, 30000);

@@ -4295,6 +4295,51 @@ def home():
 
 
 
+def _room_stats(user, today):
+    """What this student has actually done, from the sessions the room's own
+    clock recorded. `actual_minutes` was written by Done and read by nothing
+    outside the estimator; this is the other thing it is good for -- telling
+    a student what their week really looked like, which no other screen does.
+
+    Only finished sessions with a real duration count. A session marked done
+    with no minutes recorded is not evidence of anything, the same rule
+    `_learned_effort` follows.
+    """
+    since = today - timedelta(days=27)
+    rows = (StudySession.query.filter_by(user_id=user.id, state="done")
+            .filter(StudySession.on_date >= since.isoformat(),
+                    StudySession.on_date <= today.isoformat()).all())
+    by_day, by_course = {}, {}
+    for row in rows:
+        minutes = int(row.actual_minutes or 0)
+        if minutes <= 0:
+            continue
+        by_day[row.on_date] = by_day.get(row.on_date, 0) + minutes
+        code = row.course_full or "OTHER"
+        by_course[code] = by_course.get(code, 0) + minutes
+    week = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+    # A streak counts back from today, and today not being done yet does not
+    # break it -- otherwise every morning reads as a lost streak.
+    streak = 0
+    day = today
+    if not by_day.get(day.isoformat()):
+        day -= timedelta(days=1)
+    while by_day.get(day.isoformat()):
+        streak += 1
+        day -= timedelta(days=1)
+    return {
+        "week": [{"date": d, "label": datetime.strptime(d, "%Y-%m-%d").strftime("%a")[:1],
+                  "minutes": by_day.get(d, 0), "today": d == today.isoformat()} for d in week],
+        "week_minutes": sum(by_day.get(d, 0) for d in week),
+        "month_minutes": sum(by_day.values()),
+        "sessions": sum(1 for r in rows if int(r.actual_minutes or 0) > 0),
+        "streak": streak,
+        "courses": sorted(({"course": c, "minutes": m} for c, m in by_course.items()),
+                          key=lambda x: x["minutes"], reverse=True)[:5],
+        "best": max(by_day.values()) if by_day else 0,
+    }
+
+
 @app.route("/study-room")
 @login_required
 def study_room():
@@ -4352,6 +4397,7 @@ def study_room():
         "tasks": tasks, "deadlines": deadlines[:8], "courses": courses, "blocks": blocks,
         "today": today.isoformat(), "now_min": now.hour * 60 + now.minute,
         "first_name": (current_user.name or "Student").split()[0],
+        "stats": _room_stats(current_user, today),
     }
     return render_template(
         "study_room.html", user=current_user, tasks=tasks, deadlines=deadlines[:8], courses=courses,
