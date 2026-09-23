@@ -457,7 +457,8 @@ const PANELS = {
           <div class="sounds" id="sounds">${[['off', 'Quiet'], ['rain', 'Rain'], ['brown', 'Brown noise']].map(([k, n]) => `<button type="button" data-sound="${k}" class="${sound.kind === k ? 'on' : ''}">${n}</button>`).join('')}</div></div>
         <div class="sec"><h3>Render quality</h3><p class="meta">Ultra draws far more pixels than your screen has and scales them down, which is what makes edges look sharp. Drop it if the room stutters.</p>
           <div class="sounds" id="quality">${[['ultra', 'Ultra'], ['high', 'High'], ['balanced', 'Battery']].map(([k, n]) => `<button type="button" data-quality="${k}" class="${quality === k ? 'on' : ''}">${n}</button>`).join('')}</div>
-          <p class="meta" id="qualityNote" style="margin-top:8px"></p></div>
+          <p class="meta" id="qualityNote" style="margin-top:8px"></p>
+          <div class="switch"><span>Depth of field<br><small style="color:var(--fg-3)">Softens the background. Off is sharper.</small></span><button type="button" id="dofToggle" class="${bokeh && bokeh.enabled ? 'on' : ''}">${bokeh && bokeh.enabled ? 'On' : 'Off'}</button></div></div>
       </div>`;
     },
     bind(root) {
@@ -465,6 +466,8 @@ const PANELS = {
       root.querySelector('#lampToggle').onclick = () => { ambience.setLamp(!ambience.lamp); showPanel('lamp'); };
       root.querySelectorAll('[data-sound]').forEach(b => b.onclick = () => { sound.set(b.dataset.sound); showPanel('lamp'); });
       root.querySelectorAll('[data-quality]').forEach(b => b.onclick = () => { setQuality(b.dataset.quality); showPanel('lamp'); });
+      const dof = root.querySelector('#dofToggle');
+      if (dof) dof.onclick = () => { if (!bokeh) return; bokeh.enabled = !bokeh.enabled; localStorage.setItem('nexora-room-dof', bokeh.enabled ? '1' : '0'); showPanel('lamp'); };
       const note = root.querySelector('#qualityNote');
       if (note) note.textContent = `Drawing ${Math.round(stage.clientWidth * renderer.getPixelRatio())}x${Math.round(stage.clientHeight * renderer.getPixelRatio())} for a ${stage.clientWidth}x${stage.clientHeight} window.`;
     },
@@ -1078,7 +1081,7 @@ function buildLiveTextures() {
 /* =====================================================================
    6. Renderer, scene, camera, post-processing
    ===================================================================== */
-const QUALITY = {ultra: 2.6, high: 1.9, balanced: 1.35};
+const QUALITY = {ultra: 2.1, high: 1.65, balanced: 1.2};
 let quality = localStorage.getItem('nexora-room-quality') || (isSmall ? 'balanced' : 'high');
 if (!QUALITY[quality]) quality = 'high';
 const pixelRatio = () => Math.min(devicePixelRatio * QUALITY[quality], isSmall ? 2.2 : 3);
@@ -1088,7 +1091,7 @@ maxAniso = () => renderer.capabilities.getMaxAnisotropy();
 renderer.shadowMap.enabled = !isSmall; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0B0A09); scene.fog = new THREE.FogExp2(0x0B0A09, .04);
-const pmrem = new THREE.PMREMGenerator(renderer); scene.environment = pmrem.fromScene(new RoomEnvironment(), .04).texture; scene.environmentIntensity = .42;
+const pmrem = new THREE.PMREMGenerator(renderer); scene.environment = pmrem.fromScene(new RoomEnvironment(), .04).texture; scene.environmentIntensity = .9;
 const camera = new THREE.PerspectiveCamera(46, 1, .05, 40);
 const VIEW = {
   // Composed like the reference: in from the left, the window and plant on
@@ -1103,7 +1106,7 @@ const VIEW = {
   clock:    {pos: [.96, 1.04, -1.7], look: [.96, .85, -2.28]},
   lamp:     {pos: [-.75, 1.42, -1.3], look: [-1.0, 1.1, -2.0]},
   board:    {pos: [-1.8, 1.6, -.6], look: [-3.28, 1.6, -.6]},
-  cork:     {pos: [1.8, 1.72, -.85], look: [3.28, 1.72, -.85]},
+  cork:     {pos: [1.85, 1.62, -.85], look: [3.3, 1.62, -.85]},
 };
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; controls.dampingFactor = .07; controls.enablePan = false;
@@ -1119,8 +1122,8 @@ if (!isSmall) {
   composer = new EffectComposer(renderer, target);
   composer.addPass(new RenderPass(scene, camera));
   gtao = new GTAOPass(scene, camera, 1, 1);
-  gtao.output = GTAOPass.OUTPUT.Default; gtao.blendIntensity = .9;
-  gtao.updateGtaoMaterial({radius: .22, distanceExponent: 1, thickness: .6, scale: 1.1, samples: 12, distanceFallOff: 1, screenSpaceRadius: false});
+  gtao.output = GTAOPass.OUTPUT.Default; gtao.blendIntensity = 1.15;
+  gtao.updateGtaoMaterial({radius: .14, distanceExponent: 1, thickness: .4, scale: 1.45, samples: 16, distanceFallOff: 1, screenSpaceRadius: false});
   gtao.updatePdMaterial({lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 4, radiusExponent: 1, rings: 2, samples: 12});
   composer.addPass(gtao);
   bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), .55, .7, 1.45);
@@ -1130,6 +1133,7 @@ if (!isSmall) {
   // stays sharp. The focus distance follows the camera, so it stays on
   // whatever the view is pointed at rather than on a fixed plane.
   bokeh = new BokehPass(scene, camera, {focus: 3.6, aperture: .00035, maxblur: .0035});
+  bokeh.enabled = localStorage.getItem('nexora-room-dof') === '1';
   composer.addPass(bokeh);
   composer.addPass(new OutputPass());
 }
@@ -1152,6 +1156,7 @@ function mesh(geo, mat, pos = [0, 0, 0], {shadow = true, receive = true, parent 
   const m = new THREE.Mesh(geo, mat); m.position.set(...pos); m.castShadow = shadow; m.receiveShadow = receive; m.name = name; parent.add(m); return m;
 }
 const rbox = (w, h, d, r = .01, seg = 3) => new RoundedBoxGeometry(w, h, d, seg, r);
+const REST = .0012;   // what sits on a surface sits just above it, never exactly on it
 function tag(obj, key) { obj.userData.key = key; interactive.push(obj); return obj; }
 
 async function buildRoom() {
@@ -1176,12 +1181,13 @@ async function buildRoom() {
   /* ---------- shell ---------- */
   const floorC = woodTexture('#5A4030', '#2A1C12', {planks: 9});
   const wood = texFrom(floorC, {repeat: [2.4, 2.4]}), woodN = texFrom(normalFrom(floorC, 2.4), {repeat: [2.4, 2.4], srgb: false});
-  const plasterC = plasterTexture('#5C5248');
+  const plasterC = plasterTexture('#4A443E');
   const plaster = texFrom(plasterC, {repeat: [3, 2]}), plasterN = texFrom(normalFrom(plasterC, 1.4), {repeat: [3, 2], srgb: false});
-  const floorMat = M.std({map: wood, normalMap: woodN, normalScale: new THREE.Vector2(.45, .45), roughness: .42, metalness: .03, color: 0xE0D2C2});
-  const wallMat = M.std({map: plaster, normalMap: plasterN, normalScale: new THREE.Vector2(.3, .3), roughness: .93, color: 0x6E645A});
+  const floorMat = M.phys({map: wood, normalMap: woodN, normalScale: new THREE.Vector2(.5, .5), roughness: .3, metalness: .0,
+                           clearcoat: .55, clearcoatRoughness: .3, envMapIntensity: 1.1, color: 0xC7B49E});
+  const wallMat = M.std({map: plaster, normalMap: plasterN, normalScale: new THREE.Vector2(.35, .35), roughness: .96, color: 0x585048, envMapIntensity: .35});
   mesh(new THREE.PlaneGeometry(7, 7), floorMat, [0, 0, -.5], {shadow: false}).rotation.x = -Math.PI / 2;
-  mesh(new THREE.PlaneGeometry(7, 7), M.std({color: 0x241F1A, roughness: 1}), [0, 2.9, -.5], {shadow: false}).rotation.x = Math.PI / 2;
+  mesh(new THREE.PlaneGeometry(7, 7), M.std({color: 0x14110E, roughness: 1}), [0, 2.9, -.5], {shadow: false}).rotation.x = Math.PI / 2;
   mesh(new THREE.BoxGeometry(7, 2.9, .08), wallMat, [0, 1.45, 2.8], {shadow: false});
   mesh(new THREE.BoxGeometry(.08, 2.9, 7), wallMat, [3.34, 1.45, -.5], {shadow: false});
   mesh(new THREE.BoxGeometry(.08, 2.9, 7), wallMat, [-3.34, 1.45, -.5], {shadow: false});
@@ -1209,15 +1215,16 @@ async function buildRoom() {
     rain.visible = false; root.add(rain); motion.rain = rain; }
 
   /* ---------- rug ---------- */
-  const rug = mesh(new THREE.PlaneGeometry(3.6, 2.5), M.std({map: texFrom(rugTexture()), roughness: .96, color: 0xD8CCBC}), [.25, .006, -1.05], {shadow: false});
+  const rug = mesh(new THREE.PlaneGeometry(3.6, 2.5), M.std({map: texFrom(rugTexture()), roughness: .99, color: 0xEDE2D2, envMapIntensity: .25}), [.25, .008, -1.05], {shadow: false});
   rug.rotation.x = -Math.PI / 2; rug.rotation.z = .02;
 
   /* ---------- desk ---------- */
   const deskC = woodTexture('#7A5436', '#3A2412');
   const deskWood = texFrom(deskC, {repeat: [1.4, .6]}), deskN = texFrom(normalFrom(deskC, 1.8), {repeat: [1.4, .6], srgb: false});
-  const deskMat = M.std({map: deskWood, normalMap: deskN, normalScale: new THREE.Vector2(.25, .25), roughness: .3, metalness: .06, color: 0xEADAC4});
+  const deskMat = M.phys({map: deskWood, normalMap: deskN, normalScale: new THREE.Vector2(.28, .28), roughness: .22, metalness: .0,
+                          clearcoat: .85, clearcoatRoughness: .14, envMapIntensity: 1.3, color: 0xE0C9AA});
   mesh(rbox(2.6, .055, .9, .016), deskMat, [0, .745, -2.05]);
-  const caseMatDark = M.std({color: 0x24211C, roughness: .5, metalness: .25});
+  const caseMatDark = M.phys({color: 0x1A1815, roughness: .34, metalness: .1, clearcoat: .5, clearcoatRoughness: .25, envMapIntensity: 1.0});
   for (const lx of [-1.18, 1.18]) mesh(rbox(.07, .72, .8, .01), caseMatDark, [lx, .365, -2.05]);
   // drawer unit, as in the reference
   const drawers = new THREE.Group(); drawers.position.set(-.72, 0, -2.08); root.add(drawers);
@@ -1232,7 +1239,7 @@ async function buildRoom() {
   /* ---------- chair ---------- */
   const chair = new THREE.Group(); chair.position.set(1.22, 0, -1.12); chair.rotation.y = -.62; root.add(chair);
   const mesh_fab = texFrom(fabricTexture('#2A2724'), {repeat: [3, 3]});
-  const seatMat = M.std({map: mesh_fab, roughness: .9, color: 0x9A9186}), chrome = M.std({color: 0x201D19, roughness: .35, metalness: .7});
+  const seatMat = M.std({map: mesh_fab, roughness: .9, color: 0x9A9186}), chrome = M.std({color: 0x2A2724, roughness: .24, metalness: .95, envMapIntensity: 1.4});
   for (let i = 0; i < 5; i++) {
     const arm = new THREE.Group(); arm.rotation.y = (i / 5) * Math.PI * 2; chair.add(arm);
     mesh(rbox(.055, .04, .33, .018), chrome, [0, .06, .18], {parent: arm}).rotation.x = -.05;
@@ -1252,7 +1259,7 @@ async function buildRoom() {
   mesh(rbox(.11, .4, .07, .025), chrome, [0, .62, -.21], {parent: chair});
 
   /* ---------- monitor, with a light bar on top ---------- */
-  const dark = M.std({color: 0x18150F, roughness: .3, metalness: .55});
+  const dark = M.phys({color: 0x121110, roughness: .26, metalness: .35, clearcoat: .6, clearcoatRoughness: .2, envMapIntensity: 1.2});
   mesh(rbox(.42, .022, .22, .01), dark, [.15, .776, -2.3]);
   mesh(rbox(.075, .34, .05, .014), dark, [.15, .95, -2.34]);
   const screenBody = tag(mesh(rbox(1.22, .72, .04, .015), dark, [.15, 1.27, -2.3]), 'screen'); screenBody.rotation.x = -.05;
@@ -1263,7 +1270,10 @@ async function buildRoom() {
   mesh(rbox(.62, .05, .08, .018), M.std({color: 0x1C1A16, roughness: .4, metalness: .5}), [0, 0, 0], {parent: bar});
   mesh(new THREE.BoxGeometry(.56, .012, .03), ledMat(), [0, -.026, .03], {parent: bar, shadow: false, receive: false});
   const barLight = new THREE.SpotLight(0xFFCF95, 5, 2.6, .9, .8, 1.4);
-  barLight.position.set(.15, 1.6, -2.22); barLight.target.position.set(.15, .75, -1.85); root.add(barLight, barLight.target);
+  barLight.position.set(.15, 1.6, -2.22); barLight.target.position.set(.15, .75, -1.85);
+  barLight.castShadow = !isSmall;
+  if (!isSmall) { barLight.shadow.mapSize.set(1024, 1024); barLight.shadow.bias = -.0005; barLight.shadow.radius = 3; barLight.shadow.camera.near = .2; barLight.shadow.camera.far = 3; }
+  root.add(barLight, barLight.target);
   const screenGlow = new THREE.PointLight(0xFFD9A8, 1.1, 2.6, 2); screenGlow.position.set(.15, 1.05, -1.75); root.add(screenGlow);
 
   /* keyboard, mouse, mat, phone */
@@ -1325,7 +1335,7 @@ async function buildRoom() {
   motion.steam = [0, 1, 2].map(i => { const s = new THREE.Sprite(new THREE.SpriteMaterial({map: glowTex, color: 0xFFF3E0, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending})); s.scale.set(.05, .07, 1); s.userData.phase = i / 3; root.add(s); return s; });
 
   /* ---------- the architect lamp, standing on the book stack ---------- */
-  const lampMat = M.std({color: 0x201D19, roughness: .3, metalness: .6});
+  const lampMat = M.std({color: 0x24211D, roughness: .22, metalness: .92, envMapIntensity: 1.5});
   const lamp = new THREE.Group(); lamp.position.set(-1.12, .877, -1.96); root.add(lamp);
   const lampBase = tag(mesh(new THREE.CylinderGeometry(.075, .085, .02, 40), lampMat, [0, .01, 0], {parent: lamp, name: 'lamp'}), 'lamp'); anchors.lamp = lampBase;
   mesh(new THREE.SphereGeometry(.022, 16, 12), lampMat, [0, .032, 0], {parent: lamp});
@@ -1356,15 +1366,16 @@ async function buildRoom() {
   lights.orbs = orbs;
 
   /* ---------- the floating shelf over the desk, with its LED strip ---------- */
-  const shelfMat = M.std({map: deskWood, normalMap: deskN, normalScale: new THREE.Vector2(.2, .2), roughness: .4, color: 0xE0CDB2});
+  const shelfMat = M.phys({map: deskWood, normalMap: deskN, normalScale: new THREE.Vector2(.22, .22), roughness: .26, clearcoat: .55,
+                           clearcoatRoughness: .2, envMapIntensity: 1.1, color: 0xE8D2AE});
   mesh(rbox(2.5, .05, .28, .008), shelfMat, [.05, 1.98, -2.86]);
-  strip(2.3, .035, [.05, 1.949, -2.76]);
+  strip(2.3, .035, [.05, 1.9465, -2.76]);
   const shelfGlow = new THREE.PointLight(LED, 3.6, 3.6, 2); shelfGlow.position.set(.05, 1.88, -2.6); scene.add(shelfGlow);
   let bx = -.62;
   D.courses.slice(0, 8).forEach((c, i) => {
     const w = .04 + (i % 3) * .012, h = .25 + (i % 4) * .02, hue = COURSE_HUES[i % COURSE_HUES.length];
     const spine = texFrom(spineTexture(c.code, hue)), side = M.std({color: hue, roughness: .58}), pages = M.std({color: 0xEFE7D4, roughness: .95});
-    const book = tag(mesh(rbox(w, h, .19, .005), [pages, side, side, side, M.std({map: spine, roughness: .58}), pages], [bx + w / 2, 2.005 + h / 2, -2.86], {name: 'shelf'}), 'shelf');
+    const book = tag(mesh(rbox(w, h, .19, .005), [pages, side, side, side, M.std({map: spine, roughness: .58}), pages], [bx + w / 2, 2.005 + REST + h / 2, -2.86], {name: 'shelf'}), 'shelf');
     if (i === D.courses.length - 1 && i > 1) { book.rotation.z = -.16; book.position.x += .03; }
     book.userData.course = c; if (!anchors.shelf) anchors.shelf = book;
     bx += w + .009;
@@ -1394,7 +1405,8 @@ async function buildRoom() {
     mesh(new THREE.TorusGeometry(.02, .005, 8, 20), M.std({color: 0xE8A94A, roughness: .4, metalness: .4}), [0, .098, 0], {parent: astro}).rotation.x = Math.PI / 2; }
 
   /* ---------- the bookcase wall on the right, lit shelf by shelf ---------- */
-  const caseWood = M.std({map: deskWood, normalMap: deskN, normalScale: new THREE.Vector2(.2, .2), roughness: .45, color: 0xBBA184});
+  const caseWood = M.phys({map: deskWood, normalMap: deskN, normalScale: new THREE.Vector2(.22, .22), roughness: .3, clearcoat: .4,
+                           clearcoatRoughness: .25, envMapIntensity: 1.0, color: 0xD7BC98});
   const bc = new THREE.Group(); bc.position.set(3.28, 0, -2.05); bc.rotation.y = -Math.PI / 2; root.add(bc);
   const bookHues = [0x7A5A3A, 0x46533F, 0x6A4238, 0x4E4840, 0x35646B, 0x845734, 0x64527A, 0x9A6A34, 0x475678, 0x746A3A, 0x8A4B3C, 0x3E5A4A];
   mesh(rbox(1.9, .05, .34, .006), caseWood, [0, 2.62, -.16], {parent: bc});
@@ -1402,32 +1414,32 @@ async function buildRoom() {
   for (let s = 0; s < 5; s++) {
     const y = .38 + s * .52;
     mesh(rbox(1.9, .04, .34, .005), caseWood, [0, y, -.16], {parent: bc});
-    strip(1.8, .03, [0, y + .035, -.02], {parent: bc});
+    strip(1.8, .03, [0, y + .0405, -.02], {parent: bc});
     // fill the three bays
     for (const bay of [-1, 0, 1]) {
       let x = bay * .633 - .27;
       while (x < bay * .633 + .25) {
         const roll = Math.random();
         if (roll < .12) {                      // a storage box
-          mesh(rbox(.24, .17, .26, .01), M.std({color: [0x3E3830, 0x4A4038, 0x5A5048][(Math.random() * 3) | 0], roughness: .8}), [x + .12, y + .105, -.14], {parent: bc});
+          mesh(rbox(.24, .17, .26, .01), M.std({color: [0x3E3830, 0x4A4038, 0x5A5048][(Math.random() * 3) | 0], roughness: .8}), [x + .12, y + .0212 + REST + .085, -.14], {parent: bc});
           x += .27; continue;
         }
         if (roll < .22) {                      // books laid flat
           let h = 0; for (let k = 0; k < 3; k++) { const fh = .028 + Math.random() * .012;
-            mesh(rbox(.22, fh, .28, .004), M.std({color: bookHues[(Math.random() * bookHues.length) | 0], roughness: .6}), [x + .11, y + .02 + h + fh / 2, -.14], {parent: bc}); h += fh; }
+            mesh(rbox(.22, fh, .28, .004), M.std({color: bookHues[(Math.random() * bookHues.length) | 0], roughness: .6}), [x + .11, y + .0212 + REST + h + fh / 2, -.14], {parent: bc}); h += fh; }
           x += .24; continue;
         }
         const w = .028 + Math.random() * .036, h = .2 + Math.random() * .16;
         const hue = bookHues[(Math.random() * bookHues.length) | 0];
         const side = M.std({color: hue, roughness: .6}), pages = M.std({color: 0xE6DCC6, roughness: .95});
-        const b = mesh(rbox(w, h, .24, .004), [pages, side, side, side, side, pages], [x + w / 2, y + .02 + h / 2, -.14], {parent: bc});
+        const b = mesh(rbox(w, h, .24, .004), [pages, side, side, side, side, pages], [x + w / 2, y + .0212 + REST + h / 2, -.14], {parent: bc});
         if (Math.random() < .1) { b.rotation.z = -.13; b.position.y -= .004; }
         x += w + .005;
       }
     }
     // a plant or a framed print on some shelves
     if (s % 2 === 0) {
-      mesh(new THREE.CylinderGeometry(.05, .04, .08, 20), M.std({color: 0xD8CFC0, roughness: .6}), [.78, y + .06, -.14], {parent: bc});
+      mesh(new THREE.CylinderGeometry(.05, .04, .08, 20), M.std({color: 0xD8CFC0, roughness: .6}), [.78, y + .0212 + REST + .04, -.14], {parent: bc});
       for (let i = 0; i < 7; i++) mesh(new THREE.SphereGeometry(.028, 10, 8), M.std({color: 0x4E7343, roughness: .65}), [.78 + (Math.random() - .5) * .08, y + .12 + Math.random() * .06, -.14 + (Math.random() - .5) * .06], {parent: bc, shadow: false}).scale.set(.8, 1.5, .6);
     } else {
       const f = mesh(rbox(.3, .36, .02, .004), M.std({color: 0x2A2621, roughness: .5}), [-.75, y + .2, -.2], {parent: bc});
@@ -1457,7 +1469,7 @@ async function buildRoom() {
     reed.rotation.z = Math.cos(a) * .22; reed.rotation.x = Math.sin(a) * .22; }
 
   /* ---------- corkboard on the right wall, above the cabinet ---------- */
-  const cork = new THREE.Group(); cork.position.set(3.28, 1.72, -.85); cork.rotation.y = -Math.PI / 2; root.add(cork);
+  const cork = new THREE.Group(); cork.position.set(3.3, 1.62, -.85); cork.rotation.y = -Math.PI / 2; root.add(cork);
   mesh(rbox(1.5, 1.1, .04, .008), M.std({color: 0x6A5033, roughness: .55}), [0, 0, 0], {parent: cork});
   const corkFace = tag(mesh(new THREE.PlaneGeometry(1.38, .98), M.std({map: texFrom(corkTexture()), roughness: 1, color: 0xE0CDAC}), [0, 0, .022], {parent: cork, shadow: false, name: 'cork'}), 'cork');
   anchors.cork = corkFace;
@@ -1469,7 +1481,11 @@ async function buildRoom() {
     mesh(new THREE.SphereGeometry(.011, 14, 10), M.std({color: [0xC9705C, 0x44527A, 0xE8A94A][i % 3], roughness: .25, metalness: .3}), [nx, ny + .145, .042], {parent: cork});
   });
   if (!D.deadlines.length) tag(mesh(rbox(.34, .34, .008, .002), M.std({map: texFrom(stickyTexture('Nothing due yet', 'connect brightspace', noteColors[0])), roughness: .92}), [0, .05, .03], {parent: cork, name: 'cork'}), 'cork');
-  const corkGlow = new THREE.PointLight(0xFFC98A, 1.6, 3.4, 2); corkGlow.position.set(2.6, 1.97, -.85); scene.add(corkGlow);
+  const corkGlow = new THREE.PointLight(0xFFC98A, 1.6, 3.4, 2); corkGlow.position.set(2.72, 2.25, -.85); scene.add(corkGlow);
+  // a picture light over the board, so it reads as hung on a wall rather than floating in front of one
+  const corkWash = new THREE.SpotLight(0xFFD2A0, 6, 2.6, .8, .75, 1.3);
+  corkWash.position.set(2.95, 2.34, -.85); corkWash.target.position.set(3.3, 1.6, -.85); root.add(corkWash, corkWash.target);
+  mesh(rbox(.5, .05, .1, .018), M.std({color: 0x2A2724, roughness: .3, metalness: .8}), [3.16, 2.36, -.85]).rotation.y = -Math.PI / 2;
 
   /* ---------- whiteboard on the left wall: the week ---------- */
   const boardG = new THREE.Group(); boardG.position.set(-3.28, 1.6, -.6); boardG.rotation.y = Math.PI / 2; root.add(boardG);
@@ -1545,12 +1561,12 @@ async function buildRoom() {
   const candleLight = new THREE.PointLight(0xFFB870, 1.8, 2.2, 2); candleLight.position.set(-2.95, .65, .62); scene.add(candleLight); motion.candleLight = candleLight;
 
   /* ---------- fairy lights across the back wall ---------- */
-  { const pts = []; for (let i = 0; i <= 40; i++) { const t = i / 40; pts.push(new THREE.Vector3(-3.1 + t * 6.2, 2.74 - Math.sin(t * Math.PI) * .22, -2.93)); }
+  { const pts = []; for (let i = 0; i <= 40; i++) { const t = i / 40; pts.push(new THREE.Vector3(-2.9 + t * 4.2, 2.76 - Math.sin(t * Math.PI) * .16, -2.95)); }
     const curve = new THREE.CatmullRomCurve3(pts);
     mesh(new THREE.TubeGeometry(curve, 80, .004, 6, false), M.std({color: 0x2A2520, roughness: .6}), [0, 0, 0], {shadow: false});
-    motion.fairy = curve.getPoints(26).map((p, i) => {
-      mesh(new THREE.CylinderGeometry(.0035, .0035, .028, 6), M.std({color: 0x2A2520, roughness: .6}), [p.x, p.y - .015, p.z], {shadow: false});
-      const b = mesh(new THREE.SphereGeometry(.016, 12, 10), M.std({color: 0xFFF0D2, emissive: 0xFFD79A, emissiveIntensity: 2}), [p.x, p.y - .04, p.z], {shadow: false, receive: false});
+    motion.fairy = curve.getPoints(18).map((p, i) => {
+      mesh(new THREE.CylinderGeometry(.003, .003, .022, 6), M.std({color: 0x2A2520, roughness: .6}), [p.x, p.y - .012, p.z], {shadow: false});
+      const b = mesh(new THREE.SphereGeometry(.0105, 12, 10), M.std({color: 0xFFF0D2, emissive: 0xFFD79A, emissiveIntensity: 1.5}), [p.x, p.y - .032, p.z], {shadow: false, receive: false});
       b.userData.phase = i * .7; return b;
     }); }
 
@@ -1602,7 +1618,7 @@ const ambience = {
     if (mode === 'night')      set({sun: .55, sunC: 0x8FA8F0, exposure: 1.0, glow: 1.1, fog: .045, skyT: 'night', skyI: 1.1, fillI: .5, strip: 1.1, accent: 1.1, bar: .9, coolI: 1.25});
     else if (mode === 'focus') set({sun: .3, sunC: 0x8FA8F0, exposure: .9, glow: 1.6, fog: .055, skyT: 'night', skyI: .7, fillI: .3, strip: .55, accent: .5, bar: 1.3, coolI: .55});
     else if (mode === 'dawn')  set({sun: 2.6, sunC: 0xFFC08A, exposure: 1.18, glow: .6, fog: .022, skyT: 'dawn', skyI: 1.2, fillI: 1.3, strip: .5, accent: .5, bar: .5, coolI: .5});
-    else                       set({sun: 1.7, sunC: 0xFFB183, exposure: 1.1, glow: 1.2, fog: .026, skyT: 'dusk', skyI: 1.35, fillI: .9, strip: 1.15, accent: 1.15, bar: 1.15, coolI: 1});
+    else                       set({sun: 1.9, sunC: 0xFFB183, exposure: 1.02, glow: 1.25, fog: .018, skyT: 'dusk', skyI: 1.4, fillI: .7, strip: 1.25, accent: 1.2, bar: 1.2, coolI: 1.1});
     this.setLamp(this.lamp, true);
   },
   lampStrength() { return this.mode === 'focus' ? 1.35 : this.mode === 'dawn' ? .6 : 1; },
@@ -1706,7 +1722,7 @@ function animateRoom(now) {
   const t = now * .001;
   // the bulb very slightly, the fairy lights each on their own phase
   if (lights.lampLight && ambience.lamp) lights.lampLight.intensity = 9 * ambience.lampStrength() * (1 + Math.sin(now * .0021) * .012);
-  if (motion.fairy) for (const b of motion.fairy) b.material.emissiveIntensity = 1.3 + Math.sin(t * 1.7 + b.userData.phase) * .5 + Math.sin(t * 5.3 + b.userData.phase * 2.1) * .15;
+  if (motion.fairy) for (const b of motion.fairy) b.material.emissiveIntensity = 1.0 + Math.sin(t * 1.7 + b.userData.phase) * .3 + Math.sin(t * 5.3 + b.userData.phase * 2.1) * .1;
   // stars: the sky's glow wavers a hair
   const sky = root.userData.skyMat; if (sky && sky.userData.base) sky.emissiveIntensity = sky.userData.base * (motion.rain && motion.rain.visible ? .7 : 1) * (1 + Math.sin(t * .9) * .025);
   // dust drifts and tumbles
@@ -1725,7 +1741,7 @@ function animateRoom(now) {
   // the phone lights up now and then
   if (motion.phone) motion.phone.material.emissiveIntensity = (Math.sin(t * .25) > .96) ? 1.6 : .3;
   // the focus plane follows what the camera is looking at
-  if (bokeh) bokeh.uniforms.focus.value += (camera.position.distanceTo(controls.target) - bokeh.uniforms.focus.value) * .08;
+  if (bokeh && bokeh.enabled) bokeh.uniforms.focus.value += (camera.position.distanceTo(controls.target) - bokeh.uniforms.focus.value) * .08;
   // once a second: the screen's clock and cursor, the desk clock's colon
   const sec = Math.floor(t); if (sec !== lastSecond) { lastSecond = sec; textures.screen.redraw(); if (timer.running) textures.clock.redraw(); }
   // idle: a slow drift, so the room never freezes into a screenshot

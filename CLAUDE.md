@@ -1520,6 +1520,31 @@ yet** -- counting strictly back from today would read every morning as a
 lost streak. No other screen in Nexora tells a student what their week
 actually was.
 
+**The bookshelf flickered because faces were coplanar.** Every book's
+bottom face sat at exactly the shelf's top face, as did the storage boxes
+and the flat-laid stacks. Two surfaces at the same depth have no order, so
+the GPU picks a different winner per pixel per frame and the shelf
+shimmers. `REST` (1.2 tenths of a millimetre) is what anything resting on a
+surface is lifted by. Watch for this whenever one box is positioned off
+another's height rather than off its own.
+
+**Nothing in the room reflected anything, which is what "cheap" meant.**
+Every material was matte 0.4-0.9 with a low environment intensity, so there
+were no highlights anywhere and every surface sat in the same brown value.
+The floor and the desk are `MeshPhysicalMaterial` with clearcoat, the metal
+is metalness .92-.95, `scene.environmentIntensity` went from .42 to .9, and
+the wall was darkened so objects have something to separate from. Highlights
+are most of what reads as expensive.
+
+**Depth of field is off by default.** It softens every pixel it touches,
+which is right in a photograph and the opposite of what "clean and sharp"
+asks for. It is a switch in Ambience now.
+
+**The quality tiers are what a GPU will actually hold.** Ultra at 2.6x on a
+1600-wide window is 8.2 megapixels through ambient occlusion and bloom --
+enough that the desktop app could not even composite a screenshot of it.
+2.1 / 1.65 / 1.2.
+
 **Sharpness is supersampling, and DOF costs it.** The renderer draws at
 `devicePixelRatio x QUALITY[quality]` (Ultra 2.6, High 1.9, Battery 1.35)
 and lets the browser scale down -- on a 1432x900 window at High that is
