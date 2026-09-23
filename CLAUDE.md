@@ -1520,6 +1520,20 @@ yet** -- counting strictly back from today would read every morning as a
 lost streak. No other screen in Nexora tells a student what their week
 actually was.
 
+**Never call `setSize` on a pass the composer owns.** `EffectComposer.setSize(w, h)`
+already resizes every pass at `w x h x pixelRatio`. The room's own `resize()`
+then called `gtao.setSize(w, h)` and `bokeh.setSize(w, h)` with the CSS size and
+set `bloom.resolution` to half of it -- so on a 1352x900 window the image was
+rendered at 2230x1485 while **ambient occlusion ran at 1352x900 and the bloom
+chain at 338x225**, composited over it. A low-resolution AO and glow smeared
+across a sharp render is exactly what "it looks like 360p" is, and it survived
+three rounds of raising the pixel ratio because the pixel ratio was never the
+problem. Measure the actual buffers -- `composer.renderTarget1`,
+`gtao.gtaoRenderTarget`, `bloom.renderTargetBright` -- before touching the
+resolution again. The composer also caches `_pixelRatio` from its constructor,
+so a quality change has to call `composer.setPixelRatio` or the targets stay at
+the old size.
+
 **The bookshelf flickered because faces were coplanar.** Every book's
 bottom face sat at exactly the shelf's top face, as did the storage boxes
 and the flat-laid stacks. Two surfaces at the same depth have no order, so

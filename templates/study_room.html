@@ -1142,7 +1142,7 @@ function resize() {
   renderer.setSize(w, h, false); camera.aspect = w / h;
   camera.fov = h > w ? 74 : 54;   // upright, the vertical field would show a slit of desk; open it up
   camera.updateProjectionMatrix();
-  if (composer) { composer.setSize(w, h); gtao.setSize(w, h); bloom.resolution.set(w / 2, h / 2); bokeh.setSize(w, h); }
+  if (composer) { composer.setPixelRatio(renderer.getPixelRatio()); composer.setSize(w, h); }
 }
 addEventListener('resize', resize);
 
@@ -1652,7 +1652,9 @@ $('resetView').onclick = () => { closeDrawer(); flyTo(overview(), 850); };
 function setQuality(q) {
   if (!QUALITY[q]) return;
   quality = q; localStorage.setItem('nexora-room-quality', q);
-  renderer.setPixelRatio(pixelRatio()); resize();
+  renderer.setPixelRatio(pixelRatio());
+  if (composer) composer.setPixelRatio(renderer.getPixelRatio());
+  resize();
   toast(`Render quality: ${q}.`, 1600);
 }
 const PANEL_FOR = {cork: 'calendar', board: 'screen'};   // objects that open an existing panel
@@ -1770,7 +1772,7 @@ buildRoom().then(() => {
   if (wantedSound !== 'off') renderer.domElement.addEventListener('pointerdown', () => startSound(wantedSound), {once: true});
   const origSet = sound.set.bind(sound); sound.set = k => { origSet(k); ambience.setRain(k === 'rain'); };
   requestAnimationFrame(frame);
-  window.__room = {renderer, scene, camera, timer, ambience, sound, textures, motion, raycaster, interactive, railHit, setQuality, setScreenView: v => setScreenView(v)};   // for checks from the console
+  window.__room = {renderer, scene, camera, timer, ambience, sound, textures, motion, raycaster, interactive, railHit, setQuality, setScreenView: v => setScreenView(v), composer, bloom, gtao, bokeh, resize};   // for checks from the console
   $('loading').classList.add('hide');
   flyTo(overview(), reducedMotion ? 1 : 2200);
   setInterval(() => { const n = new Date(); D.now_min = n.getHours() * 60 + n.getMinutes(); textures.screen.redraw(); textures.board.redraw(); nextLine(); }, 30000);
