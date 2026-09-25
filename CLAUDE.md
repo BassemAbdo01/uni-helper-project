@@ -1059,12 +1059,21 @@ the full extracted body of everything the extension scrapes, at a flat
 and nothing ever removed any of it. "Import everything, always" multiplies
 that by a four-year degree -- tens of thousands of rows.
 
-**The cap now follows what the body is FOR** (`_CONTENT_TEXT_CAP`). An
-outline is analysed, quoted by Ask and re-read on every re-analysis, and a
-lecture is summarised and explained, so both keep 120,000. Nothing reads the
-body of an announcement, an assignment or a quiz -- the dashboard shows the
-title and the date -- so those keep 4,000. Raising one of these raises the
-bill for every student; raise it only for a body something actually reads.
+**Every cap sits ABOVE what any feature reads** (`_CONTENT_TEXT_CAP`), so
+the store is never the binding constraint: the tutor reads 45,000 characters
+of a matched item, outline analysis excerpts at 90,000, study tools at
+120,000. Outlines and lectures keep 120,000; pages, practice and resources
+keep 48,000 (above the tutor's 45,000); announcements, assignments and
+quizzes keep 12,000, because nothing summarises one of those.
+
+**A cap below what a feature reads would be worse than it sounds.** The only
+thing that makes Nexora fetch a body again from Brightspace is it being
+**shorter than ~120 characters** (the `needs_content` branches). A body cut
+to a few thousand is far above that, so it would never re-fetch -- it would
+be read as the whole item, by the summariser and by the student. The first
+pass at this capped announcements at 4,000 and would have done exactly that.
+`_cap_content_text` therefore also **marks** a body it trims, so whatever
+reads it can tell it is not the whole thing.
 
 `AcademicUpdate` had the same shape: a row per item per changed sync, read
 by nothing older than a few days since "Recent updates" moved to the content
@@ -1073,10 +1082,12 @@ rows. `_import_content` now drops anything past
 
 `scripts/db_usage.py` answers "what is taking the space" with numbers --
 per table, and per content type within `course_content` -- and with
-`--plan` / `--apply` frees it. It deletes no rows: it blanks bodies nothing
-reads, and lecture bodies not touched in 120 days, **which is recoverable**
-because the study tools and the tutor already answer `needs_content` and
-have the extension fetch a missing body again. Outlines are never touched.
+`--plan` / `--apply` frees it. It deletes no rows. It trims oversized
+announcement, assignment and quiz bodies (marking them), and **empties** --
+never shortens -- lecture, page, practice and resource bodies untouched for
+120 days, which is recoverable through `needs_content`. Emptying rather than
+shortening is the same 120-character rule: a body left at a few thousand
+characters would never re-fetch. Outlines are never touched.
 
 Two things about Postgres that make this worse than it looks: an `UPDATE`
 that blanks a column writes a new row version, so usage rises before it

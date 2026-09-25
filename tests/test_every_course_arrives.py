@@ -251,10 +251,25 @@ def test_a_body_nobody_reads_is_not_stored_in_full(synced, client):
         {"content_type": "lecture", "title": "Lecture 1", "source_uid": "l1", "content_text": big},
         {"content_type": "announcement", "title": "Notice", "source_uid": "n1", "content_text": big},
         {"content_type": "assignment", "title": "Lab 1", "source_uid": "a1", "content_text": big},
+        {"content_type": "lecture", "title": "Lecture 2", "source_uid": "l2", "content_text": "short body"},
     ]})
     assert r.status_code == 200, r.get_json()
     with nexora.app.app_context():
-        kept = {r.content_type: len(r.content_text or "")
+        kept = {r.source_uid: len(r.content_text or "")
                 for r in nexora.CourseContent.query.filter_by(course_full="ECOR1031").all()}
-    assert kept["outline"] == 120_000 and kept["lecture"] == 120_000     # read in full
-    assert kept["announcement"] == 4_000 and kept["assignment"] == 4_000  # never read in full
+    assert kept["o1"] == 120_000 and kept["l1"] == 120_000   # outline and lecture: read in full
+    assert kept["n1"] == 12_000 and kept["a1"] == 12_000     # announcement and assignment: bounded
+
+    # Every cap sits above what any feature reads, so the store is never the
+    # binding constraint -- the tutor reads 45,000 characters of a matched
+    # item, and study tools read 120,000.
+    assert min(nexora._CONTENT_TEXT_CAP[k] for k in ("page", "practice", "resource")) > 45_000
+
+    # And a trimmed body says so. Nothing re-fetches a body of 12,000
+    # characters -- that only happens below ~120 -- so a silent trim would be
+    # read as the whole item by the summariser and by the student.
+    with nexora.app.app_context():
+        note = nexora.CourseContent.query.filter_by(course_full="ECOR1031", source_uid="n1").first()
+        whole = nexora.CourseContent.query.filter_by(course_full="ECOR1031", source_uid="l2").first()
+    assert note.content_text.endswith("[Nexora stored only the first part of this item.]")
+    assert whole.content_text == "short body"     # nothing trimmed, so nothing claimed

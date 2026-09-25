@@ -9406,21 +9406,46 @@ def _import_deadlines(user, items, default_course=""):
     return counts
 
 
-# How much scraped body text is worth keeping, per kind. The whole text for
-# what gets read in full; a taste for what is only ever matched on; nothing
-# beyond that. Raising one of these raises the storage bill for every student,
-# so raise it only for a body something actually reads.
+# How much scraped body text is worth keeping, per kind.
+#
+# Every cap here is set ABOVE what any feature actually reads, so the store is
+# never the binding constraint -- the tutor reads 45,000 characters of a
+# matched item, outline analysis excerpts at 90,000, study tools at 120,000.
+# The caps exist to bound the pathological row, not to ration the useful one.
+#
+# Setting them below what a feature reads would be worse than it sounds: the
+# only thing that makes Nexora fetch a body again from Brightspace is it being
+# SHORTER THAN ~120 CHARACTERS (see the needs_content branches). A body cut to
+# a few thousand is far above that, so it would never re-fetch -- it would be
+# silently used truncated, which is this app's worst failure mode wearing a
+# different hat. Truncation is therefore also marked, below, so whatever reads
+# it can see that it is not the whole thing.
 _CONTENT_TEXT_CAP = {
     "outline": 120000,     # analysed, quoted by Ask, re-read on every re-analysis
     "lecture": 120000,     # summarised, explained, turned into flashcards
-    "page": 8000,          # occasionally matched by the tutor
-    "practice": 8000,
-    "resource": 4000,
-    "assignment": 4000,    # the deadline matters; the blurb does not
-    "quiz": 4000,
-    "announcement": 4000,  # the dashboard shows the title and the date only
-    "": 4000,
+    "page": 48000,         # real course material; the tutor reads 45,000 of it
+    "practice": 48000,
+    "resource": 48000,
+    "assignment": 12000,   # a submission blurb; the deadline is the point
+    "quiz": 12000,
+    "announcement": 12000, # the dashboard shows the title and the date
+    "": 12000,
 }
+_TRUNCATED_NOTE = "\n\n[Nexora stored only the first part of this item.]"
+
+
+def _cap_content_text(text, kind):
+    """Trim a scraped body to its kind's cap, and say so when it trims.
+
+    The note matters: a silently shortened lecture reads as a complete one to
+    every summariser and to the student, and nothing downstream can tell the
+    difference.
+    """
+    text = str(text or "")
+    cap = _CONTENT_TEXT_CAP.get(kind, _CONTENT_TEXT_CAP[""])
+    if len(text) <= cap:
+        return text
+    return text[:cap - len(_TRUNCATED_NOTE)] + _TRUNCATED_NOTE
 
 
 def _import_content(user, payload):
@@ -9465,14 +9490,8 @@ def _import_content(user, payload):
             "title": title,
             "content_type": kind,
             "source_url": source_url,
-            # Capped by what the body is FOR. Render suspended the production
-            # database for exceeding its storage, and this column was almost
-            # all of it: a flat 120,000 characters a row across every item in
-            # every course in every term, and nothing ever removed any of it.
-            # An outline is analysed and quoted, a lecture is summarised, and
-            # nothing reads the body of an announcement -- the dashboard shows
-            # its title and its date. See _CONTENT_TEXT_CAP.
-            "content_text": str(item.get("content_text") or "")[:_CONTENT_TEXT_CAP.get(kind, _CONTENT_TEXT_CAP[""])],
+            # Bounded per kind, and marked when it bounds. See _CONTENT_TEXT_CAP.
+            "content_text": _cap_content_text(item.get("content_text"), kind),
             "module_name": str(item.get("module_name") or "")[:1000],
             "published_at": str(item.get("published_at") or "")[:80],
         }

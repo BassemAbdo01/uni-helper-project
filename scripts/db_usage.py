@@ -29,13 +29,17 @@ the database.
 The cleanup deletes no rows. Every title, link, date, deadline, grade and
 outline survives. It blanks `content_text` in two places only:
 
-  * announcements, pages, resources, quizzes and assignments, whose bodies
-    nothing in the app ever reads -- the dashboard shows their title and
-    date, and that is all;
-  * lectures not touched in the last 120 days. This one is recoverable:
-    the study tools and the tutor already answer `needs_content` when a
-    body is missing and have the extension fetch it again, so the cost is
-    one download the next time an old lecture is opened.
+  * announcement, assignment and quiz bodies over 12,000 characters,
+    trimmed to 12,000 and marked as trimmed. Nothing summarises one of
+    these; the dashboard shows the title and the date.
+  * bodies of lectures, pages, practice and resources not touched in the
+    last 120 days -- emptied, not shortened. This one is RECOVERABLE:
+    below ~120 characters the study tools and the tutor answer
+    `needs_content` and have the extension fetch the body again, so the
+    cost is one download the next time an old item is opened. That
+    threshold is exactly why these are emptied rather than shortened -- a
+    body left at a few thousand characters would never re-fetch, and would
+    be read as the whole item by the summariser and by the student.
 
 Outlines are never touched, in any term. They are what the grading policy
 was built from, what Ask quotes, and what a re-analysis needs.
@@ -119,17 +123,21 @@ def cleanup_sql(lecture_days):
     never reads it or can fetch it again.
     """
     return [
-        ("bodies the app never reads -- announcements, pages, resources, quizzes, assignments\n"
-         "    (the dashboard shows their title and date; nothing reads the body)",
-         """UPDATE course_content SET content_text = ''
-            WHERE content_text <> ''
-              AND content_type IN ('announcement','page','resource','practice','quiz','assignment')"""),
-        (f"lecture text not touched in {lecture_days} days\n"
-         "    (study tools and the tutor already re-fetch a lecture whose body is missing,\n"
-         "     so this costs one extra download the next time an old lecture is opened)",
+        ("announcement, assignment and quiz bodies over 12,000 characters\n"
+         "    (trimmed to 12,000 and marked; nothing summarises one of these,\n"
+         "     and the dashboard shows only their title and date)",
+         """UPDATE course_content
+            SET content_text = LEFT(content_text, 11950) ||
+                E'\\n\\n[Nexora stored only the first part of this item.]'
+            WHERE LENGTH(content_text) > 12000
+              AND content_type IN ('announcement','assignment','quiz')"""),
+        (f"lecture, page, practice and resource bodies not touched in {lecture_days} days\n"
+         "    (emptied, not shortened: below ~120 characters the study tools and the\n"
+         "     tutor answer needs_content and have the extension fetch the body again,\n"
+         "     so this costs one download the next time an old item is opened)",
          f"""UPDATE course_content SET content_text = ''
             WHERE content_text <> ''
-              AND content_type = 'lecture'
+              AND content_type IN ('lecture','page','practice','resource')
               AND updated_at < NOW() - INTERVAL '{int(lecture_days)} days'"""),
     ]
     # outlines are never touched, in any term: they are what the grading policy
