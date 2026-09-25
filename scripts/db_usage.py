@@ -1,6 +1,6 @@
 """What is using the production database, and how to get it back.
 
-Render suspended `uni_helper_db` for exceeding its storage limit. This
+Render suspended `uni_helper_db` for exceeding its 1 GB storage limit. This
 answers "what is taking so much storage" with numbers rather than a guess,
 and can reclaim the space.
 
@@ -19,30 +19,37 @@ from DATABASE_URL in the environment, but note that CLAUDE.md's rule still
 stands: never point the local app at production. This script only reads
 unless --apply is passed.
 
-Why the space goes: `course_content.content_text` holds the full extracted
-text of everything the extension scrapes -- every lecture, page, outline
-and announcement, in every course, in every term -- capped at 120,000
-characters a row. Nothing ever removes it. A four-year degree at ~150 items
-a course is tens of thousands of rows, and that one column is almost all of
-the database.
+WHERE THE SPACE ACTUALLY WENT, measured 2026-09-25:
 
-The cleanup deletes no rows. Every title, link, date, deadline, grade and
-outline survives. It blanks `content_text` in two places only:
+    academic_update   786.0 MB   96.1%   2,581,147 rows
+    course_content     20.8 MB    2.5%      25,682 rows
+    everything else     2.5 MB    0.4%
 
-  * announcement, assignment and quiz bodies over 12,000 characters,
-    trimmed to 12,000 and marked as trimmed. Nothing summarises one of
-    these; the dashboard shows the title and the date.
-  * bodies of lectures, pages, practice and resources not touched in the
-    last 120 days -- emptied, not shortened. This one is RECOVERABLE:
-    below ~120 characters the study tools and the tutor answer
-    `needs_content` and have the extension fetch the body again, so the
-    cost is one download the next time an old item is opened. That
-    threshold is exactly why these are emptied rather than shortened -- a
-    body left at a few thousand characters would never re-fetch, and would
-    be read as the whole item by the summariser and by the student.
+The first guess was `course_content.content_text` -- the scraped body of
+every item, capped at 120,000 characters. It is 20.8 MB in total and the
+largest single body in the database is a 20 KB outline. That theory was
+wrong, and a cleanup built on it would have freed 2.5% of the problem.
+Measure before believing a diagnosis; `pg_stat_user_tables` was also lying
+about the row count (4,758 against a real 2,581,147) because ANALYZE had
+never run.
 
-Outlines are never touched, in any term. They are what the grading policy
-was built from, what Ask quotes, and what a re-analysis needs.
+`academic_update` holds 2,581,147 rows across only 33,927 distinct
+(user, item, type) combinations -- every row written about seventy-six
+times. `_import_content` deletes a course's `CourseContent` rows when the
+payload carries `replace_courses`, then re-imports each item; the
+`existing` lookup therefore always misses, the `content_hash` comparison
+that exists to detect "unchanged" is unreachable, and every item writes a
+fresh update row on every sync. Lectures and outlines write two.
+
+The cleanup below deletes only the duplicates. Nothing a screen shows is
+lost: `/api/updates` is called by nothing, the course workspace reads the
+newest twelve for a course (twelve copies of one item today, twelve
+different items afterwards), the Canvas announcement check only needs one
+row per uid to exist, and the dashboard's "Recent updates" panel does not
+read this table at all -- `_recent_updates` reads the content rows.
+
+Deleting the duplicates without also fixing the insert buys about three
+months: the table was growing by 150,000-220,000 rows a day.
 """
 import argparse
 import os
@@ -69,6 +76,19 @@ def human(n):
         n /= 1024.0
 
 
+# Rows that are not the newest for their (user, item, type). The window
+# function does one pass and a sort; the equivalent NOT EXISTS self-join is
+# a nested loop over 2.5M rows and does not finish in reasonable time.
+DUPLICATE_IDS = """
+    SELECT id FROM (
+        SELECT id, row_number() OVER (
+            PARTITION BY user_id, related_uid, update_type
+            ORDER BY created_at DESC, id DESC) AS rn
+        FROM academic_update
+    ) ranked WHERE rn > 1
+"""
+
+
 def report(cur):
     print("\n=== Whole database ===")
     cur.execute("SELECT pg_database_size(current_database())")
@@ -76,112 +96,86 @@ def report(cur):
     print(f"  {human(total)}")
 
     print("\n=== By table (largest first) ===")
+    # n_live_tup comes from the stats collector and is a lie on a table that
+    # has never been ANALYZEd -- it read 4,758 against a real 2,581,147 here,
+    # which is how the wrong table got blamed. Count the big ones for real.
     cur.execute("""
         SELECT c.relname,
-               pg_total_relation_size(c.oid)                             AS total,
-               pg_relation_size(c.oid)                                   AS heap,
-               pg_total_relation_size(c.oid) - pg_relation_size(c.oid)   AS other,
-               COALESCE(s.n_live_tup, 0)                                 AS live,
-               COALESCE(s.n_dead_tup, 0)                                 AS dead
+               pg_total_relation_size(c.oid)  AS total,
+               pg_relation_size(c.oid)        AS heap,
+               pg_indexes_size(c.oid)         AS idx
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
         WHERE n.nspname = 'public' AND c.relkind = 'r'
         ORDER BY pg_total_relation_size(c.oid) DESC
     """)
-    print(f"  {'table':28} {'total':>11} {'rows':>10} {'dead rows':>11}  share")
-    for name, tot, heap, other, live, dead in cur.fetchall():
+    rows = cur.fetchall()
+    print(f"  {'table':26} {'total':>10} {'heap':>10} {'indexes':>10} {'rows':>12}  share")
+    for name, tot, heap, idx in rows:
+        count = ""
+        if tot > 1024 * 1024:                      # only count the ones that matter
+            cur.execute('SELECT COUNT(*) FROM "%s"' % name)
+            count = f"{cur.fetchone()[0]:,}"
         share = 100 * tot / max(total, 1)
-        flag = "  <-- dead rows need a VACUUM" if dead > live and dead > 1000 else ""
-        print(f"  {name:28} {human(tot):>11} {live:>10,} {dead:>11,}  {share:5.1f}%{flag}")
-
-    # the column that actually holds the bytes
-    try:
-        cur.execute("""
-            SELECT content_type,
-                   COUNT(*),
-                   COALESCE(SUM(LENGTH(content_text)), 0),
-                   COALESCE(MAX(LENGTH(content_text)), 0)
-            FROM course_content GROUP BY content_type
-            ORDER BY 3 DESC
-        """)
-        rows = cur.fetchall()
-    except psycopg2.Error:
-        return
-    if rows:
-        print("\n=== course_content.content_text, by type ===")
-        print(f"  {'type':16} {'rows':>9} {'text':>11} {'largest':>10}")
-        for kind, n, size, biggest in rows:
-            print(f"  {kind or '(none)':16} {n:>9,} {human(size):>11} {human(biggest):>10}")
+        print(f"  {name:26} {human(tot):>10} {human(heap):>10} {human(idx):>10} {count:>12}  {share:5.1f}%")
 
 
-def cleanup_sql(lecture_days):
-    """The statements, and what each one is allowed to touch.
+def plan(cur):
+    print("\n=== What the cleanup would remove ===")
+    cur.execute("SELECT COUNT(*) FROM academic_update")
+    before = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM (%s) d" % DUPLICATE_IDS)
+    dupes = cur.fetchone()[0]
+    cur.execute("""SELECT COUNT(*) FROM (
+                     SELECT 1 FROM academic_update
+                     GROUP BY user_id, related_uid, update_type) x""")
+    keep = cur.fetchone()[0]
+    cur.execute("SELECT pg_total_relation_size('academic_update')")
+    size = cur.fetchone()[0]
 
-    Nothing here deletes a row. Every title, link, date, deadline, grade and
-    outline survives; only the scraped body text goes, and only where the app
-    never reads it or can fetch it again.
+    print(f"  academic_update rows now          {before:>12,}")
+    print(f"  duplicates to delete              {dupes:>12,}   ({100 * dupes / max(before, 1):.1f}%)")
+    print(f"  rows kept (newest per item+type)  {keep:>12,}")
+    print(f"\n  The table occupies {human(size)}. After the delete and a VACUUM FULL")
+    print(f"  it should be roughly {human(size * keep / max(before, 1))}.")
+    print("\n  Nothing else is touched. Every other table, and every column on every")
+    print("  row that is kept, is left exactly as it is.")
+    return dupes
+
+
+def apply(conn, cur, batch):
+    """Delete in batches, committing each one.
+
+    One transaction holding 2.5M deletes builds a single enormous WAL record
+    and keeps every dead tuple locked until it commits -- on a database that
+    just ran out of disk, that is the one shape to avoid. Batches keep each
+    transaction small and let autovacuum begin reclaiming as we go.
     """
-    return [
-        ("announcement, assignment and quiz bodies over 12,000 characters\n"
-         "    (trimmed to 12,000 and marked; nothing summarises one of these,\n"
-         "     and the dashboard shows only their title and date)",
-         """UPDATE course_content
-            SET content_text = LEFT(content_text, 11950) ||
-                E'\\n\\n[Nexora stored only the first part of this item.]'
-            WHERE LENGTH(content_text) > 12000
-              AND content_type IN ('announcement','assignment','quiz')"""),
-        (f"lecture, page, practice and resource bodies not touched in {lecture_days} days\n"
-         "    (emptied, not shortened: below ~120 characters the study tools and the\n"
-         "     tutor answer needs_content and have the extension fetch the body again,\n"
-         "     so this costs one download the next time an old item is opened)",
-         f"""UPDATE course_content SET content_text = ''
-            WHERE content_text <> ''
-              AND content_type IN ('lecture','page','practice','resource')
-              AND updated_at < NOW() - INTERVAL '{int(lecture_days)} days'"""),
-    ]
-    # outlines are never touched, in any term: they are what the grading policy
-    # was built from, what Ask quotes, and what a re-analysis needs.
-
-
-def plan(cur, lecture_days):
-    print("\n=== What a cleanup would free ===")
-    freed = 0
-    for label, stmt in cleanup_sql(lecture_days):
-        where = stmt.split("WHERE", 1)[1]
-        cur.execute(f"SELECT COUNT(*), COALESCE(SUM(LENGTH(content_text)),0) FROM course_content cc WHERE {where}")
-        n, size = cur.fetchone()
-        freed += size
-        print(f"  {label}\n    {n:,} rows, {human(size)}")
-    print(f"\n  Total text removed: {human(freed)}")
-    print("  (Postgres returns this to the OS only after VACUUM FULL; see below.)")
-    return freed
-
-
-def apply(conn, cur, lecture_days):
     total = 0
-    for label, stmt in cleanup_sql(lecture_days):
-        cur.execute(stmt)
-        print(f"  {cur.rowcount:,} rows cleared -- {label}")
-        total += cur.rowcount
-    cur.execute("DELETE FROM academic_update WHERE created_at < NOW() - INTERVAL '60 days'")
-    print(f"  {cur.rowcount:,} academic_update rows older than 60 days deleted")
-    conn.commit()
-    print(f"\nDone. {total:,} content rows kept their title, link and dates; only the body text went.")
-    print("\nNow reclaim the disk. VACUUM FULL rewrites a table and needs free space")
-    print("roughly equal to that table's size, so do the big one on its own:")
-    print("    VACUUM (FULL, ANALYZE) course_content;")
+    while True:
+        cur.execute("DELETE FROM academic_update WHERE id IN (SELECT id FROM (%s) d LIMIT %d)"
+                    % (DUPLICATE_IDS, int(batch)))
+        n = cur.rowcount
+        conn.commit()
+        if n == 0:
+            break
+        total += n
+        print(f"  deleted {n:,} (running total {total:,})", flush=True)
+    cur.execute("SELECT COUNT(*) FROM academic_update")
+    print(f"\nDone. {total:,} duplicate rows deleted; {cur.fetchone()[0]:,} rows remain.")
+    print("\nNow reclaim the disk. VACUUM FULL rewrites the table into a new file, so")
+    print("it needs free space about the size of what SURVIVES, not of the original")
+    print("table -- which after this delete is small:")
     print("    VACUUM (FULL, ANALYZE) academic_update;")
-    print("If VACUUM FULL fails for want of space, raise the storage plan one step,")
-    print("run it, then drop back down.")
+    print("Then run this script again for the 'after' number.")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default=os.environ.get("DATABASE_URL", ""), help="Postgres URL (Render: External Database URL)")
-    ap.add_argument("--plan", action="store_true", help="show what a cleanup would free, change nothing")
+    ap.add_argument("--plan", action="store_true", help="show what a cleanup would remove, change nothing")
     ap.add_argument("--apply", action="store_true", help="run the cleanup")
-    ap.add_argument("--lecture-days", type=int, default=120, help="keep lecture text touched within this many days (default 120)")
+    ap.add_argument("--batch", type=int, default=100000, help="rows per delete batch (default 100000)")
     args = ap.parse_args()
     if not args.url:
         sys.exit("Give --url, or set DATABASE_URL.")
@@ -191,12 +185,12 @@ def main():
     cur = conn.cursor()
     report(cur)
     if args.plan or args.apply:
-        plan(cur, args.lecture_days)
+        plan(cur)
     if args.apply:
-        print("\nThis rewrites data in the database above.")
+        print("\nThis permanently deletes the rows counted above.")
         if input("Type YES to continue: ").strip() != "YES":
             sys.exit("Nothing was changed.")
-        apply(conn, cur, args.lecture_days)
+        apply(conn, cur, args.batch)
     conn.close()
 
 

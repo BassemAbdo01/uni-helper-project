@@ -1052,49 +1052,94 @@ same payload differently is exactly how the last one happened.
 
 ## What fills the database
 
-Render **suspended the production database for exceeding its storage**, which
-took the whole app down. `course_content.content_text` was almost all of it:
-the full extracted body of everything the extension scrapes, at a flat
-120,000 characters a row, across every item in every course in every term,
-and nothing ever removed any of it. "Import everything, always" multiplies
-that by a four-year degree -- tens of thousands of rows.
+Render **suspended the production database for exceeding its 1 GB storage**,
+which took the whole app down. Measured 2026-09-25, before any cleanup:
 
-**Every cap sits ABOVE what any feature reads** (`_CONTENT_TEXT_CAP`), so
-the store is never the binding constraint: the tutor reads 45,000 characters
-of a matched item, outline analysis excerpts at 90,000, study tools at
-120,000. Outlines and lectures keep 120,000; pages, practice and resources
-keep 48,000 (above the tutor's 45,000); announcements, assignments and
-quizzes keep 12,000, because nothing summarises one of those.
+| Table | Size | Share | Rows |
+|---|---|---|---|
+| `academic_update` | 786.0 MB | 96.1% | 2,581,147 |
+| `course_content` | 20.8 MB | 2.5% | 25,682 |
+| everything else | 2.5 MB | 0.4% | |
 
-**A cap below what a feature reads would be worse than it sounds.** The only
-thing that makes Nexora fetch a body again from Brightspace is it being
-**shorter than ~120 characters** (the `needs_content` branches). A body cut
-to a few thousand is far above that, so it would never re-fetch -- it would
-be read as the whole item, by the summariser and by the student. The first
-pass at this capped announcements at 4,000 and would have done exactly that.
-`_cap_content_text` therefore also **marks** a body it trims, so whatever
-reads it can tell it is not the whole thing.
+**The first diagnosis was wrong, and it is worth knowing how.**
+`course_content.content_text` -- the scraped body of every item, capped at a
+flat 120,000 characters -- was blamed from reading the schema, because it is
+the only column that *could* hold a gigabyte. It holds 20.8 MB. The largest
+single body in the entire database is a 20 KB outline. Two commits were spent
+capping it before anything was measured, and a cleanup built on that theory
+would have freed 2.5% of the problem.
 
-`AcademicUpdate` had the same shape: a row per item per changed sync, read
-by nothing older than a few days since "Recent updates" moved to the content
-rows. `_import_content` now drops anything past
-`ACADEMIC_UPDATE_KEEP_DAYS` (45) for that user on each sync.
+`pg_stat_user_tables` lied too: `n_live_tup` read **4,758** against a real
+**2,581,147**, because ANALYZE had never run on the table. That is what made
+786 MB across "4,758 rows" look like enormous rows rather than enormous
+numbers of them. **Count the big tables for real** -- `scripts/db_usage.py`
+does.
 
-`scripts/db_usage.py` answers "what is taking the space" with numbers --
-per table, and per content type within `course_content` -- and with
-`--plan` / `--apply` frees it. It deletes no rows. It trims oversized
-announcement, assignment and quiz bodies (marking them), and **empties** --
-never shortens -- lecture, page, practice and resource bodies untouched for
-120 days, which is recoverable through `needs_content`. Emptying rather than
-shortening is the same 120-character rule: a body left at a few thousand
-characters would never re-fetch. Outlines are never touched.
+**An item was announced once per sync, for ever.** 2,581,147 rows across only
+33,795 distinct (user, item, type) combinations -- one Brightspace page,
+"Knowledge Check - Q2", had 638 byte-identical rows, differing only in their
+timestamp. `_import_content` deletes a course's `CourseContent` rows when the
+payload carries `replace_courses`, then re-imports each item; the `existing`
+lookup on the next line therefore always misses, the `content_hash`
+comparison that exists to detect "unchanged" is **unreachable code in
+practice**, and every item takes the "new" branch and writes a fresh
+`AcademicUpdate`. Lectures and outlines write a second one. The giveaway was
+`content_updated`: 928 rows in two months, because nothing ever survives to
+be compared against.
 
-Two things about Postgres that make this worse than it looks: an `UPDATE`
-that blanks a column writes a new row version, so usage rises before it
-falls, and the space only returns to the disk after `VACUUM FULL`, which
-needs free space about the size of the table it is rewriting. On a database
-already at its limit, raise the storage one step, vacuum, then come back
-down.
+`announce()` is the fix: a set of `(related_uid, update_type)` already on
+file for that student, read **once per sync** rather than per item, since the
+loop runs over 1,200 of them. The content row is deleted by `replace_courses`
+and so cannot be what remembers; the update row is what remembers.
+`tests/test_update_duplication.py` pins it, and all four of its tests were
+confirmed to fail against the old code first.
+
+**Retention was not the answer here, and nearly hid the real one.**
+`ACADEMIC_UPDATE_KEEP_DAYS` (45) prunes on each sync, which is worth having,
+but 2,516,112 of the 2,581,147 rows were *inside* 45 days. A retention window
+bounds a table that grows slowly; it does nothing about one growing by
+150,000-220,000 rows a day. Deleting the duplicates without fixing the insert
+would have bought about three months.
+
+**The content caps are still right, on their own merits.** Every cap sits
+ABOVE what any feature reads (`_CONTENT_TEXT_CAP`), because the only thing
+that makes Nexora fetch a body again from Brightspace is it being **shorter
+than ~120 characters** (the `needs_content` branches). A body cut to a few
+thousand is far above that, so it would never re-fetch -- it would be read as
+the whole item, by the summariser and by the student. The first pass at this
+capped announcements at 4,000 and would have done exactly that.
+`_cap_content_text` therefore also **marks** a body it trims.
+
+`scripts/db_usage.py` answers "what is taking the space" with numbers -- per
+table, with real row counts -- and with `--plan` / `--apply` removes the
+duplicate update rows, keeping the newest per (user, item, type). Nothing a
+screen shows is lost: `/api/updates` is called by nothing, the course
+workspace reads the newest twelve for a course (twelve copies of one item
+before, twelve different items after), the Canvas announcement check only
+needs one row per uid to exist, and the dashboard's "Recent updates" panel
+does not read this table at all -- `_recent_updates` reads the content rows.
+It deletes in batches and commits each one: a single transaction holding 2.5M
+deletes builds one enormous WAL record and holds every dead tuple locked
+until it commits, which is the one shape to avoid on a database that has just
+run out of disk.
+
+Two things about Postgres that make this worse than it looks: a `DELETE` or a
+blanking `UPDATE` writes a new row version, so usage rises before it falls,
+and the space only returns to the disk after `VACUUM FULL`. That rewrites the
+table into a new file sized to **what survives**, not to the original -- so
+after the delete it needs almost no free space, and the order matters: delete
+first, vacuum second. On a database already at its limit with nothing yet
+deleted, raise the storage one step first.
+
+**Render's storage increase is permanent.** Compute is reversible and storage
+is not ("you can increase storage later, but you can't decrease it"), and
+from 1 GB the next step is 5 GB. At $0.30/GB/month that is $1.50 rather than
+$0.30 -- small, but it never comes back down, so clean before buying. A
+suspended database also has to be brought back by hand: raise the storage,
+then **Restart Database** on the Info page. Until it restarts, the port
+answers and TLS completes while Postgres never responds, and a deliberately
+wrong password returns the identical "SSL connection has been closed
+unexpectedly" -- which is how to tell "not running" from "not authorised".
 
 ## Caps must be loud
 

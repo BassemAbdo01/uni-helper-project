@@ -9467,6 +9467,35 @@ def _import_content(user, payload):
     if scan_course:
         scan_course = _normalize_course_code(scan_course)
     counts = {"added": 0, "updated": 0, "unchanged": 0}
+    # What this student has already been told about.
+    #
+    # `replace_courses` above DELETES a course's CourseContent rows before the
+    # loop re-imports them, so the `existing` lookup below always misses, the
+    # content_hash comparison that exists to detect "unchanged" is unreachable,
+    # and every item takes the "new" branch and announces itself again. On
+    # every sync. That made academic_update 2,581,147 rows across 33,795 real
+    # items -- one Brightspace page had 638 byte-identical rows -- which was
+    # 786 MB, 96% of the database, and why Render suspended it.
+    #
+    # The content row is gone by this point, but the update row is not, and it
+    # is the thing that remembers an item was already announced. Read once per
+    # sync rather than per item: this runs against 1,200 items.
+    announced = {
+        (row[0], row[1]) for row in
+        db.session.query(AcademicUpdate.related_uid, AcademicUpdate.update_type)
+        .filter(AcademicUpdate.user_id == user.id).all()
+    }
+
+    def announce(course_code, update_type, title, detail, uid):
+        """Tell the student about an item once, not once per sync."""
+        if (uid, update_type) in announced:
+            return
+        announced.add((uid, update_type))
+        db.session.add(AcademicUpdate(
+            id=uuid4().hex, user_id=user.id, course_full=course_code,
+            update_type=update_type, title=title, detail=detail, related_uid=uid,
+        ))
+
     # Before any date is derived: the extension reports the browser's zone, and
     # this is usually the request that creates the student's first deadlines.
     _adopt_reported_timezone(user, payload.get("timezone"))
@@ -9511,12 +9540,9 @@ def _import_content(user, payload):
             existing.content_hash = fingerprint
             existing.updated_at = datetime.utcnow()
             counts["updated"] += 1
-            db.session.add(AcademicUpdate(
-                id=uuid4().hex, user_id=user.id, course_full=course,
-                update_type="content_updated", title=f"{title} updated",
-                detail=f"{item_data['content_type'].title()} content changed in Brightspace.",
-                related_uid=source_uid,
-            ))
+            announce(course, "content_updated", f"{title} updated",
+                     f"{item_data['content_type'].title()} content changed in Brightspace.",
+                     source_uid)
         else:
             db.session.add(CourseContent(
                 id=uuid4().hex, user_id=user.id, course_full=course,
@@ -9526,26 +9552,16 @@ def _import_content(user, payload):
                 published_at=item_data["published_at"], content_hash=fingerprint,
             ))
             counts["added"] += 1
-            db.session.add(AcademicUpdate(
-                id=uuid4().hex, user_id=user.id, course_full=course,
-                update_type="new_content", title=f"New {item_data['content_type']}: {title}",
-                detail=item_data["module_name"] or "Imported from Brightspace.",
-                related_uid=source_uid,
-            ))
+            announce(course, "new_content", f"New {item_data['content_type']}: {title}",
+                     item_data["module_name"] or "Imported from Brightspace.", source_uid)
             if item_data["content_type"] == "lecture":
-                db.session.add(AcademicUpdate(
-                    id=uuid4().hex, user_id=user.id, course_full=course,
-                    update_type="ai_recommendation", title=f"Review recommended: {title}",
-                    detail="Nexora detected a new lecture. Open Study Tools to create flashcards, a quiz, or a study guide, and schedule a 30–45 minute review.",
-                    related_uid=source_uid,
-                ))
+                announce(course, "ai_recommendation", f"Review recommended: {title}",
+                         "Nexora detected a new lecture. Open Study Tools to create flashcards, a quiz, or a study guide, and schedule a 30–45 minute review.",
+                         source_uid)
             elif item_data["content_type"] == "outline":
-                db.session.add(AcademicUpdate(
-                    id=uuid4().hex, user_id=user.id, course_full=course,
-                    update_type="outline_detected", title="Course outline ready for analysis",
-                    detail="Analyze it once to build the official grading scheme and course-specific outcome calculator.",
-                    related_uid=source_uid,
-                ))
+                announce(course, "outline_detected", "Course outline ready for analysis",
+                         "Analyze it once to build the official grading scheme and course-specific outcome calculator.",
+                         source_uid)
     # AcademicUpdate gains a row for every item added or changed, on every
     # sync, and nothing reads one older than a few days -- the dashboard's
     # "Recent updates" reads the content rows instead (_recent_updates).
