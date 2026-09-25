@@ -163,11 +163,26 @@ def apply(conn, cur, batch):
         print(f"  deleted {n:,} (running total {total:,})", flush=True)
     cur.execute("SELECT COUNT(*) FROM academic_update")
     print(f"\nDone. {total:,} duplicate rows deleted; {cur.fetchone()[0]:,} rows remain.")
-    print("\nNow reclaim the disk. VACUUM FULL rewrites the table into a new file, so")
-    print("it needs free space about the size of what SURVIVES, not of the original")
-    print("table -- which after this delete is small:")
-    print("    VACUUM (FULL, ANALYZE) academic_update;")
-    print("Then run this script again for the 'after' number.")
+
+
+def vacuum(conn, table="academic_update"):
+    """Hand the space back to the disk.
+
+    VACUUM FULL rewrites the table into a new file sized to what SURVIVES,
+    not to the original -- so after the delete above it needs almost no free
+    space, which is why the order is delete first, vacuum second. It cannot
+    run inside a transaction, hence autocommit.
+    """
+    print(f"\nVACUUM (FULL, ANALYZE) {table} -- rewriting the table, this takes a minute...")
+    old_level = conn.isolation_level
+    conn.set_isolation_level(0)                    # autocommit
+    cur = conn.cursor()
+    cur.execute(f"VACUUM (FULL, ANALYZE) {table}")
+    conn.set_isolation_level(old_level)
+    cur.execute("SELECT pg_total_relation_size(%s), pg_database_size(current_database())", (table,))
+    size, total = cur.fetchone()
+    print(f"  {table} is now {human(size)}")
+    print(f"  the whole database is now {human(total)}")
 
 
 def main():
@@ -191,6 +206,7 @@ def main():
         if input("Type YES to continue: ").strip() != "YES":
             sys.exit("Nothing was changed.")
         apply(conn, cur, args.batch)
+        vacuum(conn)
     conn.close()
 
 
