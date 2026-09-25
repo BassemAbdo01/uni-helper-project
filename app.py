@@ -127,6 +127,7 @@ DASHBOARD_COURSE_LIMIT = int(os.environ.get("DASHBOARD_COURSE_LIMIT", "400"))
 # have. Anything past it is REPORTED rather than dropped quietly -- see the
 # `truncated` key on the import result.
 COURSE_IMPORT_MAX = int(os.environ.get("COURSE_IMPORT_MAX", "400"))
+ACADEMIC_UPDATE_KEEP_DAYS = int(os.environ.get("ACADEMIC_UPDATE_KEEP_DAYS", "45"))
 
 # Render sets RENDER_GIT_COMMIT on every deploy. Reported by /healthz so "did it
 # ship?" has an answer that does not depend on spotting a changed word somewhere.
@@ -9405,6 +9406,23 @@ def _import_deadlines(user, items, default_course=""):
     return counts
 
 
+# How much scraped body text is worth keeping, per kind. The whole text for
+# what gets read in full; a taste for what is only ever matched on; nothing
+# beyond that. Raising one of these raises the storage bill for every student,
+# so raise it only for a body something actually reads.
+_CONTENT_TEXT_CAP = {
+    "outline": 120000,     # analysed, quoted by Ask, re-read on every re-analysis
+    "lecture": 120000,     # summarised, explained, turned into flashcards
+    "page": 8000,          # occasionally matched by the tutor
+    "practice": 8000,
+    "resource": 4000,
+    "assignment": 4000,    # the deadline matters; the blurb does not
+    "quiz": 4000,
+    "announcement": 4000,  # the dashboard shows the title and the date only
+    "": 4000,
+}
+
+
 def _import_content(user, payload):
     """Upsert course content for one student, from either LMS.
 
@@ -9442,11 +9460,19 @@ def _import_content(user, payload):
             continue
         source_url = str(item.get("source_url") or "")[:4000]
         source_uid = str(item.get("source_uid") or source_url or f"{course}|{title}")[:255]
+        kind = str(item.get("content_type") or "resource")[:30]
         item_data = {
             "title": title,
-            "content_type": str(item.get("content_type") or "resource")[:30],
+            "content_type": kind,
             "source_url": source_url,
-            "content_text": str(item.get("content_text") or "")[:120000],
+            # Capped by what the body is FOR. Render suspended the production
+            # database for exceeding its storage, and this column was almost
+            # all of it: a flat 120,000 characters a row across every item in
+            # every course in every term, and nothing ever removed any of it.
+            # An outline is analysed and quoted, a lecture is summarised, and
+            # nothing reads the body of an announcement -- the dashboard shows
+            # its title and its date. See _CONTENT_TEXT_CAP.
+            "content_text": str(item.get("content_text") or "")[:_CONTENT_TEXT_CAP.get(kind, _CONTENT_TEXT_CAP[""])],
             "module_name": str(item.get("module_name") or "")[:1000],
             "published_at": str(item.get("published_at") or "")[:80],
         }
@@ -9501,6 +9527,14 @@ def _import_content(user, payload):
                     detail="Analyze it once to build the official grading scheme and course-specific outcome calculator.",
                     related_uid=source_uid,
                 ))
+    # AcademicUpdate gains a row for every item added or changed, on every
+    # sync, and nothing reads one older than a few days -- the dashboard's
+    # "Recent updates" reads the content rows instead (_recent_updates).
+    # Left alone it is a table that only ever grows.
+    cutoff = datetime.utcnow() - timedelta(days=ACADEMIC_UPDATE_KEEP_DAYS)
+    AcademicUpdate.query.filter(AcademicUpdate.user_id == user.id,
+                                AcademicUpdate.created_at < cutoff).delete(synchronize_session=False)
+
     # Keep course cards aware of how much content was imported.
     touched_courses = { _normalize_course_code((item or {}).get("course") or (item or {}).get("course_full") or "OTHER") for item in items if isinstance(item, dict) }
     for code in touched_courses:

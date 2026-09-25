@@ -144,10 +144,13 @@ def test_the_dashboard_renders_the_link_it_was_given(synced, client):
 
 def test_the_calendar_carries_the_link_on_the_entry(synced, client):
     url = f"{ORIGIN}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=11&ou=42"
+    due = date.today() + timedelta(days=9)
     push(client, synced, [{"content_type": "assignment", "title": "Milestone 1",
-                           "source_uid": "m1", "due_at": f"{(date.today() + timedelta(days=9)).isoformat()}T02:00:00Z",
+                           "source_uid": "m1", "due_at": f"{due.isoformat()}T02:00:00Z",
                            "source_url": url}])
-    body = client.get("/calendar?month=2026-09").get_data(as_text=True)
+    # the month the deadline is actually in: a pinned one stops containing it
+    # the moment the real date moves past it.
+    body = client.get(f"/calendar?month={due.strftime('%Y-%m')}").get_data(as_text=True)
     assert "data-link=" in body
     assert url.replace("&", "&amp;") in body
 

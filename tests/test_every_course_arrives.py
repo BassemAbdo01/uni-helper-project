@@ -231,3 +231,30 @@ def test_a_course_with_no_real_code_does_not_print_a_made_up_one(synced, client)
     assert "Math and Stats Learning Assistance Program" in body
     assert ">COURSE1006<" not in body
     assert ">BIOL1103<" in body
+
+
+def test_a_body_nobody_reads_is_not_stored_in_full(synced, client):
+    """Render suspended the production database for exceeding its storage,
+    and course_content.content_text was almost all of it: a flat 120,000
+    characters a row, across every item in every course in every term, and
+    nothing ever removed any of it.
+
+    An outline is analysed and quoted, a lecture is summarised. Nothing
+    reads the body of an announcement -- the dashboard shows its title and
+    its date. So the cap follows what the body is for.
+    """
+    import app as nexora
+    big = "x" * 200_000
+    send(client, synced, [offering("1", "ECOR1031", "Programming", "Fall 2026")])
+    r = client.post("/api/sync/content", headers=synced, json={"course": "ECOR1031", "items": [
+        {"content_type": "outline", "title": "Outline", "source_uid": "o1", "content_text": big},
+        {"content_type": "lecture", "title": "Lecture 1", "source_uid": "l1", "content_text": big},
+        {"content_type": "announcement", "title": "Notice", "source_uid": "n1", "content_text": big},
+        {"content_type": "assignment", "title": "Lab 1", "source_uid": "a1", "content_text": big},
+    ]})
+    assert r.status_code == 200, r.get_json()
+    with nexora.app.app_context():
+        kept = {r.content_type: len(r.content_text or "")
+                for r in nexora.CourseContent.query.filter_by(course_full="ECOR1031").all()}
+    assert kept["outline"] == 120_000 and kept["lecture"] == 120_000     # read in full
+    assert kept["announcement"] == 4_000 and kept["assignment"] == 4_000  # never read in full

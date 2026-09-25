@@ -1050,6 +1050,41 @@ coming back as `course='OTHER'` during an audit. The extension puts the code on
 every item, so this was latent, not live -- but two sibling paths reading the
 same payload differently is exactly how the last one happened.
 
+## What fills the database
+
+Render **suspended the production database for exceeding its storage**, which
+took the whole app down. `course_content.content_text` was almost all of it:
+the full extracted body of everything the extension scrapes, at a flat
+120,000 characters a row, across every item in every course in every term,
+and nothing ever removed any of it. "Import everything, always" multiplies
+that by a four-year degree -- tens of thousands of rows.
+
+**The cap now follows what the body is FOR** (`_CONTENT_TEXT_CAP`). An
+outline is analysed, quoted by Ask and re-read on every re-analysis, and a
+lecture is summarised and explained, so both keep 120,000. Nothing reads the
+body of an announcement, an assignment or a quiz -- the dashboard shows the
+title and the date -- so those keep 4,000. Raising one of these raises the
+bill for every student; raise it only for a body something actually reads.
+
+`AcademicUpdate` had the same shape: a row per item per changed sync, read
+by nothing older than a few days since "Recent updates" moved to the content
+rows. `_import_content` now drops anything past
+`ACADEMIC_UPDATE_KEEP_DAYS` (45) for that user on each sync.
+
+`scripts/db_usage.py` answers "what is taking the space" with numbers --
+per table, and per content type within `course_content` -- and with
+`--plan` / `--apply` frees it. It deletes no rows: it blanks bodies nothing
+reads, and lecture bodies not touched in 120 days, **which is recoverable**
+because the study tools and the tutor already answer `needs_content` and
+have the extension fetch a missing body again. Outlines are never touched.
+
+Two things about Postgres that make this worse than it looks: an `UPDATE`
+that blanks a column writes a new row version, so usage rises before it
+falls, and the space only returns to the disk after `VACUUM FULL`, which
+needs free space about the size of the table it is rewriting. On a database
+already at its limit, raise the storage one step, vacuum, then come back
+down.
+
 ## Caps must be loud
 
 `COURSE_IMPORT_MAX` and `DASHBOARD_COURSE_LIMIT` are both 400, raised from 80
