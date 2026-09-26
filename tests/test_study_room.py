@@ -157,3 +157,61 @@ def test_a_streak_survives_a_morning_with_nothing_done_yet(client, student):
         nexora.db.session.commit()
     _, d = room_data(client)
     assert d["stats"]["streak"] == 3
+
+
+def read_room_template():
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "templates", "study_room.html")
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_quality_steps_down_the_things_that_actually_cost():
+    """Quality was three pixel ratios and nothing else, defaulting to 1.65x on
+    any desktop -- reported as "extremely laggy and not usable".
+
+    Resolution was never the whole cost. Measured with gl.finish(), so the
+    number is the GPU's and not the submission queue's: 67.6ms a frame at that
+    default, and 26.6ms with shadows off. Three shadow casters over 490 meshes
+    is ~1,470 extra draw calls every frame, which no pixel ratio reaches. A
+    step down has to be able to drop shadow casters and ambient occlusion, not
+    only make the picture smaller.
+    """
+    src = read_room_template()
+    assert "const TIERS" in src, "quality is a ladder, not a number"
+    for lever in ("gtao:", "bloom:", "shadows:", "shadowMap:"):
+        assert lever in src, f"a tier must be able to change {lever}"
+    assert "applyTier" in src
+
+
+def test_the_room_defaults_below_the_top():
+    """The old default assumed any desktop could take 1.65x. The governor
+    raises it within a couple of seconds on a machine that can, and a student
+    on one that cannot never sees the bad frames."""
+    src = read_room_template()
+    assert "isSmall ? 'light' : 'balanced'" in src, "starts mid-ladder, not near the top"
+
+
+def test_the_room_fixes_its_own_framerate():
+    """A student whose laptop renders this at 2fps must not have to find a menu
+    to make the page work. It has to notice and step down by itself."""
+    src = read_room_template()
+    assert "function governQuality" in src
+    assert "governQuality(dt, now)" in src, "and it has to actually run in the frame loop"
+    assert "raisedOnce" in src, "it climbs once at most, so it can never oscillate"
+
+
+def test_an_explicit_choice_is_never_overridden():
+    """Auto-tuning that fights the student is worse than no auto-tuning."""
+    src = read_room_template()
+    assert "qualityIsAutomatic" in src
+    assert "if (!qualityIsAutomatic" in src, "the governor stands down once a tier is chosen"
+
+
+def test_a_live_surface_cannot_spend_nine_megapixels():
+    """A flat 2.5x supersample made the whiteboard a 3840x2500 canvas, which
+    costs its pixels twice -- once as the backing store in JS and again as the
+    uploaded texture with mipmaps."""
+    src = read_room_template()
+    assert "LIVE_TEXTURE_MAX_PX" in src
+    assert "Math.sqrt(LIVE_TEXTURE_MAX_PX" in src, "the cap is on area, not on a fixed multiplier"

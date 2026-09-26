@@ -139,6 +139,8 @@ html,body{height:100%;overflow:hidden}
 .modes button:hover,.sounds button:hover{color:var(--fg);border-color:var(--fg-3)}
 .modes button.on,.sounds button.on{background:var(--amber);border-color:var(--amber);color:#140F09;font-weight:500}
 .sounds{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+#quality{grid-template-columns:repeat(5,1fr)}
+.qnote{margin:10px 0 0;font-size:11px;line-height:1.5;color:var(--fg-3);min-height:1em}
 .amb h3{font-family:var(--serif);font-weight:400;font-size:1.05rem;margin:0 0 4px}
 .amb .sec{margin-top:18px}
 .amb .sec:first-child{margin-top:0}
@@ -456,7 +458,8 @@ const PANELS = {
         <div class="sec"><h3>Sound</h3><p class="meta">Generated in the browser — nothing to download, nothing to buffer.</p>
           <div class="sounds" id="sounds">${[['off', 'Quiet'], ['rain', 'Rain'], ['brown', 'Brown noise']].map(([k, n]) => `<button type="button" data-sound="${k}" class="${sound.kind === k ? 'on' : ''}">${n}</button>`).join('')}</div></div>
         <div class="sec"><h3>Render quality</h3><p class="meta">Ultra draws far more pixels than your screen has and scales them down, which is what makes edges look sharp. Drop it if the room stutters.</p>
-          <div class="sounds" id="quality">${[['ultra', 'Ultra'], ['high', 'High'], ['balanced', 'Battery']].map(([k, n]) => `<button type="button" data-quality="${k}" class="${quality === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+          <p class="qnote" id="qnote"></p>
+          <div class="sounds" id="quality">${TIERS.map(t => `<button type="button" data-quality="${t.name}" class="${quality === t.name ? 'on' : ''}">${t.name[0].toUpperCase() + t.name.slice(1)}</button>`).join('')}</div>
           <p class="meta" id="qualityNote" style="margin-top:8px"></p>
           <div class="switch"><span>Depth of field<br><small style="color:var(--fg-3)">Softens the background. Off is sharper.</small></span><button type="button" id="dofToggle" class="${bokeh && bokeh.enabled ? 'on' : ''}">${bokeh && bokeh.enabled ? 'On' : 'Off'}</button></div></div>
       </div>`;
@@ -466,6 +469,7 @@ const PANELS = {
       root.querySelector('#lampToggle').onclick = () => { ambience.setLamp(!ambience.lamp); showPanel('lamp'); };
       root.querySelectorAll('[data-sound]').forEach(b => b.onclick = () => { sound.set(b.dataset.sound); showPanel('lamp'); });
       root.querySelectorAll('[data-quality]').forEach(b => b.onclick = () => { setQuality(b.dataset.quality); showPanel('lamp'); });
+  paintQuality();
       const dof = root.querySelector('#dofToggle');
       if (dof) dof.onclick = () => { if (!bokeh) return; bokeh.enabled = !bokeh.enabled; localStorage.setItem('nexora-room-dof', bokeh.enabled ? '1' : '0'); showPanel('lamp'); };
       const note = root.querySelector('#qualityNote');
@@ -821,9 +825,21 @@ function wrap(x, text, px, py, maxW, lh, maxLines) {
   x.fillText(line, px, py);
 }
 
-/* live surfaces, drawn at 2x: redraw() whenever their data changes */
+/* live surfaces: redraw() whenever their data changes.
+
+   Supersampled, but BUDGETED. A flat 2.5x made the whiteboard a 3840x2500
+   canvas -- 9.6 megapixels for one prop, and the screen another 4.4 -- on a
+   page already holding 51MP of generated texture. Each of those costs its
+   pixels twice over, once as the canvas backing store in JS and again as the
+   uploaded texture with mipmaps.
+
+   An area cap gives the small surfaces the sharpness they need and stops a
+   large one from spending nine megapixels on a board seen across a room. Both
+   are still read at a glance, and both are mipmapped and viewed at an angle,
+   where the last half-x of supersampling was never visible anyway. */
+const LIVE_TEXTURE_MAX_PX = 2.6e6;
 function liveTexture(w, h, draw) {
-  const SS = 2.5;   // the screen and the board are read close up
+  const SS = Math.max(1, Math.min(2.5, Math.sqrt(LIVE_TEXTURE_MAX_PX / (w * h))));
   const [c, x] = makeCanvas(Math.round(w * SS), Math.round(h * SS)); x.scale(SS, SS);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = maxAniso();
   const o = {tex: t, redraw() { x.clearRect(0, 0, w, h); draw(x, w, h); t.needsUpdate = true; }}; o.redraw(); return o;
@@ -1081,9 +1097,36 @@ function buildLiveTextures() {
 /* =====================================================================
    6. Renderer, scene, camera, post-processing
    ===================================================================== */
-const QUALITY = {ultra: 2.1, high: 1.65, balanced: 1.2};
-let quality = localStorage.getItem('nexora-room-quality') || (isSmall ? 'balanced' : 'high');
-if (!QUALITY[quality]) quality = 'high';
+/* Quality is a LADDER, not a pixel ratio.
+
+   It used to be three numbers -- 2.1 / 1.65 / 1.2 -- that scaled the render
+   resolution and nothing else, defaulting to 1.65 on any desktop. Measured on
+   this machine at that default: 1-2 frames per second, reported as
+   "extremely laggy and not usable".
+
+   Resolution was never the whole cost. Timed with gl.finish() so the number is
+   the GPU's and not the queue's: 67.6ms a frame, and 26.6ms with shadows off.
+   Three shadow casters over 490 meshes is ~1,470 extra draw calls every frame,
+   which no pixel ratio reaches. So a step down now drops shadow casters, then
+   ambient occlusion, then bloom -- the things that actually cost -- rather
+   than only making the picture smaller. */
+const TIERS = [
+  {name: 'ultra',    pr: 2.1,  gtao: true,  bloom: true,  shadows: 3, shadowMap: 2048},
+  {name: 'high',     pr: 1.65, gtao: true,  bloom: true,  shadows: 3, shadowMap: 1536},
+  {name: 'balanced', pr: 1.25, gtao: true,  bloom: true,  shadows: 1, shadowMap: 1024},
+  {name: 'light',    pr: 1.0,  gtao: false, bloom: true,  shadows: 1, shadowMap: 1024},
+  {name: 'minimal',  pr: 0.85, gtao: false, bloom: false, shadows: 0, shadowMap: 512},
+];
+const QUALITY = Object.fromEntries(TIERS.map(t => [t.name, t.pr]));
+const tierIndex = name => Math.max(0, TIERS.findIndex(t => t.name === name));
+/* Start in the middle, not near the top. The old default assumed a desktop
+   could take 1.65x; the governor below raises it within a couple of seconds on
+   a machine that can, and a student on one that cannot never sees the bad
+   frames at all. An explicit choice is remembered and never overridden. */
+const savedQuality = localStorage.getItem('nexora-room-quality');
+let quality = QUALITY[savedQuality] !== undefined ? savedQuality : (isSmall ? 'light' : 'balanced');
+let qualityIsAutomatic = !(QUALITY[savedQuality] !== undefined);
+const tier = () => TIERS[tierIndex(quality)];
 const pixelRatio = () => Math.min(devicePixelRatio * QUALITY[quality], isSmall ? 2.2 : 3);
 const renderer = new THREE.WebGLRenderer({canvas, antialias: isSmall, powerPreference: 'high-performance'});
 renderer.setPixelRatio(pixelRatio());
@@ -1273,6 +1316,7 @@ async function buildRoom() {
   barLight.position.set(.15, 1.6, -2.22); barLight.target.position.set(.15, .75, -1.85);
   barLight.castShadow = !isSmall;
   if (!isSmall) { barLight.shadow.mapSize.set(1024, 1024); barLight.shadow.bias = -.0005; barLight.shadow.radius = 3; barLight.shadow.camera.near = .2; barLight.shadow.camera.far = 3; }
+  lights.barLight = barLight; barLight.userData.maxShadow = 1024;
   root.add(barLight, barLight.target);
   const screenGlow = new THREE.PointLight(0xFFD9A8, 1.1, 2.6, 2); screenGlow.position.set(.15, 1.05, -1.75); root.add(screenGlow);
 
@@ -1352,6 +1396,7 @@ async function buildRoom() {
   const lampLight = new THREE.SpotLight(0xFFC98A, 9, 3.6, .8, .75, 1.2);
   lampLight.position.set(-.6, 1.34, -1.9); lampLight.target.position.set(-.25, .77, -1.7);
   lampLight.castShadow = !isSmall; lampLight.shadow.mapSize.set(1024, 1024); lampLight.shadow.bias = -.0004; lampLight.shadow.radius = 4;
+  lights.lampLight = lampLight; lampLight.userData.maxShadow = 1024;
   root.add(lampLight, lampLight.target);
   lights.innerShade = inner.material;
 
@@ -1585,6 +1630,7 @@ async function buildRoom() {
   const coolFill = new THREE.PointLight(0x6E86B8, 1.1, 7, 2); coolFill.position.set(-1.4, 2.3, -.6); scene.add(coolFill);
   const moon = new THREE.DirectionalLight(0xFFB183, 1.5);   // the sunset through the window
   moon.position.set(-4.2, 2.6, -6.5); moon.target.position.set(-.6, .8, -1.2);
+  lights.moon = moon; moon.userData.maxShadow = 2048;
   moon.castShadow = !isSmall; moon.shadow.mapSize.set(2048, 2048);
   moon.shadow.camera.left = moon.shadow.camera.bottom = -4; moon.shadow.camera.right = moon.shadow.camera.top = 4;
   moon.shadow.camera.near = .5; moon.shadow.camera.far = 14; moon.shadow.bias = -.0006; moon.shadow.normalBias = .02;
@@ -1649,13 +1695,78 @@ function stepFlight(now) {
 const overview = () => stage.clientHeight > stage.clientWidth ? VIEW.portrait : VIEW.overview;
 function focus(key) { flyTo(VIEW[key] || overview(), 850); }
 $('resetView').onclick = () => { closeDrawer(); flyTo(overview(), 850); };
-function setQuality(q) {
-  if (!QUALITY[q]) return;
-  quality = q; localStorage.setItem('nexora-room-quality', q);
+/* Apply a tier to the things that actually cost frames.
+
+   Shadow casters go in order of how much each one is worth looking at: the
+   desk lamp throws the shadow the room is built around, so it is the last to
+   go; the sun through the window is a 2048 map over the whole room and the
+   first. A light keeps its light when it stops casting -- only the map goes. */
+function applyTier(announce) {
+  const t = tier();
   renderer.setPixelRatio(pixelRatio());
   if (composer) composer.setPixelRatio(renderer.getPixelRatio());
+  if (gtao) gtao.enabled = t.gtao;
+  if (bloom) bloom.enabled = t.bloom;
+  renderer.shadowMap.enabled = t.shadows > 0;
+  const casters = [lights.lampLight, lights.barLight, lights.moon].filter(Boolean);
+  casters.forEach((l, i) => {
+    const on = i < t.shadows;
+    if (l.castShadow !== on) { l.castShadow = on; l.shadow.map?.dispose?.(); l.shadow.map = null; }
+    if (on) l.shadow.mapSize.set(Math.min(t.shadowMap, l.userData.maxShadow || t.shadowMap),
+                                 Math.min(t.shadowMap, l.userData.maxShadow || t.shadowMap));
+  });
+  // Changing castShadow changes the shader each material needs.
+  scene.traverse(o => { if (o.isMesh) { const m = o.material; (Array.isArray(m) ? m : [m]).forEach(x => { if (x) x.needsUpdate = true; }); } });
   resize();
-  toast(`Render quality: ${q}.`, 1600);
+  paintQuality();
+  if (announce) toast(`Render quality: ${t.name}.`, 1600);
+}
+
+function setQuality(q, automatic) {
+  if (QUALITY[q] === undefined || q === quality) return;
+  quality = q;
+  if (automatic) { qualityIsAutomatic = true; }
+  else { qualityIsAutomatic = false; localStorage.setItem('nexora-room-quality', q); }
+  applyTier(!automatic);
+}
+
+/* The governor.
+
+   The room has to be usable on the machine it opens on, and it cannot know
+   what that machine is until it draws something. A student whose laptop
+   renders this at 2fps should never have to find a menu to make the page
+   work -- the page should notice and fix itself, which is what "extremely
+   laggy and not usable" actually asks for.
+
+   Median, not mean: one 400ms hitch while a texture uploads is not the same
+   as a machine that cannot keep up, and a mean cannot tell them apart. It
+   steps DOWN readily and UP only once, cautiously, so it can never oscillate
+   between two tiers and strobe the room. */
+function paintQuality() {
+  const box = document.getElementById('quality'); if (!box) return;
+  box.querySelectorAll('[data-quality]').forEach(b => b.classList.toggle('on', b.dataset.quality === quality));
+  const note = document.getElementById('qnote');
+  if (note) note.textContent = qualityIsAutomatic
+    ? `Nexora picked ${tier().name} for this device. Choose one to keep it there.`
+    : `Set to ${tier().name}. Nexora will not change it.`;
+}
+
+const perf = {samples: [], settled: 0, raisedOnce: false, lastStep: 0};
+function governQuality(dt, now) {
+  if (!qualityIsAutomatic || flight) return;         // never fight the entry animation
+  if (dt > 0 && dt < 2000) perf.samples.push(dt);
+  if (perf.samples.length < 45 || now - perf.lastStep < 1500) return;
+  const sorted = perf.samples.slice().sort((a, b) => a - b);
+  const median = sorted[sorted.length >> 1];
+  perf.samples.length = 0;
+  perf.lastStep = now;
+  const i = tierIndex(quality);
+  if (median > 34 && i < TIERS.length - 1) {          // under ~30fps: step down
+    setQuality(TIERS[i + 1].name, true);
+    perf.raisedOnce = true;                           // and never try to climb back
+  } else if (median < 13 && i > 0 && !perf.raisedOnce) {
+    setQuality(TIERS[i - 1].name, true);              // comfortably over 75fps: one step up
+  }
 }
 const PANEL_FOR = {cork: 'calendar', board: 'screen'};   // objects that open an existing panel
 function openKey(key) { focus(key); showPanel(PANEL_FOR[key] || key); }
@@ -1750,9 +1861,14 @@ function animateRoom(now) {
   const idle = !flight && now - lastInput > 4000 && !drawer.classList.contains('open') && !reducedMotion;
   controls.autoRotate = idle; controls.autoRotateSpeed = Math.sin(now * .00025) * .28;
 }
+let lastFrameAt = 0;
 function frame(now) {
   if (!running) return;
   requestAnimationFrame(frame);
+  // Wall-clock between frames, which is what a student experiences -- the time
+  // a render CALL takes is only how long it took to queue the work.
+  const dt = lastFrameAt ? now - lastFrameAt : 0; lastFrameAt = now;
+  governQuality(dt, now);
   stepFlight(now);
   controls.update();
   if (!flight) { raycaster.setFromCamera(pointer, camera); setHover(raycaster.intersectObjects(interactive, false)[0]?.object || null); }
@@ -1766,6 +1882,11 @@ document.addEventListener('visibilitychange', () => { running = !document.hidden
    11. Go
    ===================================================================== */
 buildRoom().then(() => {
+  // Before the first frame: the lights exist now, so the tier can reach the
+  // shadow casters it is allowed to switch off. Without this the room opens at
+  // whatever the light set-up hardcoded and the ladder only takes effect on
+  // the first change.
+  applyTier(false);
   resize(); ambience.setMode(ambience.mode); timer.paint();
   const startSound = k => { sound.set(k); ambience.setRain(k === 'rain'); };
   const wantedSound = sound.kind; sound.kind = 'off';
