@@ -96,6 +96,67 @@ def test_genuinely_new_content_is_still_announced(client, synced):
     assert any(u[0] == "53862|content|2006999" for u in after)
 
 
+def test_an_item_with_no_source_uid_is_still_only_announced_once(client, synced):
+    """The id falls back to source_url, then to "course|title". The pre-pass
+    that loads what has already been announced derives that id separately from
+    the loop that looks it up, so if the two ever disagree every item is
+    announced afresh on every sync -- the exact bug, back by another door.
+    `_content_source_uid` is the single definition; this is what pins it."""
+    headers, uid = synced
+    payload = {
+        "course": "CHEM1101",
+        "replace_courses": ["CHEM1101"],
+        "items": [
+            {"content_type": "page", "title": "No Uid Anywhere"},                    # falls back to course|title
+            {"content_type": "page", "title": "Url Only", "source_url": "https://learn.school.ca/x"},
+        ],
+    }
+    client.post("/api/sync/content", headers=headers, json=payload)
+    first = sorted(updates(uid))
+    for _ in range(4):
+        client.post("/api/sync/content", headers=headers, json=payload)
+    assert sorted(updates(uid)) == first
+    assert len(first) == 2
+
+
+def test_the_lookup_does_not_load_the_whole_table(client, synced):
+    """The first version of the fix read every update row the student had,
+    which on the account that caused the outage is 2.9 million -- about half a
+    gigabyte of Python objects, on a worker with less than that. A fix for a
+    table that grew too big must not itself need the table to be small."""
+    headers, uid = synced
+    client.post("/api/sync/content", headers=headers, json=PAYLOAD)
+    with nexora.app.app_context():
+        for n in range(400):                      # unrelated history, none of it in the payload
+            nexora.db.session.add(nexora.AcademicUpdate(
+                id=uuid4().hex, user_id=uid, course_full="OLD1000",
+                update_type="new_content", title=f"Ancient {n}",
+                related_uid=f"old|{n}"))
+        nexora.db.session.commit()
+
+    from sqlalchemy import event
+
+    selects = []
+
+    def watch(conn, cursor, statement, parameters, context, executemany):
+        flat = " ".join(statement.split()).lower()
+        if flat.startswith("select") and "from academic_update" in flat:
+            selects.append(flat)
+
+    with nexora.app.app_context():
+        engine = nexora.db.engine
+    event.listen(engine, "before_cursor_execute", watch)
+    try:
+        client.post("/api/sync/content", headers=headers, json=PAYLOAD)
+    finally:
+        event.remove(engine, "before_cursor_execute", watch)
+
+    reads = [s for s in selects if "related_uid" in s]
+    assert reads, "the sync does look up what was already announced"
+    for sql in reads:
+        assert "related_uid in (" in sql, f"unscoped read of the whole table: {sql[:120]}"
+
+
 def test_the_row_count_does_not_grow_with_sync_count(client, synced):
     """The property that actually matters: rows are bounded by items, not by
     how often the extension runs. Nexora synced ~76 times in two months."""

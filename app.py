@@ -9448,6 +9448,19 @@ def _cap_content_text(text, kind):
     return text[:cap - len(_TRUNCATED_NOTE)] + _TRUNCATED_NOTE
 
 
+def _content_source_uid(item, course, title):
+    """The stable id for one scraped item.
+
+    One definition, because the pre-pass that loads what has already been
+    announced has to derive exactly the id the loop will then look up -- two
+    copies of this rule would silently stop matching and every item would be
+    announced again, which is the bug it exists to prevent.
+    """
+    return str(item.get("source_uid")
+               or str(item.get("source_url") or "")[:4000]
+               or f"{course}|{title}")[:255]
+
+
 def _import_content(user, payload):
     """Upsert course content for one student, from either LMS.
 
@@ -9467,7 +9480,15 @@ def _import_content(user, payload):
     if scan_course:
         scan_course = _normalize_course_code(scan_course)
     counts = {"added": 0, "updated": 0, "unchanged": 0}
-    # What this student has already been told about.
+    # Before any date is derived: the extension reports the browser's zone, and
+    # this is usually the request that creates the student's first deadlines.
+    _adopt_reported_timezone(user, payload.get("timezone"))
+    # Deadlines are handled in their own pass, on purpose: the content loop
+    # short-circuits an item whose hash has not changed, so a deadline attached
+    # to already-imported content would never be created retroactively.
+    counts["deadlines"] = _import_deadlines(user, items, scan_course)
+
+    # What this student has already been told about, for THESE items only.
     #
     # `replace_courses` above DELETES a course's CourseContent rows before the
     # loop re-imports them, so the `existing` lookup below always misses, the
@@ -9475,16 +9496,30 @@ def _import_content(user, payload):
     # and every item takes the "new" branch and announces itself again. On
     # every sync. That made academic_update 2,581,147 rows across 33,795 real
     # items -- one Brightspace page had 638 byte-identical rows -- which was
-    # 786 MB, 96% of the database, and why Render suspended it.
+    # 786 MB, 96% of the database, and why Render suspended it. The content row
+    # is gone by this point; the update row is what remembers.
     #
-    # The content row is gone by this point, but the update row is not, and it
-    # is the thing that remembers an item was already announced. Read once per
-    # sync rather than per item: this runs against 1,200 items.
-    announced = {
-        (row[0], row[1]) for row in
-        db.session.query(AcademicUpdate.related_uid, AcademicUpdate.update_type)
-        .filter(AcademicUpdate.user_id == user.id).all()
-    }
+    # Ask only about the uids in this payload. The first version of this loaded
+    # every update row the student had, which on the account that caused the
+    # outage is 2.9 MILLION tuples -- about half a gigabyte of Python objects,
+    # on a worker that has less than that. A fix for a table that grew too big
+    # must not itself need the table to be small.
+    wanted = set()
+    for item in items[:1200]:
+        item_title = str(item.get("title") or "").strip()
+        if not item_title:
+            continue
+        wanted.add(_content_source_uid(item, _normalize_course_code(
+            item.get("course") or item.get("course_full") or scan_course or "OTHER"), item_title))
+    announced = set()
+    uid_list = list(wanted)
+    for start in range(0, len(uid_list), 300):       # bounded IN(), not one huge parameter list
+        announced.update(
+            (row[0], row[1]) for row in
+            db.session.query(AcademicUpdate.related_uid, AcademicUpdate.update_type)
+            .filter(AcademicUpdate.user_id == user.id,
+                    AcademicUpdate.related_uid.in_(uid_list[start:start + 300])).all()
+        )
 
     def announce(course_code, update_type, title, detail, uid):
         """Tell the student about an item once, not once per sync."""
@@ -9496,13 +9531,6 @@ def _import_content(user, payload):
             update_type=update_type, title=title, detail=detail, related_uid=uid,
         ))
 
-    # Before any date is derived: the extension reports the browser's zone, and
-    # this is usually the request that creates the student's first deadlines.
-    _adopt_reported_timezone(user, payload.get("timezone"))
-    # Deadlines are handled in their own pass, on purpose: the content loop
-    # short-circuits an item whose hash has not changed, so a deadline attached
-    # to already-imported content would never be created retroactively.
-    counts["deadlines"] = _import_deadlines(user, items, scan_course)
     for item in items[:1200]:
         title = str(item.get("title") or "").strip()
         if not title:
@@ -9513,7 +9541,7 @@ def _import_content(user, payload):
             counts["unchanged"] += 1
             continue
         source_url = str(item.get("source_url") or "")[:4000]
-        source_uid = str(item.get("source_uid") or source_url or f"{course}|{title}")[:255]
+        source_uid = _content_source_uid(item, course, title)
         kind = str(item.get("content_type") or "resource")[:30]
         item_data = {
             "title": title,
