@@ -4766,6 +4766,29 @@ def _course_colour_map(codes):
             for i, code in enumerate(sorted({str(c or "").strip() for c in codes if str(c or "").strip()}))}
 
 
+def _student_course_colours(user_id, extra=()):
+    """The colour map, identical on every screen that paints a course.
+
+    One definition of the FUNCTION was not enough. The calendar built its map
+    from the courses with dated work and the study plan from its own mix of
+    enrolments, sessions and timetable blocks, so the two sorted lists differed
+    and SYSC2004 came out blue on one page and green on the other -- caught by
+    reading both in the browser, one screenshot apart.
+
+    The primary set is courses with dated work, because that is what both pages
+    are actually about. Anything else -- a course on the timetable that has no
+    deadlines yet -- is appended AFTER, so it can never shift a colour that is
+    already in use somewhere else.
+    """
+    primary = sorted({str(t.course_full or "").strip()
+                      for t in Task.query.filter_by(user_id=user_id).all()
+                      if str(t.course_full or "").strip()})
+    out = {code: i % COURSE_COLOUR_COUNT for i, code in enumerate(primary)}
+    for code in sorted({str(c or "").strip() for c in extra if str(c or "").strip()} - set(out)):
+        out[code] = len(out) % COURSE_COLOUR_COUNT
+    return out
+
+
 def _exam_title(text, course):
     """A short name for the entry: the exam phrase itself, plus the number that
     tells two of them apart.
@@ -5926,6 +5949,84 @@ def _block_fields(data, partial=False):
     return fields, None
 
 
+def _plan_runway(user_id, sessions, today, colours):
+    """What the student is actually working toward, and how far along they are.
+
+    The plan rendered as a flat list of blocks -- "SYSC2004, 50 min" over and
+    over -- which says what to do in the next hour and nothing about why, or
+    what it is building to, or whether it is enough. The owner's words were
+    "doesn't make a proper study plan, just a list of what to do for 50 mins
+    for each thing".
+
+    This is the missing half: for each deadline the plan is feeding, the hours
+    already done, the hours still booked, and how long there is. Built from the
+    sessions themselves rather than from a second pass over the deadlines,
+    because the sessions ARE the plan -- anything else could disagree with what
+    is on the page directly underneath it.
+
+    `done` counts `actual_minutes`, the minutes the clock really recorded, on
+    the same rule `_learned_effort` follows: a block marked done with no
+    duration is not evidence of anything.
+    """
+    items = {}
+    rows = StudySession.query.filter_by(user_id=user_id).filter(
+        StudySession.on_date >= (today - timedelta(days=28)).isoformat()).all()
+    for row in rows:
+        key = (row.course_full or "OTHER", (row.title or "").strip())
+        if not key[1]:
+            continue
+        it = items.setdefault(key, {
+            "course": key[0], "title": key[1], "kind": row.item_kind or "",
+            "planned": 0, "done": 0, "blocks": 0, "done_blocks": 0,
+        })
+        minutes = max(0, (row.end_min or 0) - (row.start_min or 0))
+        if row.state == "done":
+            it["done"] += int(row.actual_minutes or 0)
+            it["done_blocks"] += 1
+        elif row.state == "planned" and row.on_date >= today.isoformat():
+            it["planned"] += minutes
+            it["blocks"] += 1
+
+    # When is each of these actually due? The deadline lives on Task, and the
+    # plan's own title is what links them.
+    due_by_title = {}
+    for task in Task.query.filter_by(user_id=user_id, completed=False).all():
+        stem = (task.title or "").strip()
+        if stem:
+            due_by_title.setdefault(((task.course_full or "OTHER"), stem), task.due_raw or "")
+
+    out = []
+    for key, it in items.items():
+        if it["planned"] <= 0 and it["done"] <= 0:
+            continue
+        due = due_by_title.get(key, "")
+        days = days_until(due) if due else None
+        # _major_assessment_label is the ONLY authority, and deliberately has
+        # no `or kind in _EXAM_KINDS` fallback beside it. The planner files a
+        # revision block under an exam kind -- that is what it is revision FOR
+        # -- so an `or` on the kind put an EXAM tag on "Midterm review session"
+        # and on "Weekly Quiz 4", re-flagging the exact titles _NOT_AN_EXAM
+        # exists to exclude. Caught in the browser one screenshot after this
+        # strip first rendered.
+        label = _major_assessment_label(it["kind"], it["title"])
+        if days is not None and days < -1:
+            continue
+        total = it["planned"] + it["done"]
+        out.append({**it,
+                    "major": bool(label),
+                    "label": label,
+                    "days_left": days,
+                    "due": due,
+                    "colour": colours.get(it["course"], 0),
+                    "total": total,
+                    "pct": int(round(100 * it["done"] / total)) if total else 0})
+    # Soonest first, and an exam ahead of ordinary work due the same day --
+    # which is the order the hours should be read in.
+    out.sort(key=lambda x: (x["days_left"] if x["days_left"] is not None else 999,
+                            0 if x["major"] else 1, -x["total"]))
+    return out[:6]
+
+
 @app.route("/study-plan")
 @login_required
 def study_plan_page():
@@ -5940,6 +6041,14 @@ def study_plan_page():
 
     courses = sorted({c.course_code for c in SyncedCourse.query.filter_by(user_id=user_id).all()
                       if c.course_code and not bool(getattr(c, "is_hidden", False))})
+    # ONE colour map, built once and handed to everything on this page and to
+    # the runway. Computing it twice from two different inputs is how two parts
+    # of the same screen end up painting one course two colours.
+    colours = _student_course_colours(
+        user_id,
+        extra=list(courses)
+        + [s.course_full for s in sessions if s.course_full]
+        + [b.course_full for b in blocks if getattr(b, "course_full", None)])
     return render_template(
         "study_plan.html",
         # With no timetable saved, uploading one is the only thing worth doing
@@ -5960,6 +6069,11 @@ def study_plan_page():
         courses=courses,
         weekdays=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
         today_iso=today.isoformat(),
+        # The same rule the calendar follows. Two screens painting a course
+        # differently is the same class of bug as two disagreeing about a
+        # grade, and this page sits one rail item away from that one.
+        course_colours=colours,
+        runway=_plan_runway(user_id, sessions, today, colours),
     )
 
 
@@ -9760,7 +9874,7 @@ def calendar_page():
     # of each other. That was visible immediately -- SYSC2310 came out tan
     # against BIOL1103's amber because two work-free courses held green and
     # blue.
-    colours = _course_colour_map(c.get("course_full") or "OTHER" for c in cards)
+    colours = _student_course_colours(current_user.id)
 
     tasks_by_date = {}
 

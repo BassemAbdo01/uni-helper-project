@@ -34,9 +34,14 @@ def event_titles(client, month="2026-10"):
     Searching the whole page is not good enough: the add-event form carries
     placeholder text like "Midterm 1", so a deleted event still appeared to be
     on the calendar.
+
+    `class="ev` without the closing quote on purpose: an exam or midterm
+    renders as `class="ev major"` so it does not look like a discussion-board
+    post, and matching only `class="ev"` quietly stopped seeing exactly the
+    entries these tests are mostly about.
     """
     body = client.get(f"/calendar?month={month}").get_data(as_text=True)
-    return re.findall(r'class="ev".*?<strong>(.*?)</strong>', body, re.S)
+    return re.findall(r'class="ev[ "].*?<strong>(.*?)</strong>', body, re.S)
 
 
 def add(client, **payload):

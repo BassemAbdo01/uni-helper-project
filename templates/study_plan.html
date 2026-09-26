@@ -4,6 +4,80 @@
 
 {% block head %}
 <style>
+/* Course colours, matching the calendar's. Same order, because the same course
+   has to be the same colour on both screens. */
+/* On BOTH cards by id, not on a `.plan` class that the plan card does not
+   carry -- it had one, and with --c0..--c7 undefined there `var(--c1)` was
+   invalid, so every study block in the week fell back to amber and the colour
+   coding did nothing at all. It looked deliberate: amber IS the first course's
+   colour, so the bug was invisible until two courses were read side by side. */
+.runway,#planCard{--c0:#E8A94A;--c1:#7892C8;--c2:#7FB08A;--c3:#C9705C;--c4:#B08FA8;--c5:#9BAF7E;--c6:#8FA6B2;--c7:#C4A47C}
+.runway{margin-bottom:18px}
+.rw{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.rwi{border:1px solid var(--line);border-left:3px solid var(--ev,var(--amber));
+  border-radius:10px;padding:12px 13px;background:var(--surface-2);min-width:0}
+/* An exam is not one of six equal cards. */
+.rwi.big{background:color-mix(in srgb,var(--ev,var(--amber)) 10%,var(--surface-2));
+  border-color:color-mix(in srgb,var(--ev,var(--amber)) 45%,transparent);border-left-width:4px}
+.rwh{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;min-width:0}
+.rwh strong{font-size:13.5px;font-weight:600;line-height:1.3;min-width:0;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.rwi .tag{font-family:var(--mono);font-size:8.5px;font-weight:700;letter-spacing:.1em;
+  padding:2px 5px;border-radius:3px;color:#17140F;background:var(--ev,var(--amber));flex:none}
+.rwm{display:flex;gap:9px;align-items:center;margin-top:5px;font-family:var(--mono);
+  font-size:9.5px;letter-spacing:.07em}
+.rwm .c{color:var(--ev,var(--amber))}
+.rwm .d{color:var(--fg-3)}
+/* Three days out, the number stops being information and becomes a prompt. */
+.rwm .d.urgent{color:#E8845A;font-weight:700}
+.bar{height:5px;border-radius:99px;background:var(--surface-4,#2A2622);margin:10px 0 7px;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:99px;background:var(--ev,var(--amber));
+  transition:width .4s ease}
+.rwf{display:flex;justify-content:space-between;gap:8px;font-family:var(--mono);
+  font-size:9px;letter-spacing:.05em;color:var(--fg-3)}
+@media (max-width:700px){.rw{grid-template-columns:1fr}}
+
+.phead{display:flex;align-items:center;gap:12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:transparent;color:var(--fg-3);font:inherit;font-size:11px;
+  padding:5px 11px;cursor:pointer}
+.seg button.on{background:var(--amber);color:#17140F;font-weight:600}
+
+/* The week. A column per day, positioned by the clock, so study blocks sit
+   where they actually fall against the classes they were fitted around. */
+.wk{display:grid;grid-template-columns:38px repeat(7,minmax(0,1fr));gap:4px}
+.wkh{font-family:var(--mono);font-size:9px;letter-spacing:.09em;color:var(--fg-3);
+  text-align:center;padding-bottom:5px;text-transform:uppercase}
+.wkh.now{color:var(--amber);font-weight:700}
+.wkcol{position:relative;border-left:1px solid var(--line);min-height:var(--wkh,560px)}
+.wkcol.today{background:var(--surface-2)}
+.wkax{position:relative;min-height:var(--wkh,560px)}
+.wkax span{position:absolute;right:5px;transform:translateY(-50%);font-family:var(--mono);
+  font-size:8.5px;color:var(--fg-4,var(--fg-3));opacity:.75}
+.wkln{position:absolute;left:0;right:0;border-top:1px solid var(--line);opacity:.35}
+/* A class is the fixed thing the plan works around: quiet, and clearly not a
+   study block a student can tick off. */
+.wkc{position:absolute;left:1px;right:1px;border-radius:4px;padding:3px 4px;overflow:hidden;
+  background:repeating-linear-gradient(135deg,var(--surface-3) 0 5px,transparent 5px 10px);
+  border:1px solid var(--line);color:var(--fg-3);font-size:9px;line-height:1.25}
+.wks{position:absolute;left:1px;right:1px;border-radius:4px;padding:3px 5px;overflow:hidden;
+  background:color-mix(in srgb,var(--ev,var(--amber)) 20%,var(--surface-2));
+  border:1px solid color-mix(in srgb,var(--ev,var(--amber)) 55%,transparent);
+  border-left:3px solid var(--ev,var(--amber));
+  font-size:9.5px;line-height:1.25;cursor:pointer;text-align:left;color:inherit;display:block}
+.wks:hover{background:color-mix(in srgb,var(--ev,var(--amber)) 32%,var(--surface-2))}
+.wks b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wks small{display:block;font-family:var(--mono);font-size:8px;color:var(--fg-3);letter-spacing:.04em}
+.wks.done{opacity:.5}
+.wks.done b{text-decoration:line-through}
+.wks.skipped,.wks.missed{opacity:.45;border-style:dashed}
+.wknow{position:absolute;left:0;right:0;height:0;border-top:1px solid #E8845A;z-index:3}
+.wknow::before{content:'';position:absolute;left:-3px;top:-3px;width:6px;height:6px;
+  border-radius:50%;background:#E8845A}
+@media (max-width:900px){.wk{display:none}}
+.wkfall{display:none}
+@media (max-width:900px){.wkfall{display:block}}
+
 .two{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;align-items:start}
 /* The column is a flex stack so the timetable can be promoted above the plan
    for a student who has not uploaded one yet. Setup before output: an empty
@@ -129,16 +203,71 @@
   </div>
 </section>
 
+{% if runway %}
+  {# What the hours are FOR. The plan underneath says what to do in the next
+     50 minutes; this says what it is building to, how much of it is already
+     behind you, and how long there is. Without it the page is a to-do list
+     with times on it. #}
+  <section class="card runway">
+    <header>
+      <div><span class="k">What you are working toward</span><h2>The runway</h2></div>
+    </header>
+    <div class="body">
+      <div class="rw">
+        {% for r in runway %}
+          <div class="rwi{% if r.major %} big{% endif %}" style="--ev:var(--c{{ r.colour }})">
+            <div class="rwh">
+              {% if r.label %}<span class="tag">{{ r.label }}</span>{% endif %}
+              <strong>{{ r.title }}</strong>
+            </div>
+            <div class="rwm">
+              <span class="c">{{ r.course }}</span>
+              {% if r.days_left is not none %}
+                <span class="d{% if r.days_left <= 3 %} urgent{% endif %}">{%
+                  if r.days_left < 0 %}OVERDUE{% elif r.days_left == 0 %}TODAY{%
+                  elif r.days_left == 1 %}TOMORROW{% else %}{{ r.days_left }} DAYS{% endif %}</span>
+              {% endif %}
+            </div>
+            {# Done over booked. A bar that only ever showed "planned" would
+               tell a student nothing about whether they are actually doing it. #}
+            <div class="bar" role="img"
+                 aria-label="{{ (r.done // 60) }}h {{ '%02d'|format(r.done % 60) }} done of {{ (r.total // 60) }}h {{ '%02d'|format(r.total % 60) }} planned">
+              <i style="width:{{ r.pct }}%"></i>
+            </div>
+            <div class="rwf">
+              <span>{{ (r.done // 60) }}h {{ '%02d'|format(r.done % 60) }} done</span>
+              <span>{% if r.planned %}{{ (r.planned // 60) }}h {{ '%02d'|format(r.planned % 60) }} to go{% else %}all booked work finished{% endif %}</span>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+{% endif %}
+
+<section class="card" id="planCard" style="margin-bottom:18px">
+    <header>
+      <div><span class="k">The plan</span><h2>Next two weeks</h2></div>
+      <div class="phead">
+        <span class="k" style="margin:0" id="planCount"></span>
+        {# A plan you cannot SEE is a to-do list with times on it. The week
+           lays the study blocks over the classes they were fitted around,
+           which is the thing the student is actually being shown. The list
+           stays, because it is where Done, Skip and the link to the work
+           live. #}
+        <div class="seg" id="planView" role="tablist" aria-label="How to show the plan">
+          <button type="button" data-view="week" role="tab" class="on">Week</button>
+          <button type="button" data-view="list" role="tab">List</button>
+        </div>
+      </div>
+    </header>
+    <p class="note meta" id="catchUp" hidden></p>
+    <div class="body pad" id="planWeek"></div>
+    <div class="body pad" id="planBody" hidden></div>
+</section>
+
 <div class="two">
   <div>
-    <section class="card" id="planCard">
-      <header>
-        <div><span class="k">The plan</span><h2>Next two weeks</h2></div>
-        <span class="k" style="margin:0" id="planCount"></span>
-      </header>
-      <p class="note meta" id="catchUp" hidden></p>
-      <div class="body pad" id="planBody"></div>
-    </section>
 
     <section class="card{% if not has_timetable %} lead{% endif %}">
       <header>
@@ -578,7 +707,159 @@ dialog.sheet::backdrop{background:#0B0908cc}
   });
 
   /* ---------------- the plan ---------------- */
+  /* ===== The week =====
+     The plan drawn against the clock, seven days at a time, so a student can
+     see their week instead of reading a list of fifty-minute rows. The classes
+     are drawn too: the whole point of the arithmetic is that the study blocks
+     fit around them, and a plan that hides what it was fitted around cannot
+     show its working. */
+  const COURSE_COLOURS = {{ course_colours|tojson }};
+  const DAYNAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  let weekOffset = 0;
+
+  const isoOf = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  function mondayOf(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return d;
+  }
+  // Only the hours the week actually uses, with a little air. A grid drawn
+  // from midnight to midnight spends two thirds of its height on hours nobody
+  // studies in, and makes every block too thin to read.
+  function weekBounds(days, classes) {
+    let lo = 24 * 60, hi = 0;
+    for (const s of days.flatMap(d => d.sessions)) { lo = Math.min(lo, s.start); hi = Math.max(hi, s.end); }
+    for (const c of classes) { lo = Math.min(lo, c.start); hi = Math.max(hi, c.end); }
+    if (hi <= lo) { lo = 8 * 60; hi = 22 * 60; }
+    return [Math.max(0, Math.floor((lo - 30) / 60) * 60), Math.min(24 * 60, Math.ceil((hi + 30) / 60) * 60)];
+  }
+  function occursOn(block, dateIso) {
+    if ((block.repeat || 'weekly') !== 'biweekly' || !block.anchor_date) return true;
+    // Monday-to-Monday, the same comparison _block_occurs_on makes on the
+    // server -- a fortnightly lab must not be drawn on its off week.
+    const a = mondayOf(block.anchor_date), b = mondayOf(dateIso);
+    return Math.round((b - a) / 604800000) % 2 === 0;
+  }
+
+  function renderWeek() {
+    const host = $('planWeek');
+    if (!host) return;
+    if (!sessions.length) { host.replaceChildren(); return; }
+
+    const base = mondayOf({{ today_iso|tojson }});
+    base.setDate(base.getDate() + weekOffset * 7);
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(base); d.setDate(d.getDate() + i);
+      const iso = isoOf(d);
+      days.push({iso, date: d, weekday: i, sessions: sessions.filter(s => s.date === iso)});
+    }
+    const classes = blocks.filter(b => days.some(d => d.weekday === b.weekday && occursOn(b, d.iso)));
+    const [lo, hi] = weekBounds(days, classes);
+    const span = hi - lo;
+    const H = Math.max(420, Math.min(760, span * 0.62));
+    const y = m => ((m - lo) / span) * H;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'wk';
+    wrap.style.setProperty('--wkh', H + 'px');
+
+    // header row
+    wrap.append(document.createElement('div'));
+    for (const d of days) {
+      const h = document.createElement('div');
+      h.className = 'wkh' + (d.iso === {{ today_iso|tojson }} ? ' now' : '');
+      h.textContent = `${DAYNAMES[d.weekday]} ${d.date.getDate()}`;
+      wrap.append(h);
+    }
+
+    // hour axis
+    const ax = document.createElement('div');
+    ax.className = 'wkax'; ax.style.height = H + 'px';
+    for (let m = lo; m <= hi; m += 60) {
+      const lab = document.createElement('span');
+      lab.style.top = y(m) + 'px';
+      lab.textContent = String(Math.floor(m / 60)).padStart(2, '0');
+      ax.append(lab);
+    }
+    wrap.append(ax);
+
+    for (const d of days) {
+      const col = document.createElement('div');
+      col.className = 'wkcol' + (d.iso === {{ today_iso|tojson }} ? ' today' : '');
+      col.style.height = H + 'px';
+      for (let m = lo; m <= hi; m += 60) {
+        const ln = document.createElement('div');
+        ln.className = 'wkln'; ln.style.top = y(m) + 'px'; col.append(ln);
+      }
+      for (const b of blocks.filter(b => b.weekday === d.weekday && occursOn(b, d.iso))) {
+        const el = document.createElement('div');
+        el.className = 'wkc';
+        el.style.top = y(b.start) + 'px';
+        el.style.height = Math.max(11, y(b.end) - y(b.start)) + 'px';
+        el.textContent = b.course || b.label || 'Class';
+        el.title = `${b.course || b.label} · ${b.start_label}–${b.end_label}${b.location ? ' · ' + b.location : ''}`;
+        col.append(el);
+      }
+      for (const s of d.sessions) {
+        const el = document.createElement('button');
+        el.type = 'button';
+        el.className = `wks ${s.state}`;
+        el.style.setProperty('--ev', `var(--c${COURSE_COLOURS[s.course] ?? 0})`);
+        el.style.top = y(s.start) + 'px';
+        el.style.height = Math.max(15, y(s.end) - y(s.start)) + 'px';
+        const b = document.createElement('b');
+        b.textContent = s.course && s.course !== 'OTHER' ? s.course : s.title;
+        const sm = document.createElement('small');
+        sm.textContent = `${s.start_label} · ${s.minutes}m`;
+        el.append(b, sm);
+        el.title = `${s.start_label}–${s.end_label} · ${s.title}\n${s.focus || ''}\n${s.reason || ''}`;
+        // The week is for seeing; the list is where a block is acted on.
+        el.onclick = () => { setPlanView('list'); const row = document.querySelector(`[data-session="${s.id}"]`);
+          if (row) { row.scrollIntoView({block: 'center', behavior: 'smooth'}); row.classList.add('flash');
+                     setTimeout(() => row.classList.remove('flash'), 1400); } };
+        col.append(el);
+      }
+      if (d.iso === {{ today_iso|tojson }}) {
+        const n = new Date(), mins = n.getHours() * 60 + n.getMinutes();
+        if (mins >= lo && mins <= hi) {
+          const line = document.createElement('div');
+          line.className = 'wknow'; line.style.top = y(mins) + 'px'; col.append(line);
+        }
+      }
+      wrap.append(col);
+    }
+
+    // Under 900px the grid is unreadable, so the list is the week on a phone.
+    const fall = document.createElement('p');
+    fall.className = 'wkfall note meta';
+    fall.textContent = 'The week grid needs a wider screen — showing the list instead.';
+
+    const nav = document.createElement('div');
+    nav.className = 'wknav';
+    const mk = (label, delta, disabled) => { const b = document.createElement('button');
+      b.type = 'button'; b.className = 'ghost sm'; b.textContent = label; b.disabled = !!disabled;
+      b.onclick = () => { weekOffset += delta; renderWeek(); }; return b; };
+    const span2 = document.createElement('span');
+    span2.className = 'k';
+    span2.textContent = weekOffset === 0 ? 'This week' : (weekOffset === 1 ? 'Next week' : `${weekOffset} weeks ahead`);
+    nav.append(mk('‹', -1, weekOffset <= 0), span2, mk('›', 1, weekOffset >= 2));
+
+    host.replaceChildren(wrap, fall, nav);
+  }
+
+  function setPlanView(view) {
+    const week = view === 'week';
+    $('planWeek').hidden = !week;
+    $('planBody').hidden = week;
+    document.querySelectorAll('#planView [data-view]').forEach(b =>
+      b.classList.toggle('on', b.dataset.view === view));
+    try { localStorage.setItem('nexora-plan-view', view); } catch (e) {}
+    if (week) renderWeek();
+  }
+
   function renderPlan() {
+    if ($('planWeek') && !$('planWeek').hidden) renderWeek();
     // Say what happened to a day that went by, above the plan, once. Not a
     // telling-off: the work still has a deadline and it has been moved.
     const banner = $('catchUp');
@@ -629,6 +910,7 @@ dialog.sheet::backdrop{background:#0B0908cc}
       for (const s of list) {
         const row = document.createElement('div');
         row.className = `sess ${s.state}`;
+        row.dataset.session = s.id;   // the week view scrolls to this row
         const when2 = document.createElement('div');
         when2.className = 'when';
         when2.textContent = `${s.start_label}`;
@@ -864,7 +1146,13 @@ dialog.sheet::backdrop{background:#0B0908cc}
 
   fillPrefs();
   renderTimetable();
+  document.querySelectorAll('#planView [data-view]').forEach(b => b.onclick = () => setPlanView(b.dataset.view));
   renderPlan();
+  // Week by default: it is the thing the page is for. The list is one click
+  // away and the choice is remembered.
+  let startView = 'week';
+  try { startView = localStorage.getItem('nexora-plan-view') || 'week'; } catch (e) {}
+  setPlanView(startView === 'list' ? 'list' : 'week');
   if (sessions.length) $('regen').textContent = 'Rebuild my plan';
 })();
 </script>
