@@ -104,6 +104,17 @@ app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
 if database_url and database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
 
+# NAME THE DRIVER. A bare postgresql:// lets SQLAlchemy pick its default DBAPI,
+# and that default is not a constant: a Render rebuild installed a newer
+# SQLAlchemy whose default became psycopg (v3) instead of psycopg2, and every
+# worker died at import with `ModuleNotFoundError: No module named 'psycopg'`
+# -- on a deploy whose diff could not have touched it. requirements.txt pinned
+# nothing, so the build that broke differed from the build that worked only by
+# the day it ran. Pinning fixes that; saying which driver we mean makes it
+# impossible for the same class of change to reach us again.
+if database_url and database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 app.config["SQLALCHEMY_DATABASE_URI"] = database_url or "sqlite:///uni_helper.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {

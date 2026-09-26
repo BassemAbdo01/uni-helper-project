@@ -1,16 +1,40 @@
-Flask
-ics
-gunicorn
-Flask-SQLAlchemy
-Flask-Login
-Flask-Limiter
-sentry-sdk[flask]
-redis
-psycopg2-binary
-cryptography
-pypdf
-python-pptx
-python-docx
+# PINNED, and the reason is a production outage.
+#
+# Nothing here carried a version. Render installs fresh on every build, so the
+# deploy that worked and the deploy that failed differed only by the day they
+# ran: a rebuild picked up Python 3.14 and a newer SQLAlchemy whose default
+# DBAPI for postgresql:// is psycopg (v3) rather than psycopg2, and every
+# worker died at import with `ModuleNotFoundError: No module named 'psycopg'`.
+# The diff being deployed could not have caused it and did not.
+#
+# These are the versions the 854 tests pass against locally. Raise them
+# deliberately, one at a time, with the suite green -- never by redeploying and
+# finding out.
+#
+# The Python version is pinned in .python-version for the same reason.
 
-Pillow
-pytesseract
+Flask==3.1.3
+Werkzeug==3.1.8
+Flask-SQLAlchemy==3.1.1
+SQLAlchemy==2.0.52
+Flask-Login==0.6.3
+Flask-Limiter==4.1.1
+gunicorn==26.2.0
+
+# app.py asks for postgresql+psycopg2:// explicitly, so this is the driver that
+# is actually loaded rather than whichever one SQLAlchemy defaults to today.
+psycopg2-binary==2.9.12
+
+ics==0.7.3
+sentry-sdk[flask]==2.68.1
+redis==8.1.0
+cryptography==50.0.1
+pypdf==6.16.2
+python-pptx==1.0.2
+python-docx==1.2.0
+
+# OCR is optional -- app.py imports these in a try/except and carries on
+# without them, so a wheel that is missing for a Python version degrades the
+# feature instead of taking the app down.
+Pillow==12.3.0
+pytesseract==0.3.13
