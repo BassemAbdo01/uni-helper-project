@@ -6,7 +6,11 @@
 <style>
 /* Eight course hues, all pulled toward the page's own palette so a busy month
    reads as one surface rather than a bag of highlighter colours. */
-.cal{--c0:#E8A94A;--c1:#7FB08A;--c2:#7892C8;--c3:#C9705C;--c4:#C4A47C;--c5:#8FA6B2;--c6:#B08FA8;--c7:#9BAF7E}
+/* Ordered so the FIRST few are the most unlike each other, because a student
+   with four courses gets c0-c3 and those four have to be tellable apart at a
+   glance in a 90px cell. Tan sits last precisely because it is the one that
+   reads as amber. */
+.cal{--c0:#E8A94A;--c1:#7892C8;--c2:#7FB08A;--c3:#C9705C;--c4:#B08FA8;--c5:#9BAF7E;--c6:#8FA6B2;--c7:#C4A47C}
 
 .monthnav{display:flex;align-items:center;gap:8px}
 .monthnav a,.monthnav button{display:grid;place-items:center;height:34px;border-radius:5px;
@@ -61,6 +65,39 @@
 .ev small{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.06em;color:var(--fg-3);
   margin-top:3px;line-height:1.45}
 .ev .t{color:var(--amber)}
+/* The course colour is the entry's own, so a course reads the same on the
+   calendar, in the legend and on the study plan. */
+.ev small .c{color:var(--ev,var(--amber))}
+
+/* A midterm and a discussion-board post must not look alike. A term has three
+   or four sittings that decide the grade, and they were rendering in the same
+   2px-bordered card as "Subscribe to the course discussion board". */
+.ev.major{border:1px solid color-mix(in srgb,var(--ev,var(--amber)) 55%,transparent);
+  border-left-width:3px;border-radius:5px;
+  background:color-mix(in srgb,var(--ev,var(--amber)) 13%,var(--surface-2))}
+.ev.major:hover{background:color-mix(in srgb,var(--ev,var(--amber)) 22%,var(--surface-2))}
+.day.today .ev.major{background:color-mix(in srgb,var(--ev,var(--amber)) 18%,var(--surface-3))}
+.ev.major strong{font-weight:650;-webkit-line-clamp:3}
+.ev .tag{display:inline-block;font-family:var(--mono);font-size:8.5px;font-weight:700;
+  letter-spacing:.1em;padding:1px 4px;border-radius:3px;margin-bottom:3px;
+  color:#17140F;background:var(--ev,var(--amber))}
+/* Inside a week it stops being a date and becomes a countdown. */
+.ev .soon{color:var(--ev,var(--amber));font-weight:700}
+
+/* A day holding a major assessment is marked at the cell, so it is findable
+   while scanning a month rather than only once you are reading the entry. */
+.day.hasmajor{background:var(--surface-2)}
+.day.hasmajor .n{color:var(--fg-1);font-weight:650}
+
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin:0 0 14px}
+.legend .k{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--fg-3);
+  text-transform:uppercase}
+.legend .lg{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);
+  font-size:10px;letter-spacing:.04em;color:var(--fg-2)}
+.legend .sw{width:10px;height:10px;border-radius:3px;background:var(--ev);flex:none}
+.legend .lg.ex{color:var(--fg-2)}
+.legend .lg.ex .sw{background:transparent;border:1px solid var(--fg-3);
+  box-shadow:inset 0 0 0 2px var(--surface-1)}
 
 /* A seven-column month is unreadable on a phone, so it becomes a list of the
    days that actually have something on them. */
@@ -150,6 +187,15 @@ dialog.sheet::backdrop{background:#0B0908cc}
 </div>
 
 <div class="cal">
+  {% if course_legend %}
+    <div class="legend">
+      <span class="k">Courses</span>
+      {% for c in course_legend %}
+        <span class="lg"><span class="sw" style="--ev:var(--c{{ c.color_index }})"></span>{{ c.course }}</span>
+      {% endfor %}
+      <span class="lg ex"><span class="sw"></span>Exams &amp; midterms are outlined</span>
+    </div>
+  {% endif %}
   <div class="weekhead" aria-hidden="true">
     <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
   </div>
@@ -158,21 +204,27 @@ dialog.sheet::backdrop{background:#0B0908cc}
     {% for week in weeks %}
       {% for day in week %}
         {% if day %}
-          <div class="day{% if day.is_today %} today{% endif %}" data-date="{{ day.iso }}">
+          <div class="day{% if day.is_today %} today{% endif %}{% if day.tasks|selectattr('major')|first %} hasmajor{% endif %}" data-date="{{ day.iso }}">
             <span class="n">{{ day.day }}</span>
             <button type="button" class="dayadd" data-date="{{ day.iso }}"
                     aria-label="Add an event on {{ day.iso }}">+</button>
             <div class="evs">
               {% for task in day.tasks %}
-                <button type="button" class="ev" style="--ev:var(--c{{ task.color_index }})"
+                <button type="button" class="ev{% if task.major %} major{% endif %}" style="--ev:var(--c{{ task.color_index }})"
                         data-id="{{ task.id }}" data-title="{{ task.title }}"
                         data-course="{{ task.course }}" data-date="{{ day.iso }}"
                         data-time="{{ task.time }}" data-kind="{{ task.kind }}"
                         data-location="{{ task.location }}" data-notes="{{ task.notes }}"
                         data-imported="{{ '1' if task.imported else '' }}"
                         data-link="{{ task.link }}">
+                  {% if task.major %}<span class="tag">{{ task.major }}</span>{% endif %}
                   <strong>{{ task.title }}</strong>
-                  <small>{% if task.time %}<span class="t">{{ task.time }}</span> &middot; {% endif %}{% if task.course %}{{ task.course }} &middot; {% endif %}{{ task.status }}</small>
+                  <small>{% if task.time %}<span class="t">{{ task.time }}</span> &middot; {% endif %}{% if task.course %}<span class="c">{{ task.course }}</span> &middot; {% endif %}{#
+                    A countdown says more than a date on the thing you are
+                    revising for, but only while it is close enough to act on. #}{%
+                    if task.major and task.days_left is not none and 0 <= task.days_left <= 14
+                    %}<span class="soon">{% if task.days_left == 0 %}TODAY{% elif task.days_left == 1 %}TOMORROW{% else %}IN {{ task.days_left }} DAYS{% endif %}</span>{%
+                    else %}{{ task.status }}{% endif %}</small>
                 </button>
               {% endfor %}
             </div>

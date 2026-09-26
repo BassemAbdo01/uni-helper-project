@@ -4705,6 +4705,67 @@ def _looks_like_an_exam(text):
     return bool(_EXAM_WORDS.search(text)) and not _NOT_AN_EXAM.search(text)
 
 
+# A quiz is not a midterm. _EXAM_WORDS above deliberately includes "quiz"
+# because the old suggestion panel wanted anything that smelled like a sitting;
+# what has to stand out on a calendar is the handful of things that decide the
+# grade. Flagging every pre-lab quiz as major is the same as flagging nothing.
+_MAJOR_WORDS = [
+    ("FINAL", re.compile(r"\bfinal(\s+(exam|examination|test|assessment))?\b", re.I)),
+    ("MIDTERM", re.compile(r"\b(midterm|mid-term|mid\s+term)(\s+(exam|examination|test))?\b", re.I)),
+    ("TEST", re.compile(r"\b((?:unit|term|chapter)\s*\d*\s*test|test\s*\d*)\b", re.I)),
+    ("EXAM", re.compile(r"\bexam(ination)?\b", re.I)),
+]
+# Task.kind, when the student added it by hand.
+_MAJOR_KINDS = {"exam", "midterm", "final", "test"}
+
+
+def _major_assessment_label(kind, title):
+    """"FINAL" / "MIDTERM" / "TEST" / "EXAM" for something that decides a
+    grade, or "" for ordinary work.
+
+    The title is the only signal that works for imported deadlines, which is
+    nearly all of them: Brightspace hands over every assignment and quiz as the
+    same kind of thing, so a midterm arrives as `kind='due'` exactly like a
+    discussion-board post. A student scanning a month needs to see which two
+    squares matter, and `kind` alone would show them none.
+
+    _NOT_AN_EXAM still applies -- "midterm review session" and "practice final"
+    are not the sitting, and flagging them is how a calendar stops being
+    trusted.
+    """
+    title = str(title or "")
+    if _NOT_AN_EXAM.search(title):
+        return ""
+    kind = str(kind or "").strip().lower()
+    for label, pattern in _MAJOR_WORDS:
+        if pattern.search(title):
+            return label
+    if kind in _MAJOR_KINDS:
+        return "EXAM" if kind == "exam" else kind.upper()
+    return ""
+
+
+# Eight, because past eight a student cannot hold the mapping in their head and
+# the legend is doing all the work anyway.
+COURSE_COLOUR_COUNT = 8
+
+
+def _course_colour_map(codes):
+    """One colour per course, and the SAME colour on every screen.
+
+    Assigned by position in the sorted list rather than by hashing the code.
+    The hash version (`sum(ord(ch) for ch in course) % 8`) collided: any two
+    codes whose letters happen to sum alike shared a colour, so a student with
+    four courses could see two of them in the same paint and a legend would be
+    a lie. Sorted position cannot collide while there are eight or fewer.
+
+    Stable within a term, which is what matters -- a colour shifts only when
+    the set of courses itself changes, and the legend on the page shows it.
+    """
+    return {code: i % COURSE_COLOUR_COUNT
+            for i, code in enumerate(sorted({str(c or "").strip() for c in codes if str(c or "").strip()}))}
+
+
 def _exam_title(text, course):
     """A short name for the entry: the exam phrase itself, plus the number that
     tells two of them apart.
@@ -9688,6 +9749,19 @@ def calendar_page():
     raw_tasks = load_tasks()
     cards = sort_cards(build_grouped_cards(raw_tasks))
 
+    # One colour per course. `cards` is every dated item the student has, not
+    # just this month's, so the mapping does not change as they page through
+    # the months -- a course that is green in September must be green in
+    # October or the legend promises something it does not keep.
+    #
+    # Deliberately NOT every course they have ever enrolled in: a fourth-year
+    # student has thirty, and courses with no work at all would eat the most
+    # distinct colours and push the five they are actually taking onto shades
+    # of each other. That was visible immediately -- SYSC2310 came out tan
+    # against BIOL1103's amber because two work-free courses held green and
+    # blue.
+    colours = _course_colour_map(c.get("course_full") or "OTHER" for c in cards)
+
     tasks_by_date = {}
 
     for c in cards:
@@ -9708,7 +9782,8 @@ def calendar_page():
                 tasks_by_date[iso] = []
 
             course = c.get("course_full", "") or "OTHER"
-            color_index = sum(ord(ch) for ch in course) % 8
+            color_index = colours.get(course, 0)
+            major = _major_assessment_label(c.get("kind"), c.get("title", ""))
 
             task_ids = [i for i in (c.get("task_ids") or []) if i]
             tasks_by_date[iso].append({
@@ -9721,6 +9796,10 @@ def calendar_page():
                 # the rest of the group from it server-side.
                 "id": task_ids[0] if task_ids else "",
                 "kind": c.get("kind") or "due",
+                # "" for ordinary work; FINAL / MIDTERM / TEST / EXAM for the
+                # three or four squares in a term that decide the grade.
+                "major": major,
+                "days_left": dleft,
                 "time": c.get("due_time") or "",
                 "location": c.get("location") or "",
                 "notes": c.get("notes") or "",
@@ -9777,6 +9856,13 @@ def calendar_page():
         is_this_month=(year, month) == (date.today().year, date.today().month),
         today_iso=date.today().isoformat(),
         known_courses=known_courses,
+        # The legend. A colour nobody can decode is just decoration, and he
+        # asked for this by name: "so everyone knows what each color is".
+        # Only courses that actually appear this month, or the legend lists a
+        # first-year course against an empty grid.
+        course_legend=[{"course": code, "color_index": colours.get(code, 0)}
+                       for code in sorted({t["course"] for day in tasks_by_date.values() for t in day
+                                           if t.get("course") and t["course"] != "OTHER"})],
         user=current_user,
     )
 
