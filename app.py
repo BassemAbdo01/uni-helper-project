@@ -10028,14 +10028,29 @@ def _calendar_token(user, create=False):
     return token
 
 
-def _feed_events(user):
-    """Every dated, unfinished-or-recent item, as (task, date) pairs."""
+def _feed_events(user, only=""):
+    """Every dated, unfinished-or-recent item, as (task, date) pairs.
+
+    `only="exams"` narrows it to the sittings that decide a grade.
+
+    Everything was the only option, and on a real term that is unusable: a
+    single September had ten items on one day -- "Lab Plagiarism Quiz",
+    "Submission Folder", "Lab 1 Quiz - Available", "Modules 1 and 2 Quiz" --
+    which buries the two dates a student keeps a calendar FOR. Reported with a
+    screenshot of a Google Calendar month with no white space left in it.
+
+    A personal calendar is not the same surface as Nexora's own. Nexora is
+    where you go to see everything; a calendar is what you glance at, and it
+    only works while a glance is worth taking.
+    """
     today = date.today()
     rows = Task.query.filter_by(user_id=user.id).filter(
         (Task.sync_state.is_(None)) | (Task.sync_state != "dismissed")).all()
     seen = {}
     for row in rows:
         if (row.kind or "") == "junk":
+            continue
+        if only == "exams" and not _major_assessment_label(row.kind, row.title or ""):
             continue
         due = parse_iso_date(row.due_raw or "")
         if not due:
@@ -10050,14 +10065,19 @@ def _feed_events(user):
     return list(seen.values())
 
 
-def _build_ics(user, events):
+def _build_ics(user, events, only=""):
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    # The subscribed calendar's own name, because a student may end up with
+    # both and has to be able to tell which is which in Google's sidebar --
+    # and, when they want it gone, which one to unsubscribe from.
+    name = "Nexora exams" if only == "exams" else "Nexora"
     lines = [
         "BEGIN:VCALENDAR", "VERSION:2.0",
         "PRODID:-//Nexora//Academic calendar//EN",
         "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
-        "X-WR-CALNAME:Nexora",
-        "X-WR-CALDESC:Deadlines and exams imported into Nexora",
+        f"X-WR-CALNAME:{name}",
+        "X-WR-CALDESC:" + ("Tests, midterms and finals from Nexora"
+                           if only == "exams" else "Deadlines and exams imported into Nexora"),
         # A hint only: Google honours its own refresh schedule regardless.
         "REFRESH-INTERVAL;VALUE=DURATION:PT6H",
         "X-PUBLISHED-TTL:PT6H",
@@ -10110,7 +10130,11 @@ def calendar_feed(token):
     user = User.query.filter_by(calendar_token=token).first()
     if not user:
         return Response("Not found", status=404, mimetype="text/plain")
-    body = _build_ics(user, _feed_events(user))
+    # A query parameter rather than a second token: the token is the
+    # credential, and minting one per scope would mean a student who changes
+    # their mind has two live addresses to the same private data.
+    only = "exams" if request.args.get("only", "").strip().lower() in ("exams", "exam", "major") else ""
+    body = _build_ics(user, _feed_events(user, only), only)
     # content_type, not mimetype: Flask appends its own charset to a mimetype,
     # and "text/calendar; charset=utf-8; charset=utf-8" is not a header anyone
     # should have to parse.

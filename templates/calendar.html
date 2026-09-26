@@ -151,6 +151,14 @@ dialog.sheet::backdrop{background:#0B0908cc}
 .sheet a.big:not([href]){opacity:.5;pointer-events:none}
 .sheet a.big svg{width:16px;height:16px}
 .sheet .others{display:flex;gap:9px;flex-wrap:wrap}
+.sheet .scope{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:0 0 16px}
+.sheet .scope button{text-align:left;padding:11px 12px;border-radius:10px;cursor:pointer;
+  border:1px solid var(--line);background:var(--surface-2);color:inherit;font:inherit}
+.sheet .scope button strong{display:block;font-size:12.5px;font-weight:600}
+.sheet .scope button small{display:block;margin-top:3px;font-size:10.5px;color:var(--fg-3);line-height:1.4}
+.sheet .scope button.on{border-color:var(--amber);background:color-mix(in srgb,var(--amber) 13%,var(--surface-2))}
+.sheet .scope button.on strong{color:var(--amber)}
+@media (max-width:560px){.sheet .scope{grid-template-columns:1fr}}
 .sheet .others a,.sheet .others button{flex:1;display:grid;place-items:center;border-radius:6px;
   border:1px solid var(--line-2);background:var(--surface-2);color:var(--fg-2);font:inherit;
   font-size:12.5px;padding:8px 10px;text-decoration:none;cursor:pointer;text-align:center}
@@ -310,9 +318,23 @@ dialog.sheet::backdrop{background:#0B0908cc}
 <dialog class="sheet" id="syncSheet" aria-labelledby="syncTitle">
   <div class="body">
     <h2 id="syncTitle">Keep this calendar in Google Calendar</h2>
-    <p>Google subscribes to your private Nexora calendar, so every deadline, midterm
-       and exam here shows up there &mdash; and each time Nexora syncs with your LMS,
-       Google picks up the changes on its own.</p>
+    <p>Google subscribes to your private Nexora calendar, and each time Nexora syncs
+       with your LMS, Google picks up the changes on its own.</p>
+
+    {# Everything was the only option, and a real term buries a personal
+       calendar under it -- ten items on one September day, of which two
+       mattered. Nexora is where you see everything; a calendar is what you
+       glance at, and it only works while a glance is worth taking. #}
+    <div class="scope" role="radiogroup" aria-label="What to send to Google">
+      <button type="button" data-scope="exams" class="on" role="radio" aria-checked="true">
+        <strong>Tests, midterms &amp; finals</strong>
+        <small>The dates you keep a calendar for</small>
+      </button>
+      <button type="button" data-scope="" role="radio" aria-checked="false">
+        <strong>Everything</strong>
+        <small>Every quiz, lab and submission too</small>
+      </button>
+    </div>
 
     <a class="big" id="gcalLink" target="_blank" rel="noopener noreferrer">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M12 14v4M10 16h4"/></svg>
@@ -359,17 +381,40 @@ dialog.sheet::backdrop{background:#0B0908cc}
   /* ---- keep it in Google Calendar ---- */
   const syncSheet = $('syncSheet');
   let feedUrl = '';
+  // Exams only by default. The one that floods a calendar should be the one
+  // you choose, not the one you get.
+  let feedScope = 'exams';
+  function scopedFeedUrl() {
+    if (!feedUrl) return '';
+    return feedScope === 'exams' ? feedUrl + '?only=exams' : feedUrl;
+  }
   function showSyncLinks(url) {
-    feedUrl = url;
+    if (url !== undefined) feedUrl = url;
+    const scoped = scopedFeedUrl();
+    if (!scoped) return;
     // Google's own subscribe link: it opens "Add this calendar?" with the
     // address filled in, instead of the student pasting it into a menu
     // three clicks deep. Apple and Outlook take webcal:// directly.
     // Google wants the webcal:// form in cid, and the feed must be https.
-    const webcal = url.replace(/^https?:\/\//, 'webcal://');
+    const webcal = scoped.replace(/^https?:\/\//, 'webcal://');
     $('gcalLink').href = 'https://calendar.google.com/calendar/r?cid=' + encodeURIComponent(webcal);
     $('webcalLink').href = webcal;
-    $('feedAddr').textContent = url;
+    $('feedAddr').textContent = scoped;
   }
+  document.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => {
+    feedScope = b.dataset.scope;
+    document.querySelectorAll('[data-scope]').forEach(o => {
+      const on = o === b;
+      o.classList.toggle('on', on);
+      o.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+    showSyncLinks();
+    // Changing this after subscribing does nothing on its own: Google fetches
+    // the address it was given. Saying so here is cheaper than a student
+    // wondering for a week why their calendar never thinned out.
+    syncStatus('Subscribe again with this address to change what Google gets. '
+             + 'Remove the old Nexora calendar from Google first.', '');
+  });
   function syncStatus(text, cls) {
     const el = $('syncStatus');
     el.textContent = text;
