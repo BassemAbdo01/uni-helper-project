@@ -363,30 +363,7 @@
   // Brightspace courses very often number the *folder*, not every file inside it — a recording or
   // slide deck named just "Recording" or "Slides" is still clearly lecture material if it's filed
   // under "Lecture 12". Checking only the item's own title (as before) missed all of these.
-  function classifyContent(title, url, activityType, moduleContext) {
-    const ownText = `${title} ${url} ${activityType || ''}`.toLowerCase();
-    const fullText = `${ownText} ${moduleContext || ''}`.toLowerCase();
-    const ext = ((title.match(/\.([a-z0-9]{1,8})\b/i) || url.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
-    const numberedLecturePattern = /(?:lecture|lec|slides?|week|module|chapter|lesson|unit)\s*[-_#:]?\s*\d+|\b(?:l|lec|wk|ch)\s*[-_#]?\s*\d+\b/i;
-
-    if (/course\s*(?:outline|syllabus|information|guide)|syllabus|grading\s*(?:scheme|breakdown|policy)|evaluation\s*(?:scheme|breakdown)|marking\s*scheme|assessment\s*(?:scheme|breakdown)|course\s*policies/.test(ownText)) return 'outline';
-    if (/practice|sample question|review question|worksheet|problem set/.test(ownText)) return 'practice';
-
-    // Real, gradeable assignments and quizzes already come from their own dedicated Brightspace
-    // endpoints (dropbox/folders, quizzes/). A content-page merely *mentioning* "assignment" or
-    // "quiz" (instructions, rubric, answer key, prep guide) shouldn't duplicate into those tabs —
-    // route it to Resources instead so Assignments/Quizzes only show the real, tracked items.
-    const isSupportingDoc = /instructions?|guideline|rubric|handout|answer key|solutions?|prep\b/.test(ownText);
-    if (/assignment|dropbox/.test(ownText) && !isSupportingDoc) return 'assignment';
-    if (/\bquiz(zing)?\b/.test(ownText) && !isSupportingDoc) return 'quiz';
-    if (/announcement|news/.test(ownText)) return 'announcement';
-
-    if (numberedLecturePattern.test(fullText)) return 'lecture';
-    if (['mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav'].includes(ext) && /lecture|lec|recording|class|week|module/.test(fullText)) return 'lecture';
-    if (['py', 'c', 'cpp', 'h', 'java', 'js', 'ts', 'ipynb', 'zip', 'rar', '7z', 'csv', 'xlsx', 'xls'].includes(ext)) return 'resource';
-    if (['pdf', 'ppt', 'pptx', 'doc', 'docx', 'mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav'].includes(ext)) return 'resource';
-    return 'page';
-  }
+  // classifyContent comes from classify.js, injected alongside this file.
 
   function itemUid(courseId, type, id, fallback) {
     return clean(`${courseId}|${type}|${id || fallback}`).slice(0, 255);

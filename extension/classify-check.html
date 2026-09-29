@@ -1,0 +1,91 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>classify.js check</title>
+<style>
+  body{font:13px/1.55 ui-monospace,Menlo,Consolas,monospace;background:#12100E;color:#E8E3DA;padding:22px;max-width:1000px}
+  h1{font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:#E8A94A}
+  h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9A9188;margin:22px 0 8px}
+  table{border-collapse:collapse;width:100%}
+  td{padding:3px 8px;border-bottom:1px solid #26221E;vertical-align:top}
+  .ok{color:#7FB08A}.bad{color:#E8845A;font-weight:700}
+  .sum{margin:18px 0;padding:12px 14px;border-radius:8px;background:#1B1815;font-size:14px}
+  .pass{border-left:3px solid #7FB08A}.fail{border-left:3px solid #E8845A}
+</style>
+<h1>classify.js</h1>
+<p>Serve this folder and open it &mdash; <code>fetch()</code> needs an origin:<br>
+   <code>venv/Scripts/python.exe -m http.server 8777 --directory extension</code><br>
+   then <code>http://localhost:8777/classify-check.html</code></p>
+<div id="out"></div>
+<script src="classify.js"></script>
+<script>
+/* Every title here is REAL, taken from one student's own Brightspace account
+   on 2026-09-29. The old rule required a digit AFTER the keyword, and these
+   courses number the other way round, so all of the "lecture" rows below were
+   filed as `resource` or `page` and never reached the workspace's Lectures
+   list. CHEM1101 had 3 lectures against 90 resources. */
+const CASES = [
+  // [title, moduleContext, expected, why]
+  ['01 SLIDES', 'I Measurement and Significant Figures', 'lecture', 'number first, keyword second'],
+  ['02 Slides - Rydberg eqn and Photoelectric Effect', 'II Atomic structure', 'lecture', 'number first'],
+  ['03 Electron configurations - SLIDES', 'II Atomic structure', 'lecture', 'keyword last'],
+  ['04. Periodic properties slides', 'II Atomic structure', 'lecture', 'lowercase, number first'],
+  ['6 Lewis Diagram SLIDES', 'III Molecular structure', 'lecture', 'single digit'],
+  ['10. Gas NOTES', 'TOPIC 10: Gases', 'lecture', '"notes" was not a keyword at all'],
+  ['05 Nomenclature NOTES A', 'III Molecular structure', 'lecture', 'notes with a section letter'],
+  ['01 0Sig Figs NOTES A', 'I Measurement', 'lecture', 'notes'],
+  ['15 Stoichiometry Video LECTURES', 'TOPIC 15', 'lecture', 'plural, number first'],
+  ['10: Video Lecture: Gases', 'TOPIC 10: Gases', 'lecture', 'no digit after the keyword'],
+  ['Lecture 4', '', 'lecture', 'the shape that always worked'],
+  ['Week 3 Overview', '', 'lecture', 'keyword then number'],
+  ['Thermodynamics.pptx', 'Course Documents', 'lecture', 'a deck is lecture material whatever it is called'],
+
+  // Things that carry a lecture word and are NOT the material.
+  ['Lecture schedule', 'Lecture Material', 'page', 'a schedule is not a lecture'],
+  ['Questions about Lecture content - ask them here', 'Welcome to the Class!', 'page', 'a discussion board'],
+  ['Office hours: 10am-noon Wednesday and Thursday, ME4158', 'Exams', 'page', 'office hours'],
+  ['Wet-Mounted Slide Preparation for Cheek Cells', 'Lab 1', 'page', 'singular "slide" is a lab protocol'],
+  ['Lab schedule', 'Lab Material', 'page', 'schedule'],
+
+  // The other types must not regress.
+  ['ECOR 1032 Course Outline', 'General Information', 'outline', ''],
+  // "MOCK MIDTERM" and "Final Project Submission" are stored as assignments in
+  // production, but they never reach this function: they arrive from D2L's own
+  // assignments endpoint, which sets content_type directly. Through the TOC
+  // they are ordinary pages, and expecting otherwise here was the check being
+  // wrong rather than the code.
+  ['MOCK MIDTERM', 'Assignments', 'page', 'assignments come from their own endpoint, not this'],
+  ['Assignment 2 dropbox', 'Assignments', 'assignment', 'what this function does catch'],
+  ['Pre-Lab Quiz - Due', 'Labs', 'quiz', ''],
+  // The one that bit. "guideline" sets isSupportingDoc, which skipped the quiz
+  // branch, and then "Week 5" matched a lecture number -- so a quiz was filed
+  // as a lecture. Twelve of them on one real account.
+  ['Week 5 Quiz- Chapter 4, Chapter 5, Chapter 7 & Proposal Assignment Guidelines',
+   'Week 5', 'resource', 'names an assessment: never falls through to lecture'],
+  ['Week 7 Quiz - Chapter 6 & Final Subtopic Report Assignment Guidelines',
+   'Week 7', 'resource', 'same shape'],
+  ['Assignment 3 Rubric', 'Assignments', 'resource', 'a rubric is not the assignment itself'],
+  ['Module 3 Discussion Board', 'Module 3', 'page', 'a board is not the material'],
+  ['Practice problems set 3', 'Week 3', 'practice', 'practice beats the lecture number'],
+  ['Irwin & Nelms textbook', 'General Information', 'page', 'a textbook link'],
+  ['ECOR1032 Discord', 'General Information', 'page', ''],
+  ['lab2_starter.zip', 'Lab Material', 'resource', 'code archive'],
+  ['data.csv', 'Lab Material', 'resource', ''],
+  ['Course Handbook.pdf', 'General Information', 'resource', 'a pdf with no lecture word'],
+];
+
+const rows = [];
+let pass = 0, fail = 0;
+for (const [title, mod, expected, why] of CASES) {
+  const got = classifyContent(title, '', '', mod);
+  const ok = got === expected;
+  ok ? pass++ : fail++;
+  rows.push(`<tr><td class="${ok ? 'ok' : 'bad'}">${ok ? 'ok' : 'FAIL'}</td>`
+    + `<td>${title.replace(/</g, '&lt;')}</td>`
+    + `<td>${expected}</td><td class="${ok ? '' : 'bad'}">${got}</td>`
+    + `<td style="color:#7A736B">${why}</td></tr>`);
+}
+document.getElementById('out').innerHTML =
+  `<div class="sum ${fail ? 'fail' : 'pass'}">${pass} passed, ${fail} failed</div>`
+  + `<table><tr><td></td><td>title</td><td>expected</td><td>got</td><td>why</td></tr>${rows.join('')}</table>`;
+window.__result = {pass, fail};
+</script>

@@ -1191,9 +1191,39 @@ the student grants for their own origin.
   open `http://localhost:8777/term-check.html`. There is no node on this
   machine; `new Function(src)` in the browser is how a whole file gets a syntax
   check.
-- The store package is rebuilt from six files plus `icons/`; rebuild
-  `store/nexora-sync.zip` whenever the version changes, and never include the
-  check pages.
+- The store package is rebuilt from **seven** files plus `icons/`
+  (`classify.js` joined them); rebuild `store/nexora-sync.zip` whenever the
+  version changes, and never include the check pages.
+- **`classifyContent` lives in `classify.js`, once.** It decides where an item
+  appears in a workspace, how much of its text the server keeps, and whether
+  the study tools will ever offer to summarise it -- getting it wrong does not
+  lose the item, it hides it where the student will not look. There were two
+  identical copies, in `background.js` and `content.js`; the worker
+  `importScripts` it and every `executeScript` lists it before `content.js`
+  (there are two such call sites -- `background.js` and `popup.js` -- and
+  missing one is a ReferenceError on the sync path only).
+- **The old lecture rule wanted the number on the wrong side.**
+  `slides?\s*[-_#:]?\s*\d+` requires a digit AFTER the keyword, and real
+  courses number the other way: "01 SLIDES", "10. Gas NOTES", "15 Stoichiometry
+  Video LECTURES", "10: Video Lecture: Gases". None matched, so all of them
+  were filed as `resource` or `page` and never reached the Lectures list --
+  CHEM1101 held 3 lectures against 90 resources. `notes` was not a keyword at
+  all, and it is the commonest name a lecturer gives their own material.
+  `slides` is plural on purpose ("Wet-Mounted Slide Preparation" is a lab
+  protocol), and a `.pptx` is lecture material whatever it is called.
+- **Anything naming an assessment stops there and never falls through.** A
+  title carrying "guideline" sets `isSupportingDoc`, which skipped the quiz
+  branch; once the lecture rules got better, "Week 5 Quiz ... Assignment
+  Guidelines" then matched a lecture number and twelve real quizzes were filed
+  as lectures. A supporting doc is a `resource` -- a rubric is not the
+  assignment.
+- `extension/classify-check.html` runs the classifier against 32 titles taken
+  from a real account. Replaying stored rows through it is NOT a faithful
+  simulation: the classifier is handed `file.source_url`, which carries a file
+  extension, while the row stores `file.download_url`
+  (`/content/topics/<id>/file`), which does not -- so a replay sees no
+  extensions and invents hundreds of `resource -> page` moves that will not
+  happen.
 
 ## Operating it
 

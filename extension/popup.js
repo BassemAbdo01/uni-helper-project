@@ -314,7 +314,9 @@ $('outline').onclick = async () => {
       response = await chrome.tabs.sendMessage(tab.id, { action: 'extract_outline' });
     } catch (_) {
       // Clicking the toolbar icon grants activeTab, so this reaches any page.
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+      // classify.js first: content.js calls classifyContent, which now lives
+      // there so the worker and the injected script cannot drift apart.
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['classify.js', 'content.js'] });
       response = await chrome.tabs.sendMessage(tab.id, { action: 'extract_outline' });
     }
     if (!response?.ok || !response.text) {

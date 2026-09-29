@@ -1,3 +1,6 @@
+// ONE definition of what kind of thing an item is, shared with the
+// injected content script. See classify.js.
+importScripts('classify.js');
 const ALARM_NAME = 'nexora-auto-sync';
 const KEEPALIVE_ALARM = 'nexora-keepalive';
 
@@ -342,7 +345,7 @@ async function ensureBrightspaceContentScript(tab) {
     // is the one place the course cards are guaranteed not to be.
     await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
-      files: ['content.js']
+      files: ['classify.js', 'content.js']
     });
   } catch (error) {
     const origin = normalizeOrigin(tab.url);
@@ -460,27 +463,6 @@ function absolute(origin, href) {
 // full rationale — the item's own title alone was missing lecture material filed under a
 // numbered folder, and loose "assignment"/"quiz" keyword matches were duplicating real
 // dropbox/quiz entries with unrelated instructions/rubric pages.
-function classifyContent(title, url, activityType, moduleContext) {
-  const ownText = `${title} ${url} ${activityType || ''}`.toLowerCase();
-  const fullText = `${ownText} ${moduleContext || ''}`.toLowerCase();
-  const ext = ((title.match(/\.([a-z0-9]{1,8})\b/i) || url.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
-  const numberedLecturePattern = /(?:lecture|lec|slides?|week|module|chapter|lesson|unit)\s*[-_#:]?\s*\d+|\b(?:l|lec|wk|ch)\s*[-_#]?\s*\d+\b/i;
-
-  if (/course\s*(?:outline|syllabus|information|guide)|syllabus|grading\s*(?:scheme|breakdown|policy)|evaluation\s*(?:scheme|breakdown)|marking\s*scheme|assessment\s*(?:scheme|breakdown)|course\s*policies/.test(ownText)) return 'outline';
-  if (/practice|sample question|review question|worksheet|problem set/.test(ownText)) return 'practice';
-
-  const isSupportingDoc = /instructions?|guideline|rubric|handout|answer key|solutions?|prep\b/.test(ownText);
-  if (/assignment|dropbox/.test(ownText) && !isSupportingDoc) return 'assignment';
-  if (/\bquiz(zing)?\b/.test(ownText) && !isSupportingDoc) return 'quiz';
-  if (/announcement|news/.test(ownText)) return 'announcement';
-
-  if (numberedLecturePattern.test(fullText)) return 'lecture';
-  if (['mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav'].includes(ext) && /lecture|lec|recording|class|week|module/.test(fullText)) return 'lecture';
-  if (['py', 'c', 'cpp', 'h', 'java', 'js', 'ts', 'ipynb', 'zip', 'rar', '7z', 'csv', 'xlsx', 'xls'].includes(ext)) return 'resource';
-  if (['pdf', 'ppt', 'pptx', 'doc', 'docx', 'mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav'].includes(ext)) return 'resource';
-  return 'page';
-}
-
 function itemUid(courseId, type, id, fallback) {
   return clean(`${courseId}|${type}|${id || fallback}`).slice(0, 255);
 }
