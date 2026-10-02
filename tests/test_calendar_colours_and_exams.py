@@ -142,5 +142,16 @@ def test_the_calendar_tags_the_midterm_and_carries_a_legend(client, student):
 
 
 def test_a_major_entry_inside_two_weeks_counts_down(client, student):
+    """The number is whatever the STUDENT's clock makes it, not the server's.
+
+    This asserted a literal "IN 8 DAYS" and broke the moment `days_until`
+    started measuring from the student's day: the fixture dates itself on
+    `_student_today` while the server was a day behind, so the right answer was
+    9. Asserting the exact number pinned the two clocks agreeing, which is the
+    thing that is not true in production.
+    """
+    import re
     html = client.get(f"/calendar?month={student}").get_data(as_text=True)
-    assert "IN 8 DAYS" in html, "a countdown says more than a date on the thing you revise for"
+    found = re.search(r'class="soon">IN (\d+) DAYS<', html)
+    assert found, "a countdown says more than a date on the thing you revise for"
+    assert 0 < int(found.group(1)) <= 14, "and only while it is close enough to act on"

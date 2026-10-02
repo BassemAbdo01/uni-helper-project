@@ -371,6 +371,7 @@
 
   function flattenToc(toc, course, version) {
     const items = [];
+    const seen = new Set();   // walking every child array can reach a node twice
     const orgUnitId = course.source_uid;
     const walk = (nodes, parentPath = []) => {
       if (!Array.isArray(nodes)) return;
@@ -380,17 +381,28 @@
         const isModule = Array.isArray(node.Modules) || Array.isArray(node.Topics) || Number(node.Type) === 0 || /module/i.test(clean(node.Type));
         if (isModule) {
           const nextPath = title ? [...parentPath, title] : parentPath;
-          walk(node.Modules || node.Children || [], nextPath);
-          walk(node.Topics || node.Content || [], nextPath);
+          // All four, not `Modules || Children`. An empty array is TRUTHY in
+          // JavaScript, so a module carrying `Modules: []` alongside a filled
+          // `Children` walked the empty one and the whole subtree vanished --
+          // silently, with no error and no count to notice it by. Reported as
+          // "sometimes it doesn't even put the lecture at all". Duplicates are
+          // collapsed by source_uid below, so walking all four is free.
+          walk(node.Modules || [], nextPath);
+          walk(node.Children || [], nextPath);
+          walk(node.Topics || [], nextPath);
+          walk(node.Content || [], nextPath);
           continue;
         }
         const file = fileInfoFromTopic(node, orgUnitId, version);
         const activity = node.ActivityType || node.TypeIdentifier || node.Type || '';
         const moduleContext = parentPath.join(' › ');
         const type = classifyContent(title, file.source_url, activity, moduleContext);
+        const uid = itemUid(orgUnitId, 'content', id, file.source_url || title);
+        if (seen.has(uid)) continue;                  // every child array is walked now
+        seen.add(uid);
         items.push({
           course: course.course_code,
-          source_uid: itemUid(orgUnitId, 'content', id, file.source_url || title),
+          source_uid: uid,
           title,
           content_type: type,
           source_url: file.source_url,

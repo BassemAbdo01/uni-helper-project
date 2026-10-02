@@ -38,12 +38,20 @@ def add_course(email, brightspace_url):
 
 def test_no_dead_install_button_before_the_store_id_is_known(signed_in, monkeypatch):
     """A button that goes nowhere is worse than a sentence saying what to
-    search for."""
+    search for -- and a working download beats both.
+
+    This asserted the fallback SENTENCE. The page now serves the packaged
+    extension instead, because "search the Chrome Web Store" is a first-run
+    instruction nobody can follow while there is nothing on the store to find.
+    What has to stay true is that the student is never left with a dead link
+    and no way forward, which is what this now checks.
+    """
     import app as nexora
     monkeypatch.setattr(nexora, "EXTENSION_URL", "")
     body = signed_in.get("/connect-brightspace").get_data(as_text=True)
-    assert "Install Nexora Sync</a>" not in body
-    assert "Search the Chrome Web Store" in body
+    assert "Install Nexora Sync</a>" not in body, "no button pointing at a store listing that does not exist"
+    assert ("Download Nexora Sync" in body) or ("Search the Chrome Web Store" in body), \
+        "with no store link there must still be a way to get the extension"
 
 
 def test_the_install_button_appears_once_the_url_is_set(signed_in, monkeypatch):

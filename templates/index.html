@@ -208,10 +208,17 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
     <div class="v">{{ groups['today']|length }}</div>
     <span class="s">{{ summary.week }} due this week</span>
   </div>
+  {# The courses the student is in NOW, not every course they have ever taken.
+     This counted `course_cards`, which is every term Nexora has imported -- 33
+     rows by third year -- while the list underneath was showing one term. A
+     stat that disagrees with the thing directly below it is worse than no
+     stat. The other terms are still a click away in the picker, and the
+     sub-line says how many. #}
   <div class="cell">
     <span class="k">Active courses</span>
-    <div class="v">{{ course_cards|length }}</div>
-    <span class="s">{{ course_groups|length }} term{{ '' if course_groups|length == 1 else 's' }}</span>
+    <div class="v">{{ current_term_courses|length }}</div>
+    <span class="s">{% if current_term_label %}{{ current_term_label }}{% else %}no term set{% endif %}{%
+      if course_groups|length > 1 %} &middot; {{ course_groups|length - 1 }} more term{{ '' if course_groups|length == 2 else 's' }}{% endif %}</span>
   </div>
   <div class="cell">
     <span class="k">New from Brightspace</span>

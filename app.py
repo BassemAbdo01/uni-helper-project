@@ -21,7 +21,7 @@ from functools import wraps
 from uuid import uuid4
 from pathlib import Path
 
-from flask import Flask, render_template, request, redirect, url_for, jsonify, Response
+from flask import Flask, render_template, request, redirect, url_for, jsonify, Response, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_sqlalchemy import SQLAlchemy
@@ -222,6 +222,13 @@ PRICE_LABEL = os.environ.get("PRICE_LABEL", "").strip()
 # the connect page then explains how to install rather than linking nowhere --
 # a dead "Install" button is worse than a sentence.
 EXTENSION_URL = os.environ.get("EXTENSION_URL", "").strip()
+# The packaged extension, served from the site itself. Until the Chrome Web
+# Store listing exists there is NO way to get it -- the connect page could
+# only tell students to search a store that has nothing on it, which is a
+# first-run instruction that cannot be followed. The store link still wins
+# when EXTENSION_URL is set, because one click beats unzipping.
+EXTENSION_ZIP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "store", "nexora-sync.zip")
+EXTENSION_ZIP_AVAILABLE = os.path.exists(EXTENSION_ZIP)
 
 # Used only until a student's browser reports their own zone. UTC is the honest
 # default: it is what every date meant before User.timezone existed.
@@ -1336,11 +1343,35 @@ def pretty_date(iso):
     return d.strftime("%b %d, %Y") if d else ""
 
 
-def days_until(iso):
+def _today_for_request():
+    """Today, on the clock of whoever is asking.
+
+    `date.today()` is the SERVER's date, and on Render the server is UTC. For a
+    student in Eastern that is already tomorrow from 8pm, so between 8pm and
+    midnight -- which is exactly when someone opens Nexora to decide what to do
+    tonight -- every countdown was a day out: work due tonight at 11:59 computed
+    to -1 and rendered **Overdue**, and "due in 2 days" read as tomorrow.
+
+    This is the bug CLAUDE.md calls the worst this project has had, surviving in
+    the one place that measures a date rather than stores one. `local_date_iso`
+    fixed what day a deadline falls on; nothing fixed what day it is NOW.
+
+    Falls back to the server's date outside a request, or for an anonymous
+    page, which is what the public reader and the .ics feed want anyway.
+    """
+    try:
+        if current_user and current_user.is_authenticated:
+            return _student_today(current_user)
+    except Exception:
+        pass
+    return date.today()
+
+
+def days_until(iso, today=None):
     d = parse_iso_date(iso)
     if not d:
         return None
-    return (d - date.today()).days
+    return (d - (today or _today_for_request())).days
 
 
 def status_for(iso):
@@ -4278,6 +4309,11 @@ def home():
     current_term_label=_current_term_label(today)
     if not any(g["label"]==current_term_label for g in course_groups):
         current_term_label=course_groups[0]["label"] if course_groups else ""
+    # The courses in the term the page opens on. The "Active courses" stat
+    # counted every card instead, so a third-year student read 33 above a list
+    # showing five -- a number that disagrees with what is under it.
+    current_term_courses=next((g["courses"] for g in course_groups
+                               if g["label"]==current_term_label), [])
 
     return render_template(
         "index.html",
@@ -4294,6 +4330,7 @@ def home():
         course_cards=course_cards,
         course_groups=course_groups,
         current_term_label=current_term_label,
+        current_term_courses=current_term_courses,
         show_tour=not bool(getattr(current_user, "tour_done", False)),
         task_preview=task_preview,
         done_cards=done_cards,
@@ -10182,6 +10219,33 @@ def _known_brightspace_home(user_id):
     return ""
 
 
+@app.route("/extension/nexora-sync.zip")
+@login_required
+def extension_download():
+    """The packaged extension, for installing without the Chrome Web Store.
+
+    Signed in only: it is not secret, but it is the thing that pushes a
+    student's courses into an account, and an unauthenticated download link on
+    a public page is a slightly different object -- one that gets indexed,
+    hotlinked and served to people who never saw the instructions beside it.
+
+    The version comes from the manifest inside the zip rather than a constant
+    here, because a constant is a second place to forget.
+    """
+    if not EXTENSION_ZIP_AVAILABLE:
+        return Response("The extension package is not available on this deploy.",
+                        status=404, mimetype="text/plain")
+    version = ""
+    try:
+        with zipfile.ZipFile(EXTENSION_ZIP) as bundle:
+            version = str(json.loads(bundle.read("manifest.json")).get("version") or "")
+    except Exception:
+        version = ""
+    name = f"nexora-sync-{version}.zip" if version else "nexora-sync.zip"
+    return send_file(EXTENSION_ZIP, as_attachment=True, download_name=name,
+                     mimetype="application/zip")
+
+
 @app.route("/connect-brightspace")
 @login_required
 def connect_brightspace():
@@ -10614,7 +10678,8 @@ def _inject_contact():
     return {"contact_email": SUPPORT_EMAIL,
             "trial_days": TRIAL_DAYS,
             "corpus_cases": OUTLINE_CORPUS_CASES,
-            "extension_url": EXTENSION_URL}
+            "extension_url": EXTENSION_URL,
+            "extension_zip": EXTENSION_ZIP_AVAILABLE}
 
 
 # ============================
@@ -10787,9 +10852,14 @@ def canvas_sync(user, fetch_list=None, base_url=None):
             raise ValueError("Canvas address is missing.")
         token = None
 
+    # syllabus_body is where Canvas keeps the course outline, and it only
+    # comes back if you ask for it. Without it a Canvas student had no outline
+    # at all unless they found the file and uploaded it by hand -- so grade
+    # intelligence, the pass rules and Ask-the-outline were all unavailable on
+    # a platform that had been handing us the text the whole time.
     courses = fetch_list("courses", {
         "enrollment_state": "active",
-        "include[]": ["term", "course_image"],
+        "include[]": ["term", "course_image", "syllabus_body"],
         "state[]": ["available"],
     })
 
@@ -10815,6 +10885,23 @@ def canvas_sync(user, fetch_list=None, base_url=None):
             "image_url": str(course.get("image_download_url") or ""),
             "brightspace_url": f"{base}/courses/{cid}",
         })
+
+        # The syllabus, as an outline item. It takes the same road every other
+        # outline does -- _import_content stores it, the analyzer reads it --
+        # because the whole point of writing both LMSs through one importer is
+        # that nothing downstream learns which one a student uses.
+        syllabus = _html_to_text(str(course.get("syllabus_body") or "")).strip()
+        if len(syllabus) >= 200:        # a one-line "see the PDF" is not an outline
+            content_items.append({
+                "course": code,
+                "title": f"{raw_code} Course Syllabus",
+                "content_type": "outline",
+                "source_url": f"{base}/courses/{cid}/assignments/syllabus",
+                "source_uid": f"canvas:{base}:{cid}:syllabus",
+                "content_text": syllabus,
+                "module_name": "Syllabus",
+                "published_at": str(course.get("created_at") or "")[:80],
+            })
 
         try:
             assignments = fetch_list(f"courses/{cid}/assignments",

@@ -89,3 +89,66 @@ document.getElementById('out').innerHTML =
   + `<table><tr><td></td><td>title</td><td>expected</td><td>got</td><td>why</td></tr>${rows.join('')}</table>`;
 window.__result = {pass, fail};
 </script>
+
+<h2>flattenToc — every child array is walked</h2>
+<div id="toc"></div>
+<script>
+/* The shape that lost whole subtrees: an empty `Modules` beside a filled
+   `Children`. `[] || x` is `[]` in JavaScript, because an empty array is
+   truthy -- so the walker took the empty one and never looked at the other.
+   Silent: no error, and no count to notice it by. */
+function walkLikeExtension(toc) {
+  const items = [], seen = new Set();
+  const walk = (nodes, path = []) => {
+    if (!Array.isArray(nodes)) return;
+    for (const node of nodes) {
+      const title = (node.Title || node.Name || 'Untitled').trim();
+      const id = node.Id || node.TopicId || title;
+      const isModule = Array.isArray(node.Modules) || Array.isArray(node.Topics)
+                    || Number(node.Type) === 0 || /module/i.test(String(node.Type || ''));
+      if (isModule) {
+        const next = title ? [...path, title] : path;
+        walk(node.Modules || [], next);
+        walk(node.Children || [], next);
+        walk(node.Topics || [], next);
+        walk(node.Content || [], next);
+        continue;
+      }
+      if (seen.has(id)) continue;
+      seen.add(id);
+      items.push(title);
+    }
+  };
+  walk(Array.isArray(toc) ? toc : toc.Modules || toc.Items || toc.Content || toc.Objects || []);
+  return items;
+}
+
+const TOC_CASES = [
+  ['empty Modules beside a filled Children',
+   [{Title: 'Week 1', Type: 0, Modules: [], Children: [{Title: '01 SLIDES', Id: 'a'}]}],
+   ['01 SLIDES']],
+  ['empty Topics beside a filled Content',
+   [{Title: 'Week 2', Type: 0, Topics: [], Content: [{Title: '02 NOTES', Id: 'b'}]}],
+   ['02 NOTES']],
+  ['the ordinary shape still works',
+   [{Title: 'Week 3', Type: 0, Topics: [{Title: 'Lecture 3', Id: 'c'}]}],
+   ['Lecture 3']],
+  ['nested modules',
+   [{Title: 'Unit 1', Type: 0, Modules: [{Title: 'Week 1', Type: 0, Topics: [{Title: 'Slides', Id: 'd'}]}]}],
+   ['Slides']],
+  ['a node reachable twice is pushed once',
+   [{Title: 'W', Type: 0, Topics: [{Title: 'Dup', Id: 'e'}], Content: [{Title: 'Dup', Id: 'e'}]}],
+   ['Dup']],
+];
+let tp = 0, tf = 0; const trs = [];
+for (const [name, toc, expected] of TOC_CASES) {
+  const got = walkLikeExtension(toc);
+  const ok = JSON.stringify(got) === JSON.stringify(expected);
+  ok ? tp++ : tf++;
+  trs.push(`<tr><td class="${ok ? 'ok' : 'bad'}">${ok ? 'ok' : 'FAIL'}</td><td>${name}</td>`
+         + `<td>${JSON.stringify(expected)}</td><td class="${ok ? '' : 'bad'}">${JSON.stringify(got)}</td></tr>`);
+}
+document.getElementById('toc').innerHTML =
+  `<div class="sum ${tf ? 'fail' : 'pass'}">${tp} passed, ${tf} failed</div><table>${trs.join('')}</table>`;
+window.__tocResult = {pass: tp, fail: tf};
+</script>

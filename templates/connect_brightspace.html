@@ -145,7 +145,28 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
           </a>
         {% endif %}
       </div>
-      {% if not extension_url %}
+      {# With no store listing yet, "search the Chrome Web Store" is a first-run
+         instruction nobody can follow -- there is nothing there to find. The
+         packaged extension is served from the site instead, so the first thing
+         anyone does with Nexora is possible on the day they try it. #}
+      {% if not extension_url and extension_zip %}
+        <div class="actions" style="margin-top:14px">
+          <a class="btn" href="{{ url_for('extension_download') }}">Download Nexora Sync (.zip)</a>
+        </div>
+        <details class="hint" style="margin-top:12px">
+          <summary style="cursor:pointer">How to install the .zip &mdash; four steps</summary>
+          <ol style="margin:10px 0 0 18px;line-height:1.7">
+            <li>Unzip it. You want the <strong>folder</strong>, not the zip.</li>
+            <li>Open <strong>chrome://extensions</strong> and turn on
+                <strong>Developer mode</strong> (top right).</li>
+            <li>Press <strong>Load unpacked</strong> and choose that folder.</li>
+            <li>Open your university's Brightspace and press
+                <strong>Import my courses</strong>.</li>
+          </ol>
+          <p style="margin-top:10px">Chrome may warn about developer-mode extensions each
+             time it starts. That stops once Nexora Sync is on the Chrome Web Store.</p>
+        </details>
+      {% elif not extension_url %}
         <p class="hint" style="margin-top:12px">
           Search the Chrome Web Store for <strong>Nexora Sync</strong> and add it to Chrome.
         </p>

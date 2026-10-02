@@ -416,6 +416,28 @@ Existing rows keep whatever date they were imported with until the next sync
 re-writes them. That is acceptable because a sync fixes them; a migration
 cannot, since the original timestamp was never stored.
 
+## What day it is NOW is also the student's, not the server's
+
+`local_date_iso` fixed what day a deadline falls ON. Nothing fixed what day it
+IS, so `days_until` kept measuring from `date.today()` -- the server's date,
+UTC on Render. For a student in Eastern that is already tomorrow from 8pm,
+which is exactly when someone opens Nexora to decide what to do tonight:
+
+- work due **at 11:59 tonight** computed to `-1` and rendered **Overdue**
+- "due in 2 days" read as tomorrow, every evening, on eleven call sites
+
+`_today_for_request()` asks the signed-in student and falls back to the
+server's date outside a request -- which is what the `.ics` feed and the public
+reader want, since neither has a student to ask. `days_until(iso, today=None)`
+takes an explicit day for callers that already know it.
+
+**A test for this cannot be written against "now".** The two clocks agree for
+most of the day and on any machine whose zone matches the server's, so a test
+that compares them passes by accident until the evening. `test_a_countdown_runs_-
+on_the_students_clock_not_the_servers` uses Pacific/Kiritimati (UTC+14) and
+Pacific/Niue (UTC-11): 25 hours apart, so they are on different calendar days
+at every instant of the year.
+
 ## A deadline links to the work, and only ever to a link it was given
 
 `Task.source_link`, filled by all three importers and rendered on the
@@ -969,6 +991,15 @@ payloads. **Do not reimplement the parsing in JavaScript.** The extension is
 transport only; every line that interprets a Canvas payload lives on the server,
 once.
 
+**The Canvas syllabus only arrives if you ask for it.** `syllabus_body` comes
+back from `courses` solely when it is named in `include[]`, and nothing named
+it -- so a Canvas student had no outline at all, and therefore no grading
+scheme, no pass rules and no Ask-the-outline, on a platform that had been
+offering the text the whole time. It is stored as an ordinary `outline` content
+item so every downstream reader is unchanged. Under 200 characters it is
+ignored: plenty of courses put "see the attached PDF" in that field, and
+analysing that would invent a scheme.
+
 Both LMSs write through `_import_courses` and `_import_content`, so the
 dashboard, calendar, grade calculator and study tools never learn which one a
 student uses. Adding a third should extend those, not parallel them.
@@ -1217,8 +1248,16 @@ the student grants for their own origin.
   Guidelines" then matched a lecture number and twelve real quizzes were filed
   as lectures. A supporting doc is a `resource` -- a rubric is not the
   assignment.
+- **An empty array is TRUTHY, and it cost whole subtrees.** The TOC walker ran
+  `walk(node.Modules || node.Children || [])`, so a module carrying
+  `Modules: []` beside a filled `Children` walked the empty one and everything
+  under it vanished -- no error, no count to notice it by. Reported as
+  "sometimes it doesn't even put the lecture at all". All four child arrays are
+  walked now (`Modules`, `Children`, `Topics`, `Content`), deduped by
+  `source_uid` because a node can now be reached twice. Both copies of
+  `flattenToc` had it.
 - `extension/classify-check.html` runs the classifier against 32 titles taken
-  from a real account. Replaying stored rows through it is NOT a faithful
+  from a real account, and the TOC walker against the shapes that lost items. Replaying stored rows through it is NOT a faithful
   simulation: the classifier is handed `file.source_url`, which carries a file
   extension, while the row stores `file.download_url`
   (`/content/topics/<id>/file`), which does not -- so a replay sees no
