@@ -930,6 +930,26 @@ of JavaScript reaching into them; its palette was remapped in place rather than
 rewritten, because re-deriving every grid template there risks grade
 intelligence for a purely visual change.
 
+**The rail's LINKS are `_railnav.html`, once, and all three pages include it.**
+That exemption turned into drift: both of those pages hand-wrote their own rail,
+the workspace had lost Study plan, Canvas and Feedback, the study room had lost
+Canvas and Feedback, and both called the grade calculator "Grades". A student
+who clicked into a course could not reach the planner without going back to the
+dashboard first. Reported as "the sidebar doesn't show everything". The include
+carries no container, brand or CSS -- each page keeps its own `<nav>` and its
+own styling, and only the list is shared. `rail_extra` is the trailing item the
+workspace uses for the course it is on. Add a rail item in one place.
+
+**Material is grouped on the TOP of the breadcrumb, not all of it.**
+`_organise_course_items` -- Brightspace nests "Lectures › Topic 04 › ..." and
+`groupby('module_name')` made a heading per topic: thirteen headings over
+twenty-two lectures on a real course, most holding one item, each one repeating
+the title directly underneath. The topic becomes a label on the row, where it
+reads as context rather than structure. `_natural_key` sorts Topic 2 before
+Topic 10, `_strip_course_prefix` drops the "SYSC2004 - " every row repeated on
+the one page that can only be about that course, and inside a topic the lecture
+itself leads its own code samples.
+
 **A CSS id selector immediately after `{` is a Jinja comment.**
 `@media (max-width:900px){#tourRing{...}}` contains `{#`, which opens a comment
 that swallows the template as far as the next `#}` -- in this case several

@@ -207,3 +207,94 @@ def test_a_countdown_runs_on_the_students_clock_not_the_servers(client):
     # and the default still works outside a request, for the feed and the
     # public reader, which have no student to ask
     assert nexora.days_until(_date.today().isoformat()) == 0
+
+
+# ---------------------------------------------------------------- the rail
+
+RAIL = ["Dashboard", "Calendar", "Grade calculator", "Study plan", "Study room",
+        "Brightspace", "Canvas", "Settings", "Feedback"]
+
+
+def rail_items(client, url):
+    import re as _re
+    html = client.get(url).get_data(as_text=True)
+    nav = _re.search(r'<nav class="(?:railnav|nav)"[^>]*>(.*?)</nav>', html, _re.S)
+    assert nav, f"no rail on {url}"
+    return [_re.sub(r"<[^>]+>", "", a).strip()
+            for a in _re.findall(r"<a\b[^>]*>(.*?)</a>", nav.group(1), _re.S)]
+
+
+@pytest.mark.parametrize("url", ["/dashboard", "/calendar", "/study-plan",
+                                 "/study-room", "/course/BIOL1103"])
+def test_every_page_shows_the_whole_rail(client, student, url):
+    """There were THREE hand-written rails and they had drifted into three
+    different apps: the course workspace had lost Study plan, Canvas and
+    Feedback, the study room had lost Canvas and Feedback, and both called the
+    grade calculator "Grades". A student who clicked into a course could not
+    reach the planner without going back to the dashboard first."""
+    items = rail_items(client, url)
+    assert items[:len(RAIL)] == RAIL, f"{url} rail is {items}"
+
+
+def test_the_workspace_still_marks_the_course_it_is_on(client, student):
+    items = rail_items(client, "/course/BIOL1103")
+    assert items[-1] == "BIOL1103", "the course is the trailing item, after the shared nine"
+
+
+# ------------------------------------------------------- organising material
+
+def test_material_groups_on_the_top_of_the_breadcrumb_not_all_of_it():
+    """Brightspace nests "Lectures › Topic 04 › ...". Grouping on the full path
+    made a heading per topic -- thirteen headings over twenty-two lectures on a
+    real course, most holding one item and repeating the title underneath it."""
+    class Row:
+        def __init__(self, module_name, title):
+            self.module_name, self.title = module_name, title
+
+    rows = [Row("Lectures › Topic 02 - OOP", "SYSC2004 - Topic 02 - Intro to OOP"),
+            Row("Lectures › Topic 10 - Later", "SYSC2004 - Topic 10 - Later"),
+            Row("Lectures › Topic 04 - Refactoring", "Aggregation"),
+            Row("Lectures › Topic 04 - Refactoring", "SYSC2004 - Topic 04 - OOP concepts"),
+            Row("Lecture recording", "SYSC2004 - Lecture 01 - Recording"),
+            Row("", "Loose file")]
+    groups = nexora._organise_course_items(rows, "SYSC2004A")
+    headings = [g["heading"] for g in groups]
+    assert "Lectures" in headings and "Lecture recording" in headings
+    assert not any("Topic 04" in h for h in headings), "the topic is a row label, not a heading"
+
+    lectures = next(g for g in groups if g["heading"] == "Lectures")
+    titles = [i["title"] for i in lectures["items"]]
+    assert titles[0] == "Topic 02 - Intro to OOP", "the course code is stripped"
+    # Topic 10 after Topic 04, which plain string ordering gets backwards
+    assert titles.index("Topic 04 - OOP concepts") < titles.index("Topic 10 - Later")
+    # and inside a topic the lecture leads its own code samples
+    assert titles.index("Topic 04 - OOP concepts") < titles.index("Aggregation")
+
+
+def test_an_item_with_no_module_still_has_a_home():
+    class Row:
+        def __init__(self, module_name, title):
+            self.module_name, self.title = module_name, title
+    groups = nexora._organise_course_items([Row("", "Loose file")], "ABC1000")
+    assert groups and groups[0]["items"][0]["title"] == "Loose file"
+
+
+# ------------------------------------------------------ installing it at all
+
+def test_the_store_link_replaces_the_zip_instructions(client, student, monkeypatch):
+    """"There is no way students will do all these steps." With a store listing
+    the four-step unpacked install is not just unnecessary, it is noise beside
+    the one button that works."""
+    monkeypatch.setattr(nexora, "EXTENSION_URL",
+                        "https://chromewebstore.google.com/detail/nexora-sync/EXAMPLE")
+    html = client.get("/connect-brightspace").get_data(as_text=True)
+    assert "chromewebstore.google.com" in html
+    assert "Load unpacked" not in html, "the zip steps go away once there is a store link"
+    assert "nexora-sync.zip" not in html
+
+
+def test_pinning_is_a_step(client, student):
+    """Chrome hides a new extension behind the puzzle-piece menu, so "click the
+    Nexora icon" pointed at an icon that was not on screen."""
+    html = client.get("/connect-brightspace").get_data(as_text=True)
+    assert "Pin it" in html and "puzzle" in html.lower()

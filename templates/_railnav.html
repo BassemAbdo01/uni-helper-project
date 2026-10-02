@@ -1,0 +1,28 @@
+{# The rail's links. ONE definition.
+
+   There were three, and they had drifted into three different apps: the course
+   workspace was missing Study plan, Canvas and Feedback, the study room was
+   missing Canvas and Feedback, and both called the grade calculator "Grades".
+   A student who clicked into a course lost three rail items and could not get
+   to the planner without going back to the dashboard first. Reported as "the
+   sidebar doesn't show everything".
+
+   `study_room.html` and `course_workspace.html` deliberately do not extend
+   `app_base.html` -- see the UI section of CLAUDE.md -- so this is an include
+   rather than a block, and it carries no container, no brand and no CSS of its
+   own. Each page keeps its own <nav> and its own styling; only the LIST lives
+   here.
+
+   `nav` is the endpoint of the current page, as app_base already passes it.
+   `extra` is an optional trailing item, which is how the workspace shows the
+   course it is on. #}
+<a data-tour="nav-dashboard" {% if nav == 'home' %}class="on" aria-current="page"{% endif %} href="{{ url_for('home') }}"><b></b>Dashboard</a>
+<a data-tour="nav-calendar" {% if nav == 'calendar_page' %}class="on" aria-current="page"{% endif %} href="{{ url_for('calendar_page') }}"><b></b>Calendar</a>
+<a data-tour="nav-grades" {% if nav == 'grade_calculator' %}class="on" aria-current="page"{% endif %} href="{{ url_for('grade_calculator') }}"><b></b>Grade calculator</a>
+<a data-tour="nav-plan" {% if nav == 'study_plan_page' %}class="on" aria-current="page"{% endif %} href="{{ url_for('study_plan_page') }}"><b></b>Study plan</a>
+<a data-tour="nav-study" {% if nav == 'study_room' %}class="on" aria-current="page"{% endif %} href="{{ url_for('study_room') }}"><b></b>Study room</a>
+<a data-tour="nav-brightspace" {% if nav == 'connect_brightspace' %}class="on" aria-current="page"{% endif %} href="{{ url_for('connect_brightspace') }}"><b></b>Brightspace</a>
+<a data-tour="nav-canvas" {% if nav == 'connect_canvas' %}class="on" aria-current="page"{% endif %} href="{{ url_for('connect_canvas') }}"><b></b>Canvas</a>
+<a data-tour="nav-settings" {% if nav == 'settings' %}class="on" aria-current="page"{% endif %} href="{{ url_for('settings') }}"><b></b>Settings</a>
+<a data-tour="nav-feedback" {% if nav == 'feedback' %}class="on" aria-current="page"{% endif %} href="{{ url_for('feedback') }}"><b></b>Feedback</a>
+{% if rail_extra %}<a class="on" aria-current="page" href="#"><b></b>{{ rail_extra }}</a>{% endif %}

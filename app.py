@@ -358,6 +358,85 @@ def _term_sort_key(value):
 _PLACEHOLDER_CODE = re.compile(r"^COURSE\d+$", re.I)
 
 
+# ---------------------------------------------------------------------------
+# Organising a course's material
+# ---------------------------------------------------------------------------
+# The workspace grouped by the FULL Brightspace breadcrumb, so every
+# "Lectures › Topic 04 - OOP concepts, and Refactoring" became its own heading
+# -- twenty headings over twenty-two lectures, most of them holding one item,
+# each heading repeating the title directly underneath it. Reported, fairly, as
+# "insanely disorganized".
+_NUM_RUN = re.compile(r"(\d+)")
+_BREADCRUMB = re.compile(r"\s*[›>/|»]\s*")
+
+
+def _natural_key(text):
+    """Sort "Topic 2" before "Topic 10".
+
+    Plain string ordering puts 10 before 2, which on a course with more than
+    nine of anything shuffles the list into nonsense -- and a lecture list out
+    of order is the one thing a student cannot work around.
+    """
+    return [int(part) if part.isdigit() else part.lower()
+            for part in _NUM_RUN.split(str(text or ""))]
+
+
+def _strip_course_prefix(title, code):
+    """"SYSC2004 - Topic 01 - ..." -> "Topic 01 - ...".
+
+    Every row repeated the course code, on the one page that can only ever be
+    about that course. The code on the row is often the bare one (SYSC2004)
+    while the workspace is an offering (SYSC2004A), so the comparison is on the
+    letters-and-digits stem.
+    """
+    title = str(title or "").strip()
+    stem = re.sub(r"[^A-Za-z0-9]", "", str(code or "")).upper()
+    if not stem:
+        return title
+    match = re.match(r"^([A-Za-z]{2,8})\s*([0-9]{3,5})[A-Za-z]?\s*[-–—:|]\s*", title)
+    if match and (match.group(1) + match.group(2)).upper() == stem[:len(match.group(1) + match.group(2))]:
+        return title[match.end():].strip() or title
+    return title
+
+
+def _organise_course_items(items, code=""):
+    """Group a course's material the way a student reads it.
+
+    By the TOP of the breadcrumb, not the whole of it. Brightspace nests
+    "Lectures › Topic 04 › ..." and grouping on the full path makes a heading
+    per topic; grouping on the first segment gives three real sections and puts
+    the topic on the row, where it reads as context rather than as structure.
+
+    Returns [{heading, items: [{row, title, label}]}] with both the groups and
+    the rows in natural order, so Topic 2 precedes Topic 10.
+    """
+    groups = {}
+    for row in items or []:
+        crumbs = [c for c in _BREADCRUMB.split(str(getattr(row, "module_name", "") or "")) if c.strip()]
+        heading = crumbs[0].strip() if crumbs else "Course material"
+        label = " › ".join(c.strip() for c in crumbs[1:])
+        entry = groups.setdefault(heading, {"heading": heading, "items": []})
+        entry["items"].append({
+            "row": row,
+            "title": _strip_course_prefix(getattr(row, "title", ""), code),
+            "label": label,
+        })
+    out = list(groups.values())
+    for group in out:
+        # Inside a topic, the lecture itself comes before the code samples and
+        # loose files that sit beside it -- otherwise "Shape" and "Die" sort
+        # above the Topic 05 and Topic 08 lectures they belong to.
+        group["items"].sort(key=lambda x: (
+            _natural_key(x["label"]),
+            0 if re.match(r"^(topic|lecture|week|module|chapter|unit)\b", x["title"], re.I) else 1,
+            _natural_key(x["title"])))
+    # Groups in the order their first item would sort, so "Lecture recording"
+    # and "Lectures" keep Brightspace's own shape rather than being alphabetised
+    # into something the student has never seen.
+    out.sort(key=lambda g: _natural_key(g["heading"]))
+    return out
+
+
 def _display_code(code):
     """The code to print on a card, or "" when the code is a placeholder."""
     text = str(code or "").strip()
@@ -6718,6 +6797,10 @@ def course_workspace(course_code):
         contents=contents,
         lectures=lectures,
         resources=resources,
+        # Grouped by the TOP of the breadcrumb rather than the whole of it --
+        # twenty headings over twenty-two lectures was the complaint.
+        lecture_groups=_organise_course_items(lectures, course),
+        resource_groups=_organise_course_items(resources, course),
         quizzes=quizzes,
         announcements=announcements,
         course_outlines=course_outlines,

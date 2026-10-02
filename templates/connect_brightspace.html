@@ -119,6 +119,13 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
       <ol class="steps">
         <li><strong>Install Nexora Sync</strong> in Chrome
             {%- if extension_url %} — the button below opens the Chrome Web Store{% endif %}.</li>
+        {# Chrome hides new extensions behind the puzzle-piece icon, so step two
+           used to be "click the Nexora icon" pointing at an icon that is not
+           there. Pinning is the step nobody writes down and everybody needs. #}
+        <li><strong>Pin it.</strong> Click the puzzle-piece
+            <span aria-hidden="true">🧩</span> in Chrome's toolbar, find
+            <strong>Nexora Sync</strong>, and click the pin so it stays visible.
+            Chrome hides new extensions behind that menu by default.</li>
         <li><strong>Click the Nexora icon</strong> in your toolbar and press
             <strong>Connect to Nexora</strong>. It links itself to this account —
             there is no key to copy.</li>

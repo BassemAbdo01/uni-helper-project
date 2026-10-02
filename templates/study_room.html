@@ -217,13 +217,8 @@ html,body{height:100%;overflow:hidden}
   <aside class="sidebar">
     <a class="brand" href="{{ url_for('landing') }}"><i></i>Nexora</a>
     <nav class="railnav">
-      <a href="{{ url_for('home') }}"><b></b>Dashboard</a>
-      <a href="{{ url_for('calendar_page') }}"><b></b>Calendar</a>
-      <a href="{{ url_for('grade_calculator') }}"><b></b>Grades</a>
-      <a href="{{ url_for('study_plan_page') }}"><b></b>Study plan</a>
-      <a class="on" href="{{ url_for('study_room') }}"><b></b>Study room</a>
-      <a href="{{ url_for('connect_brightspace') }}"><b></b>Brightspace</a>
-      <a href="{{ url_for('settings') }}"><b></b>Settings</a>
+      {# One definition -- this copy had lost Canvas and Feedback. #}
+      {% with nav = 'study_room' %}{% include "_railnav.html" %}{% endwith %}
     </nav>
     <div class="profile"><strong>{{ user.name }}</strong><small>Student</small></div>
   </aside>
