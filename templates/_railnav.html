@@ -25,4 +25,6 @@
 <a data-tour="nav-canvas" {% if nav == 'connect_canvas' %}class="on" aria-current="page"{% endif %} href="{{ url_for('connect_canvas') }}"><b></b>Canvas</a>
 <a data-tour="nav-settings" {% if nav == 'settings' %}class="on" aria-current="page"{% endif %} href="{{ url_for('settings') }}"><b></b>Settings</a>
 <a data-tour="nav-feedback" {% if nav == 'feedback' %}class="on" aria-current="page"{% endif %} href="{{ url_for('feedback') }}"><b></b>Feedback</a>
-{% if rail_extra %}<a class="on" aria-current="page" href="#"><b></b>{{ rail_extra }}</a>{% endif %}
+{# The page you are already on. No href: it went nowhere, and a link that goes
+   nowhere is the one kind a student clicks twice. #}
+{% if rail_extra %}<a class="on" aria-current="page"><b></b>{{ rail_extra }}</a>{% endif %}

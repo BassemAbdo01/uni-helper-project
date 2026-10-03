@@ -20,7 +20,7 @@ import json
 import os
 import sys
 import zipfile
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -298,3 +298,68 @@ def test_pinning_is_a_step(client, student):
     Nexora icon" pointed at an icon that was not on screen."""
     html = client.get("/connect-brightspace").get_data(as_text=True)
     assert "Pin it" in html and "puzzle" in html.lower()
+
+
+# ------------------------------------------------- a feed that cannot succeed
+
+def test_a_failing_feed_backs_off_instead_of_retrying_every_page_load(client, monkeypatch):
+    """`should_auto_sync` read `last_sync`, which `save_sync_result` only
+    advances when the sync WORKS. So a feed answering 403 -- which is what an
+    expired Brightspace token does -- retried on every single page load, for
+    ever: every dashboard render waited on a network call that could not
+    succeed, and the university was hit once per page view. Seen in the local
+    log: seven failures in two minutes of ordinary browsing.
+    """
+    email = f"feed{uuid4().hex[:6]}@carleton.ca"
+    client.post("/signup", data={"name": "R", "email": email, "password": "feed-pass-123"})
+    with nexora.app.app_context():
+        user = nexora.User.query.filter_by(email=email).first()
+        user.feed_url = "https://brightspace.example.ca/d2l/le/calendar/feed/x.ics"
+        user.last_sync = None
+        user.last_sync_attempt = None
+        nexora.db.session.commit()
+
+    tries = []
+
+    def always_403(url, *a, **kw):
+        tries.append(url)
+        raise RuntimeError("HTTP Error 403: Not authenticated.")
+
+    monkeypatch.setattr(nexora, "fetch_feed_ics", always_403)
+    for _ in range(6):
+        assert client.get("/dashboard").status_code == 200
+    assert len(tries) == 1, f"tried {len(tries)} times across six page loads"
+
+    with nexora.app.app_context():
+        user = nexora.User.query.filter_by(email=email).first()
+        assert user.last_sync_attempt is not None, "the attempt is recorded even though it failed"
+        assert user.last_sync is None, "a failure must never look like a successful sync"
+
+
+def test_the_backoff_expires_so_a_fixed_feed_recovers(client, monkeypatch):
+    """Backing off must not mean giving up: a student who repairs the link in
+    Brightspace has to be picked up without touching anything in Nexora."""
+    email = f"feed{uuid4().hex[:6]}@carleton.ca"
+    client.post("/signup", data={"name": "R", "email": email, "password": "feed-pass-123"})
+    with nexora.app.app_context():
+        user = nexora.User.query.filter_by(email=email).first()
+        user.feed_url = "https://brightspace.example.ca/d2l/le/calendar/feed/x.ics"
+        # last tried longer ago than the interval
+        user.last_sync_attempt = datetime.utcnow() - timedelta(minutes=nexora.AUTO_SYNC_MINUTES + 5)
+        nexora.db.session.commit()
+
+    tries = []
+    monkeypatch.setattr(nexora, "fetch_feed_ics",
+                        lambda url, *a, **kw: tries.append(url) or "BEGIN:VCALENDAR\nEND:VCALENDAR")
+    client.get("/dashboard")
+    assert len(tries) == 1, "once the window has passed it tries again"
+
+
+def test_the_interval_is_measured_in_utc(client):
+    """`last_sync` is written with utcnow and was compared against local time.
+    Harmless only on a server that is already UTC, which is why it survived --
+    the same mistake was fixed in the writer and left in the reader."""
+    import inspect
+    src = inspect.getsource(nexora.should_auto_sync)
+    assert "datetime.utcnow()" in src
+    assert "datetime.now()" not in src.replace("datetime.utcnow()", "")

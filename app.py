@@ -485,6 +485,8 @@ class User(db.Model, UserMixin):
     password_hash = db.Column(db.String(255), nullable=False)
     feed_url = db.Column(db.Text, default="")
     last_sync = db.Column(db.DateTime, nullable=True)
+    # The last ATTEMPT, so a feed that cannot succeed still backs off.
+    last_sync_attempt = db.Column(db.DateTime, nullable=True)
     sync_status = db.Column(db.String(30), default="never")
     sync_message = db.Column(db.Text, default="Not synchronized yet.")
     extension_token = db.Column(db.String(128), default="")
@@ -851,6 +853,10 @@ def ensure_schema_columns():
             "trial_notice_sent": "VARCHAR(20) DEFAULT ''",
             "timezone": "VARCHAR(64) DEFAULT ''",
             "calendar_token": "VARCHAR(64) DEFAULT ''",
+            # When the automatic sync last TRIED, as opposed to last
+            # succeeded. Without it a failing feed retried on every page
+            # load, for ever -- see should_auto_sync.
+            "last_sync_attempt": "TIMESTAMP NULL",
             "tour_done": "BOOLEAN DEFAULT FALSE",
             "sync_status": "VARCHAR(30) DEFAULT 'never'",
             "sync_message": "TEXT DEFAULT 'Not synchronized yet.'",
@@ -2061,8 +2067,25 @@ def fetch_feed_ics(feed_url):
 
 
 def should_auto_sync():
-    last = load_last_sync()
-    return last is None or datetime.now() - last >= timedelta(minutes=AUTO_SYNC_MINUTES)
+    """Whether to try the calendar feed on this page load.
+
+    Gated on the last ATTEMPT, not the last success. It used to read
+    `last_sync`, which `save_sync_result` only advances when the sync works --
+    so a feed answering 403, which is what an expired Brightspace token does,
+    retried on EVERY page load for ever. Every dashboard render then waited on
+    a network call that could not succeed, and the university was hit once per
+    page view. Seen in the local log: seven failures in two minutes of
+    ordinary browsing.
+
+    `utcnow`, not `now`: `last_sync` is written with `datetime.utcnow()`, and
+    comparing it against local time is harmless only on a server that is
+    already UTC. The same mistake was found and fixed in the writer; it was
+    still here in the reader.
+    """
+    if not getattr(current_user, "is_authenticated", False):
+        return False
+    last_try = getattr(current_user, "last_sync_attempt", None) or load_last_sync()
+    return last_try is None or datetime.utcnow() - last_try >= timedelta(minutes=AUTO_SYNC_MINUTES)
 
 
 def perform_feed_sync():
@@ -2083,6 +2106,10 @@ def perform_feed_sync():
 def auto_sync_if_needed():
     if not load_feed_url() or not should_auto_sync():
         return None
+    # Stamped BEFORE the attempt and committed now, so a feed that times out
+    # still backs off -- the except below may never be reached.
+    current_user.last_sync_attempt = datetime.utcnow()
+    db.session.commit()
     try:
         counts, _ = perform_feed_sync()
         return counts

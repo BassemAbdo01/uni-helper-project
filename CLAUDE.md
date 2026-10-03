@@ -438,6 +438,28 @@ on_the_students_clock_not_the_servers` uses Pacific/Kiritimati (UTC+14) and
 Pacific/Niue (UTC-11): 25 hours apart, so they are on different calendar days
 at every instant of the year.
 
+## A feed that cannot succeed must back off
+
+`should_auto_sync` read `last_sync`, and `save_sync_result` only advances that
+when the sync WORKS. So a feed answering 403 -- which is what an expired
+Brightspace token does -- retried on **every page load, for ever**: every
+dashboard render waited on a network call that could not succeed, and the
+university was hit once per page view. Seen in the local log as seven failures
+in two minutes of ordinary browsing.
+
+`User.last_sync_attempt` is the last TRY. It is stamped and committed *before*
+the attempt, because a timeout may never reach the `except`. `last_sync` still
+means what it says, so a failure can never be rendered as a successful sync.
+
+Backing off is not giving up: once the interval passes it tries again, so a
+student who repairs the link in Brightspace is picked up without touching
+anything in Nexora.
+
+The comparison is `datetime.utcnow()`, not `datetime.now()`. `last_sync` is
+written with `utcnow`, and comparing it against local time is harmless only on
+a server that is already UTC -- which is why it survived. The same mistake was
+found and fixed in the writer (`save_sync_result`) and left in the reader.
+
 ## A deadline links to the work, and only ever to a link it was given
 
 `Task.source_link`, filled by all three importers and rendered on the
