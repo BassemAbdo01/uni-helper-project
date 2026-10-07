@@ -473,8 +473,14 @@ function fileInfoFromTopic(topic, course, version, origin) {
   const title = clean(topic.Title || topic.Name || 'Untitled content');
   const extension = ((title.match(/\.([a-z0-9]{1,8})\b/i) || absoluteUrl.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
   const topicId = topic.Id || topic.TopicId || topic.Identifier || '';
+  // D2L's own viewer for this topic. The API `/file` endpoint below is for a
+  // fetch carrying the student's session; opening it as a link answers
+  // `{ Errors: [ {Message: "Forbidden"} ] }` on a blank page, which is what
+  // every lecture link in Nexora used to do. absoluteUrl still leads, because
+  // classifyContent reads the file extension off it.
+  const viewUrl = topicId ? `${origin}/d2l/le/content/${course.source_uid}/viewContent/${topicId}/View` : '';
   const downloadUrl = topicId ? `${origin}/d2l/api/le/${version}/${course.source_uid}/content/topics/${topicId}/file` : '';
-  return { source_url: absoluteUrl || downloadUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
+  return { source_url: absoluteUrl || viewUrl, view_url: viewUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
 }
 
 function flattenToc(toc, course, version, origin) {
@@ -511,7 +517,7 @@ function flattenToc(toc, course, version, origin) {
         source_uid: uid,
         title,
         content_type: classifyContent(title, file.source_url, activity, moduleContext),
-        source_url: file.download_url || file.source_url,
+        source_url: file.source_url || file.view_url,
         download_url: file.download_url,
         file_name: file.file_name,
         file_ext: file.file_ext,

@@ -29,6 +29,11 @@
 .monthnav .sync{width:auto;padding:0 12px;font-size:12.5px;gap:7px;grid-auto-flow:column}
 .monthnav .sync svg{width:14px;height:14px}
 @media (max-width:760px){ .monthnav .sync span{display:none} }
+/* Six controls in one non-wrapping row needs 357px, and a 390px phone has 354
+   after the page gutter -- so the calendar, alone of every page, still scrolled
+   sideways by 3px after the shell fix. Let the row wrap instead of inventing a
+   narrower button. */
+@media (max-width:560px){ .monthnav{flex-wrap:wrap} }
 
 .weekhead,.month{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px}
 .weekhead{padding:0 0 8px}

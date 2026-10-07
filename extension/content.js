@@ -355,8 +355,14 @@
     const title = clean(topic.Title || topic.Name || 'Untitled content');
     const extension = ((title.match(/\.([a-z0-9]{1,8})\b/i) || absoluteUrl.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i) || [])[1] || '').toLowerCase();
     const topicId = topic.Id || topic.TopicId || topic.Identifier || '';
+    // D2L's own viewer for this topic. The API `/file` endpoint below is for a
+    // fetch carrying the student's session; opening it as a link answers
+    // `{ Errors: [ {Message: "Forbidden"} ] }` on a blank page, which is what
+    // every lecture link in Nexora used to do. absoluteUrl still leads, because
+    // classifyContent reads the file extension off it.
+    const viewUrl = topicId ? `${location.origin}/d2l/le/content/${orgUnitId}/viewContent/${topicId}/View` : '';
     const downloadUrl = topicId ? `${location.origin}/d2l/api/le/${version}/${orgUnitId}/content/topics/${topicId}/file` : '';
-    return { source_url: absoluteUrl || downloadUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
+    return { source_url: absoluteUrl || viewUrl, view_url: viewUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
   }
 
   // moduleContext is the module/folder breadcrumb the item lives under (e.g. "Week 5 › Lecture 12").

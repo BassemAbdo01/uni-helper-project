@@ -1121,7 +1121,37 @@ def _lms_link(url):
         return ""
     if "@" in parts.netloc or not parts.hostname:
         return ""
-    return text
+    return _browsable_d2l(text)
+
+
+# D2L's content API endpoint and D2L's own page for the same topic. Both ids come
+# out of the URL the LMS itself gave us; neither is guessed.
+_D2L_TOPIC_FILE = re.compile(
+    r"^(https?://[^/]+)/d2l/api/le/[^/]+/(\d+)/content/topics/(\d+)/file/?$", re.I)
+
+
+def _browsable_d2l(text):
+    """Turn a D2L *API* content URL into the page a browser can actually open.
+
+    The extension stored `/d2l/api/le/<ver>/<ou>/content/topics/<id>/file` as the
+    item's link. That endpoint is for a fetch carrying the student's session from
+    inside Brightspace; opening it as a top-level navigation answers
+    `{ Errors: [ {Message: "Forbidden"} ] }` on a blank white page. Reported from
+    a phone: every lecture link in Nexora did this.
+
+    This is NOT Nexora inventing a link -- the rule that it never constructs one
+    still holds. Host, org unit and topic id are all read back out of the URL the
+    LMS supplied, and rewritten into D2L's own viewer route for that same topic.
+    Anything that does not match is returned untouched.
+
+    It runs inside `_lms_link`, which is the single gate every rendered link
+    passes through, so rows imported before this shipped are fixed on read -- no
+    re-sync and no extension update required.
+    """
+    m = _D2L_TOPIC_FILE.match(text)
+    if not m:
+        return text
+    return "%s/d2l/le/content/%s/viewContent/%s/View" % (m.group(1), m.group(2), m.group(3))
 
 
 def task_to_dict(t):
