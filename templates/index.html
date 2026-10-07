@@ -586,15 +586,27 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
     const showTerm = label => {
       groups.forEach(g => { g.hidden = label !== '__all__' && g.dataset.term !== label; });
     };
+    /* sessionStorage, not localStorage. The need this serves is "I clicked into
+       last year's course and came back" -- which lasts a visit. Kept in
+       localStorage it lasted for ever: one pick of "All terms" and the dashboard
+       opened on all 35 courses across four years, every visit, on that device,
+       with nothing on screen explaining why. A saved term never expired either,
+       so a course picked in September was still showing in January. Reported
+       with a screenshot: "isn't it just supposed to show the current courses".
+       Opening on the current term is the whole reason importing every term is
+       affordable, so it has to be what a fresh visit does. */
     let saved = null;
-    try { saved = localStorage.getItem('nexora-term'); } catch (_) {}
+    try {
+      saved = sessionStorage.getItem('nexora-term');
+      localStorage.removeItem('nexora-term');   // drop the one that stuck
+    } catch (_) {}
     if (saved && (saved === '__all__' || known.has(saved))) {
       termPick.value = saved;
       showTerm(saved);
     }
     termPick.addEventListener('change', () => {
       showTerm(termPick.value);
-      try { localStorage.setItem('nexora-term', termPick.value); } catch (_) {}
+      try { sessionStorage.setItem('nexora-term', termPick.value); } catch (_) {}
     });
   }
 

@@ -82,6 +82,18 @@ a:focus-visible,button:focus-visible{outline:1px solid var(--amber);outline-offs
 .hero{min-height:100vh;display:flex;align-items:center;padding:132px 0 80px}
 .hero-copy{width:min(560px,47%)}
 @media (max-width:1040px){.hero-copy{width:100%}}
+/* On a wide screen the copy takes 47% and the floating pages drift in the empty
+   right-hand half. Once .hero-copy goes full width they are directly behind the
+   headline, and a page of light grey paper under light grey text is unreadable
+   -- reported from a phone as the picture overriding the text. Damp the canvas
+   so it still reads as depth, and give the copy its own scrim so legibility
+   never depends on where a page happens to drift. */
+@media (max-width:1040px){
+  #gl,#glfallback{opacity:.22}
+  .hero-copy{position:relative}
+  .hero-copy::before{content:"";position:absolute;inset:-28px -22px;z-index:-1;
+    background:radial-gradient(118% 92% at 30% 44%,rgba(21,19,16,.93) 38%,rgba(21,19,16,0) 78%)}
+}
 .eyebrow{font-size:10.5px;letter-spacing:.32em;text-transform:uppercase;color:var(--fg-3);
   margin:0 0 30px;display:flex;align-items:center;gap:14px;font-weight:600}
 .eyebrow::before{content:"";width:36px;height:1px;background:var(--amber);opacity:.85}
