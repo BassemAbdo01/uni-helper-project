@@ -9,6 +9,7 @@ walks, plus the authorization boundary between two accounts.
 
 import os
 import sys
+from uuid import uuid4
 
 import pytest
 
@@ -189,7 +190,37 @@ def test_session_cookie_is_hardened(client):
     import app as nexora
     assert nexora.app.config["SESSION_COOKIE_HTTPONLY"] is True
     assert nexora.app.config["SESSION_COOKIE_SAMESITE"] == "Lax"
-    assert nexora.app.config["PERMANENT_SESSION_LIFETIME"].days == 14
+    assert nexora.app.config["PERMANENT_SESSION_LIFETIME"].days == 30
+    assert nexora.app.config["REMEMBER_COOKIE_DURATION"].days == 30
+    assert nexora.app.config["REMEMBER_COOKIE_HTTPONLY"] is True
+
+
+def test_signing_in_actually_sets_a_remember_cookie(client):
+    """The config said 14 days and the login code never opted in.
+
+    `login_user(user)` was called with no `remember`, so Flask-Login set no
+    remember cookie at all, and `session.permanent` was never set, so the
+    session cookie died with the browser. Asserting the CONFIG passed happily
+    the whole time. Reported as being logged out at least once a day.
+    """
+    email = f"stay{uuid4().hex[:6]}@carleton.ca"
+    res = client.post("/signup", data={"name": "S", "email": email,
+                                       "password": "nexorademo1"})
+    jar = {c.key: c for c in client.cookie_jar} if hasattr(client, "cookie_jar") else {}
+    if not jar:                       # werkzeug >= 2.3 keeps cookies on the client
+        jar = {c.key: c for c in client._cookies.values()} if hasattr(client, "_cookies") else {}
+    names = set(jar) or {h.split("=")[0] for _, h in res.headers if _ == "Set-Cookie"}
+    assert any("remember" in n.lower() for n in names), f"no remember cookie in {names}"
+
+
+def test_the_session_survives_the_browser_closing(client):
+    """A non-permanent session cookie is dropped when the browser closes, which
+    is most of what "logged out every day" was."""
+    import app as nexora
+    client.post("/signup", data={"name": "S", "email": f"perm{uuid4().hex[:6]}@carleton.ca",
+                                 "password": "nexorademo1"})
+    with client.session_transaction() as sess:
+        assert sess.permanent is True
 
 
 def test_production_refuses_to_boot_without_a_secret_key():
