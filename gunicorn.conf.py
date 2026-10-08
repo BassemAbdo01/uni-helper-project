@@ -38,6 +38,33 @@ worker_class = "gthread"
 workers = int(os.environ.get("WEB_CONCURRENCY", "2"))
 threads = int(os.environ.get("GUNICORN_THREADS", "8"))
 
+# Import the application ONCE in the master and fork the workers from it.
+#
+# Measured with `python -X importtime -c "import app"`: importing this module
+# costs ~1.75s on a developer machine, and Render's Starter plan is half a
+# vCPU, so it is several seconds there. Without preload every worker pays that
+# separately at boot, and so does every replacement worker that max_requests
+# recycles -- which is during ordinary browsing, not just after a deploy. With
+# preload a recycled worker is a fork, which is nearly free.
+#
+# It also means the module-level `db.create_all()` / `ensure_schema_columns()`
+# block runs once rather than once per worker.
+preload_app = True
+
+
+def post_fork(server, worker):
+    """Give each worker its own database connections.
+
+    The engine's pool is created when the module is imported, which with
+    preload_app now happens in the MASTER -- so every forked worker inherits
+    the same live sockets and they corrupt each other's traffic. Disposing
+    after the fork makes each worker open its own; it does not reconnect
+    eagerly, so this costs nothing at boot.
+    """
+    from app import db
+    db.engine.dispose()
+
+
 # Recycle workers periodically so a slow leak in a long-lived thread cannot
 # accumulate across days of uptime. The jitter stops every worker restarting
 # at the same moment.
