@@ -1,0 +1,82 @@
+{% extends "app_base.html" %}
+{% set nav_active = 'home' %}
+{% block title %}Set up Nexora{% endblock %}
+
+{% block head %}
+<style>
+  /* One question per screen. The connect pages already explain install, pin,
+     import and the calendar feed; what was missing was anything that sent a
+     student to the right one of them. */
+  .pick{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:4px}
+  .lms{display:block;text-decoration:none;color:inherit;border:1px solid var(--line-2);
+    border-radius:12px;padding:22px 22px 20px;background:var(--surface);
+    transition:border-color .2s var(--ease),transform .2s var(--ease)}
+  .lms:hover{border-color:var(--amber);transform:translateY(-2px)}
+  .lms h3{margin:0 0 6px;font-family:var(--serif);font-weight:400;font-size:1.3rem}
+  .lms p{margin:0;color:var(--fg-2);font-size:13.5px;line-height:1.5}
+  .lms .go{display:inline-block;margin-top:14px;color:var(--amber);font-size:13px;font-weight:600}
+  .hint{margin-top:18px;padding:14px 16px;border:1px solid var(--line);border-radius:10px;
+    background:var(--surface-2);color:var(--fg-2);font-size:13px;line-height:1.55}
+  .hint b{color:var(--fg)}
+  .steps-mini{display:flex;gap:7px;align-items:center;margin:0 0 26px;flex-wrap:wrap}
+  .steps-mini span{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--fg-3)}
+  .steps-mini i{font-style:normal;color:var(--line-2)}
+  .steps-mini .at{color:var(--amber)}
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="top">
+  <div>
+    <p class="eyebrow">Two minutes, once</p>
+    <h1>Let's bring your <em>courses</em> in.</h1>
+    <p class="lede">
+      Nexora reads your deadlines, course material and grading schemes straight from
+      your university. It only needs to know which system your university runs.
+    </p>
+  </div>
+</div>
+
+<div class="steps-mini">
+  <span class="at">1 &middot; Pick your system</span><i>&rsaquo;</i>
+  <span>2 &middot; Connect it</span><i>&rsaquo;</i>
+  <span>3 &middot; Your term, planned</span>
+</div>
+
+<section class="card">
+  <header><div><span class="k">Which does your university use</span>
+    <h2>Brightspace or Canvas?</h2></div></header>
+  <div class="body pad">
+    <div class="pick">
+      <a class="lms" href="{{ url_for('connect_brightspace') }}">
+        <h3>Brightspace</h3>
+        <p>Also called D2L. Carleton, Ottawa, Toronto Metropolitan, Guelph and most
+           Ontario universities. Takes a free Chrome extension.</p>
+        <span class="go">Set up Brightspace &rarr;</span>
+      </a>
+      <a class="lms" href="{{ url_for('connect_canvas') }}">
+        <h3>Canvas</h3>
+        <p>Also called Instructure. UBC, Waterloo, Queen's and many US universities.
+           Connects directly, no extension needed.</p>
+        <span class="go">Set up Canvas &rarr;</span>
+      </a>
+    </div>
+
+    {# A student who does not know which one they use cannot be left here. The
+       address bar answers it in one look, and it is the only answer that needs
+       no knowledge of what an LMS is. #}
+    <p class="hint">
+      <b>Not sure which one?</b> Open the website where you submit assignments and
+      look at the address bar. If it contains <b>brightspace</b> or <b>d2l</b>, pick
+      Brightspace. If it contains <b>instructure</b> or <b>canvas</b>, pick Canvas.
+    </p>
+  </div>
+</section>
+
+<p class="note meta" style="margin-top:16px">
+  You can do this later from <a href="{{ url_for('connect_brightspace') }}">Brightspace</a>
+  or <a href="{{ url_for('connect_canvas') }}">Canvas</a> in the sidebar &mdash; but
+  Nexora has nothing to show you until one of them is connected.
+</p>
+{% endblock %}

@@ -87,6 +87,33 @@
 .two .lead{order:-1}
 @media (max-width:1000px){ .two{grid-template-columns:1fr} }
 
+/* The plan leads, configuration follows. Ordered here rather than in two copies
+   of the markup, because the one case that must still lead with the timetable
+   is a student who has not added one. */
+.planpage{display:flex;flex-direction:column;gap:18px}
+#planCard{order:1}
+.card.runway{order:2}
+.setup{order:3}
+.setup-first .setup{order:1}
+.setup-first #planCard{order:3}
+
+.setup{border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.setup>summary{list-style:none;cursor:pointer;position:relative;padding:15px 44px 15px 18px;
+  display:flex;flex-direction:column;gap:2px;border-radius:12px}
+.setup>summary::-webkit-details-marker{display:none}
+.setup>summary:hover{background:var(--surface-2)}
+.setup>summary::after{content:"›";position:absolute;right:20px;top:50%;
+  transform:translateY(-50%) rotate(90deg);color:var(--fg-3);font-size:19px;line-height:1}
+.setup[open]>summary::after{transform:translateY(-50%) rotate(-90deg)}
+.setup .sm-t{font-family:var(--serif);font-size:1.05rem;font-weight:400}
+.setup .sm-s{font-size:12.5px;color:var(--fg-3)}
+/* Scoped to [open]. Setting `display` on a direct child of <details> overrides
+   the UA rule that hides it while closed, so the whole settings body kept
+   rendering -- 1,156px of it -- outside a box measuring 115px. Same family as
+   the .task/[hidden] trap: an author `display` beating a built-in hide. */
+.setup[open] .setup-body{padding:2px 18px 18px;display:flex;flex-direction:column;gap:18px}
+.setup-body>*{margin:0}
+
 .setup{padding:18px}
 .drop{border:1px dashed var(--line-2);border-radius:9px;padding:16px;background:var(--surface-2)}
 .drop input[type=file]{width:100%;padding:10px 12px;border-radius:6px;border:1px dashed var(--line-2);
@@ -179,28 +206,39 @@
   </div>
 </div>
 
-<section class="card" id="focusCard">
-  <header><div><span class="k">What is this plan for</span><h2>Aim it</h2></div></header>
-  <div class="body pad">
-    <div style="display:flex;gap:9px;flex-wrap:wrap">
-      <button class="btn quiet sm focusBtn" data-focus="all" type="button">All coursework</button>
-      <button class="btn quiet sm focusBtn" data-focus="exams" type="button">Tests, midterms &amp; finals only</button>
-    </div>
-    <p class="hint" style="margin-top:11px">
-      Planning everything buries revision under pre-lab quizzes and milestones &mdash;
-      the small things win on sheer number. Aim it at exams and Nexora spends the
-      week on what decides your grade.
-    </p>
-    <div style="margin-top:14px">
-      <label for="askBox">Or just say what you want</label>
-      <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:6px">
-        <input id="askBox" maxlength="500" style="flex:1;min-width:240px"
-               placeholder="Only midterms and finals for BIOL and MATH, three weeks ahead">
-        <button class="btn sm" id="askGo" type="button">Ask Nexora</button>
+
+{# A student opens a planner to find out what to do TODAY. The page used to
+   open on two screens of configuration -- what the plan is for, a paragraph
+   explaining it, an ask box, then what it is building toward -- and the plan
+   itself was the fourth thing down, below the fold. Measured before this: 31
+   buttons and 24 inputs over 4,833px. The plan leads now and everything that
+   CONFIGURES it is behind one disclosure.
+
+   Ordered with CSS rather than two copies of the markup, because the one case
+   that must still lead with the timetable is a student who has not added one --
+   that card shipped underneath an empty plan once and someone asked where the
+   upload was while looking straight at it. #}
+<div class="planpage{% if not has_timetable %} setup-first{% endif %}">
+
+<section class="card" id="planCard">
+    <header>
+      <div><span class="k">The plan</span><h2>Next two weeks</h2></div>
+      <div class="phead">
+        <span class="k" style="margin:0" id="planCount"></span>
+        {# A plan you cannot SEE is a to-do list with times on it. The week
+           lays the study blocks over the classes they were fitted around,
+           which is the thing the student is actually being shown. The list
+           stays, because it is where Done, Skip and the link to the work
+           live. #}
+        <div class="seg" id="planView" role="tablist" aria-label="How to show the plan">
+          <button type="button" data-view="week" role="tab" class="on">Week</button>
+          <button type="button" data-view="list" role="tab">List</button>
+        </div>
       </div>
-      <p class="note meta" id="askState" hidden></p>
-    </div>
-  </div>
+    </header>
+    <p class="note meta" id="catchUp" hidden></p>
+    <div class="body pad" id="planWeek"></div>
+    <div class="body pad" id="planBody" hidden></div>
 </section>
 
 {% if runway %}
@@ -245,25 +283,35 @@
   </section>
 {% endif %}
 
-<section class="card" id="planCard" style="margin-bottom:18px">
-    <header>
-      <div><span class="k">The plan</span><h2>Next two weeks</h2></div>
-      <div class="phead">
-        <span class="k" style="margin:0" id="planCount"></span>
-        {# A plan you cannot SEE is a to-do list with times on it. The week
-           lays the study blocks over the classes they were fitted around,
-           which is the thing the student is actually being shown. The list
-           stays, because it is where Done, Skip and the link to the work
-           live. #}
-        <div class="seg" id="planView" role="tablist" aria-label="How to show the plan">
-          <button type="button" data-view="week" role="tab" class="on">Week</button>
-          <button type="button" data-view="list" role="tab">List</button>
-        </div>
+<details class="setup"{% if not has_timetable %} open{% endif %}>
+  <summary>
+    <span class="sm-t">Plan settings</span>
+    <span class="sm-s">What it is for, your timetable, and when you work</span>
+  </summary>
+  <div class="setup-body">
+
+<section class="card" id="focusCard">
+  <header><div><span class="k">What is this plan for</span><h2>Aim it</h2></div></header>
+  <div class="body pad">
+    <div style="display:flex;gap:9px;flex-wrap:wrap">
+      <button class="btn quiet sm focusBtn" data-focus="all" type="button">All coursework</button>
+      <button class="btn quiet sm focusBtn" data-focus="exams" type="button">Tests, midterms &amp; finals only</button>
+    </div>
+    <p class="hint" style="margin-top:11px">
+      Planning everything buries revision under pre-lab quizzes and milestones &mdash;
+      the small things win on sheer number. Aim it at exams and Nexora spends the
+      week on what decides your grade.
+    </p>
+    <div style="margin-top:14px">
+      <label for="askBox">Or just say what you want</label>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:6px">
+        <input id="askBox" maxlength="500" style="flex:1;min-width:240px"
+               placeholder="Only midterms and finals for BIOL and MATH, three weeks ahead">
+        <button class="btn sm" id="askGo" type="button">Ask Nexora</button>
       </div>
-    </header>
-    <p class="note meta" id="catchUp" hidden></p>
-    <div class="body pad" id="planWeek"></div>
-    <div class="body pad" id="planBody" hidden></div>
+      <p class="note meta" id="askState" hidden></p>
+    </div>
+  </div>
 </section>
 
 <div class="two">
@@ -391,6 +439,11 @@
       <p class="status" id="prefStatus" role="status"></p>
     </div>
   </section>
+</div>
+
+  </div>
+</details>
+
 </div>
 
 <dialog class="sheet" id="classSheet">

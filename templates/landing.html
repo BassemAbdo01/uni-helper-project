@@ -198,6 +198,12 @@ footer{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--fg-3);fo
 .foot-in a:hover{color:var(--amber)}
 
 @media (max-width:1040px){.nav-l{display:none}}
+.storelink{margin-top:18px}
+.storelink a{display:inline-flex;align-items:center;gap:9px;text-decoration:none;
+  color:var(--fg);font-size:13.5px;font-weight:500;padding:9px 15px;border-radius:8px;
+  border:1px solid var(--line-2);background:rgba(255,255,255,.02);
+  transition:border-color .25s var(--ease),color .25s var(--ease)}
+.storelink a:hover{border-color:var(--amber);color:var(--amber)}
 /* The other half of the portal: both this page and the auth pages opt in, so
    the browser morphs between them instead of cutting to white. */
 @view-transition{navigation:auto}
@@ -264,6 +270,20 @@ footer{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--fg-3);fo
       <p class="num rv">01 — Sync</p>
       <h2 class="rv">Six tabs become <em>one</em> timeline.</h2>
       <p class="rv">The extension reads every course you are enrolled in, then keeps deadlines, announcements and lecture files current without you opening Brightspace again.</p>
+      {# The extension is named three times on this page and was linked from
+         nowhere. It is published and free, so a visitor can look at it before
+         making an account -- which is the order most people want. #}
+      {% if extension_url %}
+      <p class="rv storelink">
+        <a href="{{ extension_url }}" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/><path d="M12 3v9l7.5 4.5M12 12l-7.8-4.5M12 12l-3.9 7.8"/>
+          </svg>
+          Nexora Sync &mdash; free on the Chrome Web Store
+        </a>
+      </p>
+      {% endif %}
     </div>
     <div class="panel rv">
       <div class="panel-head"><span><span class="dot"></span>Auto-sync · 8 minutes ago</span><span>4 courses</span></div>
@@ -376,7 +396,7 @@ Assignments (<mark>best 2 of 3</mark>) · Labs (<mark>best 10 of 12</mark>) · B
       {%- else -%}
         <a href="{{ url_for('public_analyzer') }}">Try it</a> · <a href="{{ url_for('login') }}">Log in</a> · <a href="{{ url_for('signup') }}">Start free</a>
       {%- endif -%}
-      · <a href="{{ url_for('support') }}">Help</a> · <a href="{{ url_for('privacy') }}">Privacy</a> · <a href="{{ url_for('terms') }}">Terms</a>
+      {% if extension_url %}· <a href="{{ extension_url }}" target="_blank" rel="noopener">Chrome extension</a> {% endif %}· <a href="{{ url_for('support') }}">Help</a> · <a href="{{ url_for('privacy') }}">Privacy</a> · <a href="{{ url_for('terms') }}">Terms</a>
     </span>
   </div></footer>
 </div>

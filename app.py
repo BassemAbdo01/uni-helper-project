@@ -228,10 +228,12 @@ PRICE_LABEL = os.environ.get("PRICE_LABEL", "").strip()
 # How many structurally different outlines evals/outline_corpus.py covers. The
 # landing page quotes it as proof, so it lives beside the other public-facing
 # numbers rather than being typed into the template and left to rot.
-# The public Chrome Web Store listing. Unset until the item id is known, and
-# the connect page then explains how to install rather than linking nowhere --
-# a dead "Install" button is worse than a sentence.
-EXTENSION_URL = os.environ.get("EXTENSION_URL", "").strip()
+# The public Chrome Web Store listing, live since 2026-10-07. It is the default
+# rather than something to remember to set, because an unset env var here means
+# every student is told to unzip a folder and load it unpacked -- six steps a
+# first-time user will not finish. Still overridable, for a fork or a relisting.
+EXTENSION_URL = (os.environ.get("EXTENSION_URL", "").strip()
+                 or "https://chromewebstore.google.com/detail/nexora-sync/hoildppeiocamckogdoljglekifhcpkb")
 # The packaged extension, served from the site itself. Until the Chrome Web
 # Store listing exists there is NO way to get it -- the connect page could
 # only tell students to search a store that has nothing on it, which is a
@@ -3940,7 +3942,12 @@ def signup():
 
         session.permanent = True
         login_user(user, remember=True)
-        return redirect(url_for("home"))
+        # Straight to the one question that makes Nexora work. A new account
+        # landing on an empty dashboard has to go and find "Brightspace" in
+        # the rail on its own, which was being covered by telling people in
+        # person. /start sends an already-connected account on to the
+        # dashboard, so this can never strand anyone.
+        return redirect(url_for("start_here"))
 
     return render_template("signup.html", ref=(request.args.get("ref") or "").strip().upper()[:12])
 
@@ -4548,6 +4555,11 @@ def home():
         current_term_label=current_term_label,
         current_term_courses=current_term_courses,
         show_tour=not bool(getattr(current_user, "tour_done", False)),
+        # Accounts that existed before /start, and anyone who skipped it. Two
+        # indexed counts per dashboard load, and it disappears the moment
+        # anything is connected -- a setup prompt that outlives setup reads
+        # as the app being broken.
+        setup=_setup_state(current_user.id),
         task_preview=task_preview,
         done_cards=done_cards,
         upcoming_cards=upcoming_cards,
@@ -11103,6 +11115,37 @@ def extension_download():
     name = f"nexora-sync-{version}.zip" if version else "nexora-sync.zip"
     return send_file(EXTENSION_ZIP, as_attachment=True, download_name=name,
                      mimetype="application/zip")
+
+
+def _setup_state(user_id):
+    """How far through setting up this account is.
+
+    Everything a new student needs was already written on the connect pages --
+    install, pin, import, calendar feed -- and nothing ever SENT them there. An
+    account landed on an empty dashboard and had to find "Brightspace" in the
+    rail on its own, which is the step that was being covered by Bassem telling
+    people what to do in person. That does not scale past his friends.
+    """
+    courses = SyncedCourse.query.filter_by(user_id=user_id).count()
+    deadlines = (Task.query.filter_by(user_id=user_id)
+                 .filter(Task.source != "manual").count())
+    return {"courses": courses, "deadlines": deadlines,
+            "connected": bool(courses or deadlines)}
+
+
+@app.route("/start")
+@login_required
+def start_here():
+    """One question, then the page that answers it.
+
+    A student who has connected something does not need this and is not shown
+    it -- an onboarding screen that keeps appearing after you are set up reads
+    as the app being broken.
+    """
+    state = _setup_state(current_user.id)
+    if state["connected"]:
+        return redirect(url_for("home"))
+    return render_template("start.html", setup=state, extension_url=EXTENSION_URL)
 
 
 @app.route("/connect-brightspace")
