@@ -40,6 +40,7 @@
   border-bottom:1px solid var(--line);font-size:13px}
 .sheet .preview li:last-child{border-bottom:0}
 .sheet .preview time{font-family:var(--mono);font-size:11.5px;color:var(--fg-3);white-space:nowrap}
+.sheet .preview .why{display:block;margin-top:4px;font-size:11.5px;color:var(--fg-3);font-style:italic;line-height:1.45}
 .sheet .notes{margin:9px 0 0;font-size:12px;color:var(--fg-3);line-height:1.45}
 .monthnav .sync{width:auto;padding:0 12px;font-size:12.5px;gap:7px;grid-auto-flow:column}
 .monthnav .sync svg{width:14px;height:14px}
@@ -212,6 +213,8 @@ dialog.sheet::backdrop{background:#0B0908cc}
     </button>
     <button type="button" class="ai" id="aiEvents"
             title="Add, move, rename or delete entries by describing it">&#10022; Edit with AI</button>
+    <button type="button" class="ai" id="scanAnn"
+            title="Find dates your instructors announced but never put on the calendar">&#9906; Check announcements</button>
     <button type="button" class="add" id="addEvent">+ Add event</button>
   </div>
 </div>
@@ -345,7 +348,7 @@ dialog.sheet::backdrop{background:#0B0908cc}
 <dialog class="sheet" id="aiSheet" aria-labelledby="aiTitle">
   <form method="dialog" id="aiForm">
     <h2 id="aiTitle">Edit your calendar</h2>
-    <p class="hint">Say what you want done &mdash; add a series of tests, move
+    <p class="hint" id="aiHint">Say what you want done &mdash; add a series of tests, move
        something, rename it, delete it. Nothing changes until you have seen the
        list and confirmed it.</p>
 
@@ -552,6 +555,11 @@ dialog.sheet::backdrop{background:#0B0908cc}
 
   const aiReset = () => {
     aiChanges = null;
+    $('aiTitle').textContent = 'Edit your calendar';
+    $('aiHint').textContent = 'Say what you want done — add a series of tests, '
+      + 'move something, rename it, delete it. Nothing changes until you have seen '
+      + 'the list and confirmed it.';
+    $('aiText').closest('div').hidden = false;
     $('aiUnderstood').hidden = true;
     $('aiPreview').hidden = true;
     $('aiCreate').hidden = true;
@@ -563,6 +571,60 @@ dialog.sheet::backdrop{background:#0B0908cc}
   };
 
   $('aiEvents').onclick = () => { $('aiText').value = ''; aiReset(); aiSheet.showModal(); };
+
+  /* ---- dates your instructors announced ----
+     Brightspace publishes "the midterm is Saturday Nov 7 at 2PM" as prose in an
+     announcement and never as a calendar item, so Nexora held every word of it
+     and the calendar stayed empty. The scan returns changes in the assistant's
+     own shape, so the preview and the Apply path are the same code. */
+  $('scanAnn').onclick = async () => {
+    aiReset();
+    $('aiTitle').textContent = 'Dates found in your announcements';
+    $('aiHint').textContent = 'Your instructors announce dates in prose that never '
+      + 'becomes a calendar entry. Nexora reads the recent ones and shows you what '
+      + 'it found; nothing is added until you confirm.';
+    $('aiText').closest('div').hidden = true;
+    $('aiRead').hidden = true;
+    aiSheet.showModal();
+    $('aiUnderstood').textContent = 'Reading your recent announcements…';
+    $('aiUnderstood').hidden = false;
+    const { ok, data } = await aiPost({ scan: true });
+    if (!ok) {
+      $('aiUnderstood').hidden = true;
+      $('aiError').textContent = data.error || 'Those could not be read.';
+      return;
+    }
+    aiChanges = data.changes || [];
+    const list = $('aiList');
+    list.replaceChildren();
+    aiChanges.forEach(ch => {
+      const li = document.createElement('li');
+      const what = document.createElement('span');
+      const line = document.createElement('b');
+      line.textContent = ch.label || '';
+      what.append(line);
+      if (ch.why) {
+        const q = document.createElement('span');
+        q.className = 'why';
+        q.textContent = '“' + ch.why + '”';
+        what.append(q);
+      }
+      li.append(what);
+      list.append(li);
+    });
+    const n = aiChanges.length;
+    $('aiUnderstood').textContent = n
+      ? 'Found in announcements your instructors posted. Nothing is added until you confirm.'
+      : 'Nothing new to add.';
+    $('aiCountLabel').textContent = n === 1 ? '1 date found' : n + ' dates found';
+    if (data.notes && data.notes.length) {
+      $('aiNotes').textContent = data.notes.join(' ');
+      $('aiNotes').hidden = false;
+    }
+    $('aiPreview').hidden = !n;
+    $('aiCreate').hidden = !n;
+    $('aiCreate').textContent = n === 1 ? 'Add it' : 'Add all ' + n;
+  };
   $('aiCancel').onclick = () => aiSheet.close();
   // Editing the request invalidates the preview: the list on screen must always
   // be the list that would be applied.

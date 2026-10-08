@@ -61,15 +61,32 @@
        styled apart from the general "AI Tutor" (purple) with a green/teal
        accent, so students learn to read green as "grounded in your outline,
        every claim checked" rather than a general open-ended chatbot. */
-    .ask-nexora-fab{position:fixed;right:24px;bottom:24px;z-index:900;display:flex;align-items:center;gap:10px;padding:14px 18px;border-radius:999px;border:1px solid #203327;background:linear-gradient(135deg,#203327,#203327);color:#ADCFB4;font-weight:800;font-size:13px;cursor:pointer;box-shadow:0 12px 34px #100E0Caa;transition:transform .15s}
-    .ask-nexora-fab:hover{transform:translateY(-2px)}
-    .ask-nexora-fab .orb{width:22px;height:22px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ADCFB4,#7FB08A 45%,#203327);box-shadow:0 0 16px #7FB08A88;flex:none}
-    .ask-nexora-panel{position:fixed;right:24px;bottom:24px;z-index:950;width:min(420px,92vw);height:min(600px,80vh);background:linear-gradient(160deg,#203327,#151310);border:1px solid #203327;border-radius:22px;box-shadow:0 30px 90px #100E0Ccc;display:none;grid-template-rows:auto 1fr auto;overflow:hidden}
+    /* Built from the design system rather than beside it. What was here was a
+       gradient between two identical greens -- so, a flat muddy slab -- carrying
+       800-weight text and a glowing orb, in the one palette this app does not
+       use. The green was meant to signal "grounded in your outline", which is a
+       rationale no student has been told; it just read as a foreign object
+       pinned to the corner. Neutral surface, hairline border, one small amber
+       dot: the same vocabulary as the rail's brand mark and the sync indicator. */
+    .ask-nexora-fab{position:fixed;right:22px;bottom:22px;z-index:900;
+      display:inline-flex;align-items:center;gap:10px;height:46px;padding:0 20px;
+      border-radius:999px;border:1px solid #37322B;background:#1E1B17;
+      color:#F7F4EF;font:inherit;font-size:13.5px;font-weight:500;cursor:pointer;
+      box-shadow:0 10px 30px rgba(16,14,12,.55),inset 0 1px 0 rgba(255,255,255,.045);
+      transition:border-color .22s ease,background .22s ease,transform .22s ease,box-shadow .22s ease}
+    .ask-nexora-fab:hover{border-color:#E8A94A;background:#262218;transform:translateY(-1px);
+      box-shadow:0 16px 40px rgba(16,14,12,.62),inset 0 1px 0 rgba(255,255,255,.06)}
+    .ask-nexora-fab:active{transform:translateY(0)}
+    .ask-nexora-fab:focus-visible{outline:2px solid #E8A94A;outline-offset:3px}
+    .ask-nexora-fab .orb{width:7px;height:7px;border-radius:50%;background:#E8A94A;
+      box-shadow:0 0 0 3px rgba(232,169,74,.15);flex:none}
+    .ask-nexora-fab[aria-expanded="true"]{opacity:0;pointer-events:none}
+    .ask-nexora-panel{position:fixed;right:22px;bottom:22px;z-index:950;width:min(420px,92vw);height:min(600px,80vh);background:#1E1B17;border:1px solid #37322B;border-radius:18px;box-shadow:0 30px 90px rgba(16,14,12,.8);display:none;grid-template-rows:auto 1fr auto;overflow:hidden}
     .ask-nexora-panel.open{display:grid}
-    .ask-nexora-head{padding:16px 18px;border-bottom:1px solid #203327;background:#203327cc;display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
-    .ask-nexora-head strong{font-family:'var(--serif)',sans-serif;color:#ADCFB4}
-    .ask-nexora-head p{margin:5px 0 0;color:#7FB08A;font-size:11.5px;line-height:1.5}
-    .ask-nexora-head button{border:1px solid #203327;background:#203327;color:#ADCFB4;border-radius:9px;padding:7px 10px;cursor:pointer;flex:none}
+    .ask-nexora-head{padding:16px 18px;border-bottom:1px solid #37322B;background:#151310;display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+    .ask-nexora-head strong{font-family:var(--serif),Georgia,serif;font-weight:400;font-size:1.02rem;color:#F7F4EF}
+    .ask-nexora-head p{margin:5px 0 0;color:#9A9287;font-size:11.5px;line-height:1.5}
+    .ask-nexora-head button{border:1px solid #37322B;background:#262218;color:#F6DFB8;border-radius:9px;padding:7px 10px;cursor:pointer;flex:none}
     .ask-nexora-scroll{overflow:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
     .ask-msg{max-width:92%;padding:12px 14px;border-radius:15px;line-height:1.55;font-size:13.5px;white-space:pre-wrap}
     .ask-msg.user{align-self:flex-end;background:linear-gradient(135deg,#203327,#4E7A5C);color:#F7F4EF;border-bottom-right-radius:5px}
@@ -103,7 +120,12 @@
       color:var(--muted-2)}
     .badge{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
       color:var(--muted);border-color:var(--line-2);padding:6px 12px}
-  </style>
+  
+a.update{display:block;text-decoration:none;color:inherit}
+a.update:hover{border-color:var(--amber,#E8A94A)}
+.update .ux{display:block;margin:5px 0 2px;font-size:12px;line-height:1.5;opacity:.82;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+</style>
 </head>
 <body>
 <div class="shell">
@@ -413,7 +435,7 @@
         </article>
         <article class="panel" style="margin-top:18px">
           <h3>Recent updates</h3>
-          <div class="updates">{% for update in updates %}<div class="update"><strong>{{ update.title }}</strong><br><small>{{ update.detail }}</small></div>{% else %}<div class="empty">No course updates yet.</div>{% endfor %}</div>
+          <div class="updates">{% for update in updates %}{% if update.link %}<a class="update" href="{{ update.link|content_href }}" target="_blank" rel="noopener noreferrer" title="Open in Brightspace (new tab)"><strong>{{ update.title }}</strong>{% if update.excerpt %}<span class="ux">{{ update.excerpt }}</span>{% endif %}<small>{{ update.detail }}{% if update.when %} &middot; {{ update.when }}{% endif %} &#8599;</small></a>{% else %}<div class="update"><strong>{{ update.title }}</strong>{% if update.excerpt %}<span class="ux">{{ update.excerpt }}</span>{% endif %}<small>{{ update.detail }}{% if update.when %} &middot; {{ update.when }}{% endif %}</small></div>{% endif %}{% else %}<div class="empty">No course updates yet.</div>{% endfor %}</div>
         </article>
       </aside>
     </section>

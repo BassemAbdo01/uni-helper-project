@@ -5347,6 +5347,199 @@ def _calendar_apply(changes, user_id):
     return done
 
 
+ANNOUNCEMENT_SCAN_DAYS = 75      # how far back an announcement can be and still be about work to come
+ANNOUNCEMENT_SCAN_MAX = 14       # how many candidates reach the model
+ANNOUNCEMENT_HORIZON_DAYS = 300  # how far ahead a stated date may be
+
+
+def _announcement_candidates(user_id, today, zone):
+    """Announcements recent enough, and date-bearing enough, to be worth reading.
+
+    This feature existed once and was removed. It read dates out of announcements
+    with a regular expression, and once the extension imported every term it read
+    every old announcement too -- the dates carry no year, so a first-year test
+    was offered as "Tue, Sep 29" this September, ten of them above the calendar.
+    The note left behind said that if it came back it had to be current-term only,
+    future-dated only and year-aware.
+
+    So the deterministic helpers are the FILTER, not the answer: they decide
+    which announcements are even worth a model's attention, and the publish date
+    is the reference that gives a year-less "Nov 7" its year. The model then
+    reads what the announcement actually means, and the server throws out
+    anything in the past.
+    """
+    cutoff = (today - timedelta(days=ANNOUNCEMENT_SCAN_DAYS)).isoformat()
+    rows = (CourseContent.query
+            .filter_by(user_id=user_id, content_type="announcement")
+            .filter(CourseContent.published_at >= cutoff)
+            .order_by(CourseContent.published_at.desc()).limit(120).all())
+    out = []
+    for row in rows:
+        blob = ((row.title or "") + "\n" + (row.content_text or "")).strip()
+        # _EXAM_WORDS, not _looks_like_an_exam. That helper is
+        # `_EXAM_WORDS and not _NOT_AN_EXAM`, and _NOT_AN_EXAM exists to stop
+        # the OLD panel offering "exam review session" as an exam. Used as a
+        # gate on what the model may even see, it threw away the announcement
+        # this feature was built for: "the midterm exam Module has become
+        # available for you to review the information" was vetoed on the word
+        # "review". The regex decides what is worth a model's attention; the
+        # model decides what it means. That is the whole point of it thinking.
+        if not blob or not _EXAM_WORDS.search(blob):
+            continue
+        ref = parse_iso_date(local_date_iso(row.published_at, zone)) or today
+        if _find_date(blob, ref) is None:
+            continue                      # no date stated: nothing to offer
+        out.append((row, ref, blob))
+        if len(out) >= ANNOUNCEMENT_SCAN_MAX:
+            break
+    return out
+
+
+def _already_on_the_calendar(user_id, course, day, title):
+    """Whether this is a date the student already has.
+
+    Offering a midterm that is already on the calendar is how a feature becomes
+    noise, and this one was removed for being noise once already.
+    """
+    stem = _assessment_stem(title) if title else ""
+    rows = (Task.query.filter_by(user_id=user_id)
+            .filter(Task.sync_state != "dismissed")
+            .filter(Task.due_raw.in_([day.isoformat(),
+                                      (day - timedelta(days=1)).isoformat(),
+                                      (day + timedelta(days=1)).isoformat()])).all())
+    for row in rows:
+        if course and (row.course_full or "") != course:
+            continue
+        other = _assessment_stem(row.title or "")
+        if stem and other and (stem in other or other in stem):
+            return True
+        if (row.kind or "") == "exam":
+            return True               # an exam already sits on that day
+    return False
+
+
+@app.route("/api/calendar/scan-announcements", methods=["POST"])
+@limiter.limit(AI_LIMIT)
+@login_required
+@requires_active
+def scan_announcements():
+    """Find dates your instructors announced but never put on the calendar.
+
+    The announcement that prompted this said a midterm "is set to Saturday Nov 7
+    at 2PM". Brightspace publishes that as prose in an announcement and never as
+    a calendar item, so Nexora had every word of it and the calendar stayed
+    empty -- which, as the owner put it, is most of the point of the calendar.
+
+    Nothing is written. It returns changes in the same shape the calendar
+    assistant uses, so the student confirms them through the same path.
+    """
+    today = _today_for_request()
+    zone = _user_zone(current_user)
+    candidates = _announcement_candidates(current_user.id, today, zone)
+    if not candidates:
+        return jsonify({"ok": True, "preview": True, "changes": [], "counts": {},
+                        "understood": "",
+                        "notes": ["No recent announcement states a date for a test, "
+                                  "midterm, exam or quiz."]})
+
+    listing = []
+    for i, (row, ref, blob) in enumerate(candidates):
+        listing.append(f"[{i}] course={row.course_full or 'OTHER'} "
+                       f"published={ref.isoformat()}\n{blob[:900]}")
+    schema = {"found": [{"i": 0, "is_dated_assessment": True, "title": "",
+                         "kind": "exam", "date": "", "time": "", "location": "",
+                         "why": ""}]}
+    rules = [
+        f"Today is {today.isoformat()}. Every date is ISO yyyy-mm-dd.",
+        "Each block below is one announcement. Decide whether it STATES the date "
+        "of a test, midterm, exam, quiz or other sitting the student must attend.",
+        'Set is_dated_assessment false when it only mentions one in passing -- '
+        '"the midterm will be covered in the review", "marks are released" -- or '
+        "when the date is of something else, like a lecture or an office hour.",
+        "A year is often missing. Use the announcement's published date to decide "
+        "which year is meant; it is almost always the next occurrence after it.",
+        "title is what a student would want to see on their calendar, short, and "
+        "naming the assessment rather than quoting the announcement.",
+        'kind is "exam" for any sitting, "due" for something to hand in.',
+        'time is 24-hour HH:MM, or "" if none is stated. Never invent one.',
+        "why is a short quote from the announcement that states the date.",
+        "Leave out any announcement that states no date.",
+        "",
+        "ANNOUNCEMENTS:",
+        "\n\n".join(listing),
+    ]
+    try:
+        parsed = _gemini_json("You find dated assessments in course announcements. "
+                              "Output only JSON.",
+                              "Return strict JSON matching this schema:\n"
+                              + json.dumps(schema, indent=2) + "\n\n" + "\n".join(rules),
+                              max_tokens=1600, mode="quick")
+    except Exception as exc:
+        app.logger.warning("Announcement scan failed: %s", exc)
+        return jsonify({"error": ("Nexora's AI is at its limit right now. Try again "
+                                  "later, or add the date with + Add event."
+                                  if _looks_like_quota_error(exc) else
+                                  "Nexora could not read your announcements just now.")}), 503
+    if isinstance(parsed, list) and parsed:
+        parsed = {"found": parsed}
+    found = (parsed or {}).get("found") if isinstance(parsed, dict) else None
+    if not isinstance(found, list):
+        found = []
+
+    changes, notes, skipped_past, skipped_have = [], [], 0, 0
+    for item in found[:ANNOUNCEMENT_SCAN_MAX]:
+        if not isinstance(item, dict) or not item.get("is_dated_assessment"):
+            continue
+        try:
+            row, ref, _blob = candidates[int(item.get("i"))]
+        except (TypeError, ValueError, IndexError):
+            continue
+        day = parse_iso_date(str(item.get("date") or "").strip())
+        if not day:
+            continue
+        # Future-dated only, and never further out than a year -- the two rules
+        # the old version broke. A model reading "Nov 7" out of a 2024
+        # announcement would otherwise put it on next month's calendar.
+        if day < today:
+            skipped_past += 1
+            continue
+        if day > today + timedelta(days=ANNOUNCEMENT_HORIZON_DAYS):
+            continue
+        course = row.course_full or "OTHER"
+        title = str(item.get("title") or "").strip()[:200] or (row.title or "Exam")
+        if _already_on_the_calendar(current_user.id, course, day, title):
+            skipped_have += 1
+            continue
+        kind = str(item.get("kind") or "exam").strip().lower()
+        if kind not in EVENT_KINDS:
+            kind = "exam"
+        time_raw = str(item.get("time") or "").strip()
+        if time_raw and not _TIME_RE.match(time_raw):
+            time_raw = ""
+        changes.append({
+            "op": "add", "title": title, "date": day.isoformat(), "time": time_raw,
+            "course": course, "kind": kind,
+            "location": str(item.get("location") or "").strip()[:200],
+            "source_title": row.title or "",
+            "why": str(item.get("why") or "").strip()[:240],
+            "label": f"Add “{title}” on {day.isoformat()}"
+                     + (f" at {time_raw}" if time_raw else "")
+                     + f" · {course}",
+        })
+
+    if skipped_past:
+        notes.append(f"{skipped_past} stated a date that has already passed.")
+    if skipped_have:
+        notes.append(f"{skipped_have} {'is' if skipped_have == 1 else 'are'} already on your calendar.")
+    if not changes and not notes:
+        notes.append("Nothing new. Every date your announcements state is already "
+                     "on your calendar.")
+    return jsonify({"ok": True, "preview": True, "changes": changes,
+                    "counts": {"add": len(changes)} if changes else {},
+                    "understood": "", "notes": notes,
+                    "scanned": len(candidates)})
+
+
 @app.route("/api/calendar/ai-events", methods=["POST"])
 @limiter.limit(AI_LIMIT)
 @login_required
@@ -5371,6 +5564,11 @@ def calendar_ai_events():
     """
     data = request.get_json(silent=True) or {}
     today = _today_for_request()
+
+    # The announcement scan shares this endpoint's preview/confirm shape, so the
+    # sheet, the Apply button and the ownership re-check are one implementation.
+    if data.get("scan"):
+        return scan_announcements()
 
     if data.get("confirm"):
         changes = data.get("changes")
@@ -7555,7 +7753,30 @@ def course_workspace(course_code):
     synced_assignments = [c for c in contents if c.content_type == "assignment"]
     assignments = task_assignments
     synced_course = SyncedCourse.query.filter_by(user_id=current_user.id, course_code=course).first()
-    updates = AcademicUpdate.query.filter_by(user_id=current_user.id, course_full=course).order_by(AcademicUpdate.created_at.desc()).limit(12).all()
+    update_rows = (AcademicUpdate.query
+                   .filter_by(user_id=current_user.id, course_full=course)
+                   .order_by(AcademicUpdate.created_at.desc()).limit(12).all())
+    # An update said "New announcement: Midterm exam date" and stopped there --
+    # not a word of what the announcement SAID, and no way to open it. The body
+    # and the link were both already on the content row it points at; nothing
+    # ever joined them. One query for the lot, not one per update.
+    _uids = [u.related_uid for u in update_rows if u.related_uid]
+    _bodies = {}
+    if _uids:
+        for row in (CourseContent.query
+                    .filter_by(user_id=current_user.id)
+                    .filter(CourseContent.source_uid.in_(_uids)).all()):
+            _bodies[row.source_uid] = row
+    updates = []
+    for u in update_rows:
+        row = _bodies.get(u.related_uid)
+        body = re.sub(r"\s+", " ", (getattr(row, "content_text", "") or "")).strip()
+        updates.append({
+            "title": u.title, "detail": u.detail,
+            "excerpt": body[:220] + ("…" if len(body) > 220 else ""),
+            "link": content_href(getattr(row, "source_url", "") or ""),
+            "when": local_date_iso(getattr(row, "published_at", "") or "", _user_zone(current_user)),
+        })
 
     lectures = [c for c in contents if c.content_type == "lecture"]
     lectures = sorted(lectures, key=_lecture_sequence_key)
