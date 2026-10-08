@@ -207,3 +207,113 @@ def test_operations_that_are_not_a_list_are_refused(client):
     with nexora.app.app_context():
         changes, notes = nexora._calendar_plan({"op": "delete"}, uid, TODAY)
     assert changes == [] and notes
+
+
+# --------------------------------------------------------------------------
+# Selecting by FILTER, not by enumerated ids
+#
+# Every operation used to require the model to name ids out of a listing capped
+# at 180 rows. On an account with thirty-five courses that listing never reached
+# December, and "the exams of ELEC2501" is a filter rather than a list -- so the
+# model refused outright: "renaming requires specific entry IDs".
+# --------------------------------------------------------------------------
+
+def _series(uid):
+    return [_task(uid, title=f"Elec Lab {n}", due=d, source="manual")
+            for n, d in ((3, "2026-11-03"), (4, "2026-12-01"), (5, "2026-12-15"))]
+
+
+def test_a_filter_selects_every_matching_entry_with_no_ids_at_all(client):
+    uid = _user(client)
+    _series(uid)
+    with nexora.app.app_context():
+        changes, _ = nexora._calendar_plan([{
+            "op": "rename", "match": {"course": "SYSC2004", "kind": "exam"},
+            "replace": {"from": "Elec Lab", "to": "Elec Test"}}], uid, TODAY)
+    assert [c["title"] for c in changes] == ["Elec Test 3", "Elec Test 4", "Elec Test 5"]
+
+
+def test_renaming_by_substitution_keeps_the_numbering(client):
+    """Setting one title across a series would collapse it into identical rows."""
+    uid = _user(client)
+    _series(uid)
+    with nexora.app.app_context():
+        changes, _ = nexora._calendar_plan([{
+            "op": "rename", "match": {"title_contains": "Elec Lab"},
+            "replace": {"from": "Elec Lab", "to": "Midterm"}}], uid, TODAY)
+        nexora._calendar_apply(changes, uid)
+        titles = sorted(t.title for t in nexora.Task.query.filter_by(user_id=uid).all())
+    assert titles == ["Midterm 3", "Midterm 4", "Midterm 5"]
+
+
+def test_one_new_name_across_many_entries_is_refused_with_a_reason(client):
+    uid = _user(client)
+    _series(uid)
+    with nexora.app.app_context():
+        changes, notes = nexora._calendar_plan([{
+            "op": "rename", "match": {"title_contains": "Elec Lab"},
+            "title_new": "Exam"}], uid, TODAY)
+    assert changes == []
+    assert any("identical" in n for n in notes)
+
+
+def test_a_filter_naming_nothing_matches_nothing(client):
+    """"Delete everything" with an empty filter must not clear the calendar."""
+    uid = _user(client)
+    _series(uid)
+    with nexora.app.app_context():
+        changes, _ = nexora._calendar_plan([{"op": "delete", "match": {}}], uid, TODAY)
+        assert changes == []
+        changes, _ = nexora._calendar_plan([{"op": "delete"}], uid, TODAY)
+    assert changes == []
+
+
+def test_a_filter_cannot_reach_another_students_entries(client):
+    uid = _user(client)
+    other = _user(client, "filter-other@carleton.ca")
+    _task(other, title="Elec Lab 9", due="2026-11-03")
+    with nexora.app.app_context():
+        changes, _ = nexora._calendar_plan([{
+            "op": "delete", "match": {"title_contains": "Elec Lab"}}], uid, TODAY)
+    assert changes == []
+
+
+def test_moving_many_entries_onto_one_date_is_refused_not_stacked(client):
+    uid = _user(client)
+    _series(uid)
+    with nexora.app.app_context():
+        changes, notes = nexora._calendar_plan([{
+            "op": "move", "match": {"title_contains": "Elec Lab"},
+            "to": "2026-12-20"}], uid, TODAY)
+    assert changes == []
+    assert any("one date" in n for n in notes)
+
+
+def test_a_later_operation_sees_a_rename_made_by_an_earlier_one(client):
+    """The model chains: it renames, then matches the NEW name to move it. Against
+    the stored titles that found nothing and half the request was dropped."""
+    uid = _user(client)
+    _series(uid)
+    with nexora.app.app_context():
+        changes, _ = nexora._calendar_plan([
+            {"op": "rename", "match": {"title_contains": "Elec Lab 3"},
+             "title_new": "Elec Final"},
+            {"op": "move", "match": {"title_contains": "Elec Final"},
+             "to": "2026-12-20"},
+        ], uid, TODAY)
+        nexora._calendar_apply(changes, uid)
+        row = nexora.Task.query.filter_by(user_id=uid, title="Elec Final").first()
+    assert [c["op"] for c in changes] == ["rename", "move"]
+    assert row is not None and row.due_raw == "2026-12-20"
+
+
+def test_one_operation_carrying_two_intents_does_both(client):
+    """The model also collapses them into a single op; dispatching on the op
+    name alone silently dropped the second half."""
+    uid = _user(client)
+    tid = _task(uid, title="Elec Lab 3", due="2026-11-03")
+    with nexora.app.app_context():
+        changes, _ = nexora._calendar_plan([{
+            "op": "rename", "ids": [tid], "title_new": "Elec Final",
+            "to": "2026-12-20"}], uid, TODAY)
+    assert sorted(c["op"] for c in changes) == ["move", "rename"]

@@ -21,11 +21,11 @@ from functools import wraps
 from uuid import uuid4
 from pathlib import Path
 
-from flask import Flask, render_template, request, redirect, url_for, jsonify, Response, send_file
+from flask import Flask, render_template, request, redirect, url_for, jsonify, Response, send_file, session
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import text
+from sqlalchemy import text, or_
 from flask_login import (
     LoginManager,
     UserMixin,
@@ -36,9 +36,11 @@ from flask_login import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
-from pypdf import PdfReader
-from pptx import Presentation
-from docx import Document
+# pypdf, python-pptx and python-docx are imported where they are USED, not here.
+# Measured with -X importtime: they cost ~0.5s of the 2.7s it takes to import
+# this module, and Render gives the web service half a vCPU, so that is several
+# seconds of every worker boot. They are needed by one function -- pulling text
+# out of an uploaded lecture -- and by no request that does not upload a file.
 from ics import Calendar
 
 try:
@@ -96,7 +98,15 @@ app.config["SECRET_KEY"] = _secret_key
 app.config["SESSION_COOKIE_SECURE"] = IS_PRODUCTION  # HTTPS-only in production
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # states the CSRF defence we relied on browsers to guess
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=14)
+# Stay signed in for a month. This said 14 days and delivered a browser-session
+# cookie: PERMANENT_SESSION_LIFETIME applies only to a session marked permanent,
+# and `login_user(user)` was called with no `remember`, so Flask-Login never set
+# a remember cookie at all. Reported as being logged out at least once a day --
+# which, for an app a student opens to check what is due tonight, is enough to
+# stop them opening it.
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+app.config["REMEMBER_COOKIE_DURATION"] = timedelta(days=30)
+app.config["REMEMBER_COOKIE_REFRESH_EACH_REQUEST"] = True
 app.config["REMEMBER_COOKIE_SECURE"] = IS_PRODUCTION
 app.config["REMEMBER_COOKIE_HTTPONLY"] = True
 app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
@@ -3267,6 +3277,7 @@ def _extract_uploaded_course_file(upload):
                 pass
     text_parts = []
     if suffix == '.pdf':
+        from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(raw))
         for index, page in enumerate(reader.pages[:250], 1):
             extracted = (page.extract_text() or '').strip()
@@ -3275,6 +3286,7 @@ def _extract_uploaded_course_file(upload):
     elif suffix in {'.pptx', '.ppt'}:
         if suffix == '.ppt':
             raise ValueError('Legacy .ppt files must be converted to .pptx by Brightspace or the instructor.')
+        from pptx import Presentation
         deck = Presentation(io.BytesIO(raw))
         for index, slide in enumerate(deck.slides[:300], 1):
             chunks = []
@@ -3294,6 +3306,7 @@ def _extract_uploaded_course_file(upload):
             if chunks:
                 text_parts.append(f"[Slide {index}]\n" + '\n'.join(chunks))
     elif suffix == '.docx':
+        from docx import Document
         doc = Document(io.BytesIO(raw))
         text_parts.extend(p.text.strip() for p in doc.paragraphs if p.text.strip())
         for table in doc.tables:
@@ -3876,7 +3889,8 @@ def reset_password(token):
     # Any other outstanding link for this account is now stale.
     PasswordResetToken.query.filter_by(user_id=user.id, used_at=None).delete()
     db.session.commit()
-    login_user(user)
+    session.permanent = True
+    login_user(user, remember=True)
     return redirect(url_for("home"))
 
 
@@ -3924,7 +3938,8 @@ def signup():
         db.session.add(user)
         db.session.commit()
 
-        login_user(user)
+        session.permanent = True
+        login_user(user, remember=True)
         return redirect(url_for("home"))
 
     return render_template("signup.html", ref=(request.args.get("ref") or "").strip().upper()[:12])
@@ -3945,7 +3960,8 @@ def login():
         if not user or not check_password_hash(user.password_hash, password):
             return render_template("login.html", error="Invalid email or password.")
 
-        login_user(user)
+        session.permanent = True
+        login_user(user, remember=True)
         return redirect(url_for("home"))
 
     return render_template("login.html")
@@ -5014,56 +5030,125 @@ def _recurrence_events(spec, dates):
     return out
 
 
-CALENDAR_CONTEXT_DAYS = 150      # how far ahead the assistant can see and act
-CALENDAR_CONTEXT_BACK = 30
-CALENDAR_CONTEXT_MAX = 180
-CALENDAR_CHANGE_CAP = 80         # loud, never silent
+CALENDAR_SAMPLE_DAYS = 240       # how far the sample shown to the model reaches
+CALENDAR_SAMPLE_BACK = 30
+CALENDAR_SAMPLE_MAX = 90
+CALENDAR_MATCH_CAP = 200         # how many rows one operation may select
+CALENDAR_CHANGE_CAP = 120        # loud, never silent
 
 
-def _calendar_context(user_id, today):
-    """The entries the assistant may act on, oldest first.
+def _calendar_summary(user_id, today):
+    """What the student HAS, as counts rather than rows.
 
-    Bounded on purpose: the model is given real ids and told to pick from them,
-    which is the whole reason it can never act on a row the student does not
-    have. An unbounded list would also put a four-year import into every prompt.
+    The first version handed the model a flat list of entries and made every
+    operation name ids out of it. That fails twice over: the list is capped, so
+    on an account with thirty-five courses it never reached December and the
+    entries a student asked about were simply not in it; and "the exams of
+    ELEC2501" is a FILTER, not a list of ids -- the model refused the request
+    outright, saying renaming "requires specific entry IDs".
+
+    So the model gets the shape of the calendar (which courses, which kinds, how
+    many, over what dates) and writes a filter. The server resolves it against
+    every row the student has, which is complete by construction and needs no
+    enumeration.
     """
-    lo = (today - timedelta(days=CALENDAR_CONTEXT_BACK)).isoformat()
-    hi = (today + timedelta(days=CALENDAR_CONTEXT_DAYS)).isoformat()
+    rows = (Task.query.filter_by(user_id=user_id)
+            .filter(Task.sync_state != "dismissed")
+            .filter(Task.due_raw != "", Task.due_raw.isnot(None)).all())
+    by_course = {}
+    for t in rows:
+        key = (t.course_full or "OTHER", t.kind or "event")
+        slot = by_course.setdefault(key, {"n": 0, "lo": "", "hi": "", "titles": []})
+        slot["n"] += 1
+        d = t.due_raw or ""
+        if d and (not slot["lo"] or d < slot["lo"]):
+            slot["lo"] = d
+        if d and (not slot["hi"] or d > slot["hi"]):
+            slot["hi"] = d
+        if len(slot["titles"]) < 4:
+            slot["titles"].append((t.title or "")[:46])
+    lines = []
+    for (course, kind), slot in sorted(by_course.items(), key=lambda kv: (-kv[1]["n"], kv[0])):
+        lines.append(f'{course} | {kind} | {slot["n"]} entries | {slot["lo"]}..{slot["hi"]} '
+                     f'| e.g. {"; ".join(slot["titles"])}')
+    return "\n".join(lines[:60])
+
+
+def _calendar_sample(user_id, today):
+    """A window of real entries WITH ids, for "move the midterm" -- the cases
+    where the student means one specific thing and naming it is the point."""
+    lo = (today - timedelta(days=CALENDAR_SAMPLE_BACK)).isoformat()
+    hi = (today + timedelta(days=CALENDAR_SAMPLE_DAYS)).isoformat()
     rows = (Task.query.filter_by(user_id=user_id)
             .filter(Task.sync_state != "dismissed")
             .filter(Task.due_raw >= lo, Task.due_raw <= hi)
             .order_by(Task.due_raw.asc(), Task.id.asc())
-            .limit(CALENDAR_CONTEXT_MAX).all())
-    return rows
+            .limit(CALENDAR_SAMPLE_MAX).all())
+    return "\n".join(
+        f'{t.id}|{t.due_raw or "?"}|{(t.due_time or "--")}|{t.course_full or "OTHER"}|'
+        f'{(t.kind or "event")}|{(t.title or "")[:60]}' for t in rows)
+
+
+def _calendar_match(op, user_id, pending=None):
+    """The rows an operation applies to: explicit ids, or a filter resolved here.
+
+    A filter that names nothing matches NOTHING, deliberately. "Delete my
+    events" with an empty filter would otherwise clear the calendar, and a
+    vague sentence must never be able to do that.
+    """
+    q = (Task.query.filter_by(user_id=user_id)
+         .filter(Task.sync_state != "dismissed"))
+    ids = [str(i).strip() for i in (op.get("ids") or []) if str(i).strip()]
+    if ids:
+        rows = q.filter(Task.id.in_(ids[:CALENDAR_MATCH_CAP])).all()
+        return rows, len(ids) - len(rows)
+
+    m = op.get("match") or {}
+    if not isinstance(m, dict):
+        return [], 0
+    used = False
+    course = _normalize_course_code(str(m.get("course") or ""))
+    if course and course != "OTHER":
+        q, used = q.filter(Task.course_full == course), True
+    kind = str(m.get("kind") or "").strip().lower()
+    if kind in EVENT_KINDS:
+        q, used = q.filter(Task.kind == kind), True
+    contains = str(m.get("title_contains") or "").strip()
+    if contains:
+        # The model chains operations: asked to rename an entry and then move
+        # it, it matched the second one on the name the FIRST one will create.
+        # Resolving every filter against the stored titles found nothing and
+        # half the request was silently dropped. Rows already being renamed in
+        # this plan are matched on their new name.
+        renamed = [rid for rid, title in (pending or {}).items()
+                   if contains.lower() in (title or "").lower()]
+        cond = Task.title.ilike("%" + contains + "%")
+        if renamed:
+            cond = or_(cond, Task.id.in_(renamed))
+        q, used = q.filter(cond), True
+    frm = parse_iso_date(str(m.get("from") or "").strip())
+    to = parse_iso_date(str(m.get("to") or "").strip())
+    if frm:
+        q, used = q.filter(Task.due_raw >= frm.isoformat()), True
+    if to:
+        q, used = q.filter(Task.due_raw <= to.isoformat()), True
+    if not used:
+        return [], 0
+    return q.order_by(Task.due_raw.asc()).limit(CALENDAR_MATCH_CAP).all(), 0
 
 
 def _calendar_plan(operations, user_id, today):
     """Turn the model's operations into concrete, checked changes.
 
-    Nothing is written here. Every id is looked up against the student's own
-    rows, so an id the model invented or copied from somewhere else simply does
-    not resolve. Dates are expanded by `_expand_recurrence`, never by the model.
-
-    Returns (changes, notes).
+    Nothing is written here. Every row comes out of a query scoped to this
+    student, so an id the model invented and a filter it guessed can both only
+    ever reach rows they actually own. Dates are expanded by
+    `_expand_recurrence`, never by the model.
     """
     changes, notes = [], []
+    pending = {}            # row id -> the title a rename earlier in this plan gives it
     if not isinstance(operations, list):
         return [], ["Nexora could not read that as calendar changes."]
-
-    owned = {t.id: t for t in Task.query.filter_by(user_id=user_id).all()}
-
-    def rows_for(op):
-        out, missing = [], 0
-        for raw in (op.get("ids") or []):
-            row = owned.get(str(raw).strip())
-            if row is None:
-                missing += 1
-            else:
-                out.append(row)
-        if missing:
-            notes.append(f"{missing} entr{'y' if missing == 1 else 'ies'} named in that "
-                         "request no longer exist, so they were left out.")
-        return out
 
     for op in operations[:40]:
         if not isinstance(op, dict):
@@ -5077,18 +5162,45 @@ def _calendar_plan(operations, user_id, today):
                 changes.append({"op": "add", **payload,
                                 "label": f"Add “{payload['title']}” on {payload['date']}"
                                          + (f" at {payload['time']}" if payload["time"] else "")})
+            continue
 
-        elif kind == "delete":
-            for row in rows_for(op):
-                changes.append({"op": "delete", "id": row.id, "title": row.title,
+        if kind not in {"delete", "move", "retime", "rename"}:
+            continue
+
+        rows, missing = _calendar_match(op, user_id, pending)
+        if missing:
+            notes.append(f"{missing} entr{'y' if missing == 1 else 'ies'} named in that "
+                         "request no longer exist, so they were left out.")
+        if not rows:
+            continue
+
+        # Dispatch on what the operation DESCRIBES, not only on what it is
+        # labelled. Asked to "rename Elec Lab 3 and move it to December 20" the
+        # model returned one operation named "rename" carrying a "to" as well,
+        # and the move was silently dropped -- half a request, done confidently.
+        to_date = parse_iso_date(str(op.get("to") or "").strip())
+        by_days = op.get("by_days")
+        has_move = bool(to_date) or by_days not in (None, "", 0)
+        time_given = str(op.get("time") or "").strip()
+        has_retime = kind == "retime" or bool(time_given)
+        repl = op.get("replace") if isinstance(op.get("replace"), dict) else {}
+        # "title" counts only on an op actually labelled rename -- an ADD is
+        # handled above and returns, so this can never read an ADD's own title.
+        has_rename = bool(str(repl.get("from") or "").strip()
+                          or str(op.get("title_new") or "").strip()
+                          or (kind == "rename" and str(op.get("title") or "").strip()))
+
+        if kind == "delete":
+            for row in rows:
+                shown = pending.get(row.id, row.title)
+                changes.append({"op": "delete", "id": row.id, "title": shown,
                                 "date": row.due_raw or "",
-                                "label": f"Delete “{row.title}” on {row.due_raw or 'no date'}"})
+                                "label": f"Delete “{shown}” on {row.due_raw or 'no date'}"})
 
-        elif kind == "move":
-            to = parse_iso_date(str(op.get("to") or "").strip())
-            by = op.get("by_days")
-            for row in rows_for(op):
-                if to:
+        if has_move:
+            to, by = to_date, by_days
+            for row in rows:
+                if to and len(rows) == 1:
                     target = to
                 elif by not in (None, "", 0):
                     base = parse_iso_date(row.due_raw or "")
@@ -5098,32 +5210,59 @@ def _calendar_plan(operations, user_id, today):
                         target = base + timedelta(days=int(by))
                     except (TypeError, ValueError):
                         continue
+                elif to:
+                    # Moving many entries ONTO one date is almost never meant and
+                    # cannot be undone in one go; say so rather than stack them.
+                    notes.append(f"{len(rows)} entries matched, so they were not all moved "
+                                 "onto one date. Say how many days to move them by instead.")
+                    break
                 else:
                     continue
-                changes.append({"op": "move", "id": row.id, "title": row.title,
+                changes.append({"op": "move", "id": row.id,
+                                "title": pending.get(row.id, row.title),
                                 "from": row.due_raw or "", "date": target.isoformat(),
-                                "label": f"Move “{row.title}” from "
+                                "label": f"Move “{pending.get(row.id, row.title)}” from "
                                          f"{row.due_raw or 'no date'} to {target.isoformat()}"})
 
-        elif kind == "retime":
-            time_raw = str(op.get("time") or "").strip()
+        if has_retime:
+            time_raw = time_given
             if time_raw and not _TIME_RE.match(time_raw):
                 notes.append(f"Ignored the time “{time_raw}”; it is not a 24-hour time.")
-                continue
-            for row in rows_for(op):
-                changes.append({"op": "retime", "id": row.id, "title": row.title,
+                time_raw = None
+            for row in (rows if time_raw is not None else []):
+                shown = pending.get(row.id, row.title)
+                changes.append({"op": "retime", "id": row.id, "title": shown,
                                 "time": time_raw,
-                                "label": (f"Set “{row.title}” to {time_raw}"
-                                          if time_raw else f"Clear the time on “{row.title}”")})
+                                "label": (f"Set “{shown}” to {time_raw}"
+                                          if time_raw else f"Clear the time on “{shown}”")})
 
-        elif kind == "rename":
-            title = str(op.get("title") or "").strip()[:500]
-            if not title:
-                continue
-            for row in rows_for(op):
-                changes.append({"op": "rename", "id": row.id, "title": title,
-                                "from_title": row.title,
-                                "label": f"Rename “{row.title}” to “{title}”"})
+        if has_rename:
+            find = str(repl.get("from") or "").strip()
+            into = str(repl.get("to") or "").strip()
+            fixed = str(op.get("title_new") or op.get("title") or "").strip()[:500]
+            for row in rows:
+                current = pending.get(row.id, row.title) or ""
+                if find:
+                    # A substitution, so "Elec Lab 4" becomes "Elec Test 4" and
+                    # the numbering survives. Setting one title across many rows
+                    # would collapse a series into five identical entries.
+                    new = re.sub(re.escape(find), into, current, flags=re.IGNORECASE).strip()
+                elif fixed and len(rows) == 1:
+                    new = fixed
+                elif fixed:
+                    notes.append(f"{len(rows)} entries matched one new name, which would make "
+                                 "them identical. Say what to replace instead, such as "
+                                 "“Elec Lab” to “Elec Test”.")
+                    break
+                else:
+                    continue
+                new = new[:500]
+                if not new or new == current:
+                    continue
+                pending[row.id] = new
+                changes.append({"op": "rename", "id": row.id, "title": new,
+                                "from_title": current,
+                                "label": f"Rename “{current}” to “{new}”"})
 
     if len(changes) > CALENDAR_CHANGE_CAP:
         notes.append(f"That came to {len(changes)} changes; showing the first "
@@ -5236,10 +5375,8 @@ def calendar_ai_events():
     if len(text) > 2000:
         return jsonify({"error": "That is too long. Ask for one thing at a time."}), 400
 
-    rows = _calendar_context(current_user.id, today)
-    listing = "\n".join(
-        f'{t.id}|{t.due_raw or "?"}|{(t.due_time or "--")}|{t.course_full or "OTHER"}|'
-        f'{(t.kind or "event")}|{(t.title or "")[:70]}' for t in rows)
+    summary = _calendar_summary(current_user.id, today)
+    sample = _calendar_sample(current_user.id, today)
     codes = sorted(_known_course_codes(current_user.id))
 
     schema = {
@@ -5247,34 +5384,57 @@ def calendar_ai_events():
         "operations": [{"op": "add", "title": "", "course": "", "kind": "exam",
                         "time": "", "location": "", "start": "", "repeat": "once",
                         "count": 0, "until": "", "skip_dates": [], "skip_ranges": [],
-                        "on_excluded": "shift", "ids": [], "to": "", "by_days": 0}],
+                        "on_excluded": "shift",
+                        "match": {"course": "", "kind": "", "title_contains": "",
+                                  "from": "", "to": ""},
+                        "ids": [], "to": "", "by_days": 0,
+                        "replace": {"from": "", "to": ""}, "title_new": ""}],
     }
     rules = [
         f"Today is {today.isoformat()}. Every date is ISO yyyy-mm-dd.",
-        "Each operation has an \"op\" of: add, move, delete, retime, rename.",
+        'Each operation has an "op" of: add, move, delete, retime, rename.',
         "ADD: set title, course, kind, time, start. For something repeating also "
         'set repeat ("weekly", "biweekly", "monthly"), and count or until. '
         "skip_ranges [[from,to],...] and skip_dates are holidays they excluded. "
         'on_excluded is "shift" when a date landing in a gap should move after it '
         'and the rest carry on ("no class that week", "we continue after"), and '
         '"drop" only when that one is cancelled outright. Default "shift".',
-        "MOVE, DELETE, RETIME, RENAME: put the ids of the entries they mean in "
-        "\"ids\". Use ONLY ids from the list below; never invent one. move takes "
-        "\"to\" (a date) or \"by_days\". retime takes time. rename takes title.",
+        "",
+        "MOVE, DELETE, RETIME and RENAME choose their entries in ONE of two ways, "
+        "and you do not need to list anything to use them:",
+        '  (a) "match": a filter the server runs over ALL their entries. Set any '
+        'of course, kind, title_contains, from, to. This is how you do "all the '
+        'exams of ELEC2501" or "every Module quiz" -- you do NOT need ids, and '
+        'you must NOT refuse for want of ids. At least one field must be set.',
+        '  (b) "ids": only when they mean specific entries you can see in the '
+        "sample below. Never invent an id.",
+        "",
+        'MOVE takes "to" (one entry onto a date) or "by_days" (shift them all).',
+        "RETIME takes time.",
+        'RENAME takes "replace": {"from": ..., "to": ...} -- a substitution inside '
+        'each title, so "Elec Lab 4" becomes "Elec Test 4" and the numbering '
+        'survives. Use "title_new" ONLY when exactly one entry is meant; giving '
+        "many entries one name would make them identical.",
+        "",
         'kind is "exam" for tests, midterms, finals and quizzes, "due" for work to '
         'hand in, otherwise "event".',
         "course must be one of the student's own codes or \"\". Theirs are: "
         + (", ".join(codes) or "none imported yet") + ".",
-        "Never invent a course code or an id that is not listed.",
-        "time is 24-hour HH:MM, or \"\" if they gave none. Never guess a time.",
+        "Never invent a course code or an id.",
+        'time is 24-hour HH:MM, or "" if they gave none. Never guess a time.',
         "If the request is not something a calendar can do -- changing colours, "
-        "settings, grades, anything that is not an entry and a date -- put why in "
-        '"unsupported", leave operations empty, and do NOT invent an entry for it.',
+        "settings or grades, anything that is not an entry and a date -- put why "
+        'in "unsupported", leave operations empty, and do NOT invent an entry. '
+        "Needing to act on many entries at once is NOT a reason to call something "
+        "unsupported; use a match filter.",
         "understood is one short sentence to the student saying what you are "
         "about to do, including anything you were unsure about.",
         "",
-        "THEIR CALENDAR (id|date|time|course|kind|title):",
-        listing or "(nothing in this window)",
+        "WHAT THEY HAVE (course | kind | count | dates | example titles):",
+        summary or "(nothing imported yet)",
+        "",
+        "SOME ENTRIES WITH IDS (id|date|time|course|kind|title):",
+        sample or "(nothing in this window)",
     ]
     prompt = ("Return strict JSON matching this schema:\n" + json.dumps(schema, indent=2)
               + "\n\n" + "\n".join(rules) + "\n\nREQUEST: " + text)
