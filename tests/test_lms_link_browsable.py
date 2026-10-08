@@ -62,3 +62,53 @@ def test_a_rewritten_link_still_passes_the_gate_it_came_through():
     # the rewrite happens inside _lms_link, so its output must itself be a URL
     # the gate would accept -- otherwise the fix would smuggle something past it
     assert nexora._lms_link(nexora._lms_link(API)) == VIEW
+
+
+# ---------------------------------------------------------------------------
+# The course workspace rendered row.source_url straight into an href, so it
+# never reached _lms_link at all: the D2L rewrite could not run there, and a
+# scraped javascript: URL would have become an anchor on our own page. Every
+# link now goes through content_href.
+# ---------------------------------------------------------------------------
+import re
+import pathlib
+
+
+def test_content_href_applies_the_rewrite_the_workspace_was_missing():
+    assert nexora.content_href(API) == VIEW
+
+
+def test_content_href_still_refuses_what_the_gate_refuses():
+    assert nexora.content_href("javascript:alert(1)") == ""
+    assert nexora.content_href("https://brightspace.carleton.ca@evil.tld/") == ""
+    assert nexora.content_href("") == ""
+    assert nexora.content_href(None) == ""
+
+
+def test_a_file_the_student_uploaded_is_served_by_us_and_allowed_through():
+    # stored relative by url_for('static', ...), which _lms_link rejects for
+    # having no host -- correctly, so it is allowed here explicitly instead of
+    # by loosening the gate
+    own = "/static/nexora_uploads/7/BIOL1103/outline.pdf"
+    assert nexora.content_href(own) == own
+
+
+def test_an_unrelated_relative_path_is_still_refused():
+    assert nexora.content_href("/etc/passwd") == ""
+    assert nexora.content_href("/static/../secret") == ""
+
+
+def test_the_filter_is_registered_so_the_templates_can_use_it():
+    assert nexora.app.jinja_env.filters.get("content_href") is nexora.content_href
+
+
+def test_no_template_puts_a_scraped_url_into_an_href_ungated():
+    """The regression itself: an href built from a raw source_url or link."""
+    bad = []
+    for path in pathlib.Path("templates").glob("*.html"):
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for m in re.finditer(r'href="\{\{\s*([^}]+?)\s*\}\}"', line):
+                expr = m.group(1)
+                if re.search(r"source_url|source_link|\.link\b", expr) and "content_href" not in expr:
+                    bad.append("%s:%d  %s" % (path.name, n, expr))
+    assert not bad, "ungated LMS URL in an href:\n" + "\n".join(bad)

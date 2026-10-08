@@ -1154,6 +1154,30 @@ def _browsable_d2l(text):
     return "%s/d2l/le/content/%s/viewContent/%s/View" % (m.group(1), m.group(2), m.group(3))
 
 
+def content_href(url):
+    """The href for a CourseContent row: the LMS gate, plus our own uploads.
+
+    The course workspace rendered `row.source_url` straight into an `href` --
+    every lecture, resource, assignment and quiz on the page -- so the gate that
+    exists to stop a scraped `javascript:` URL becoming cross-site scripting on
+    our own page was never on that path at all. It is also why the D2L API links
+    kept answering `{ Errors: [ {Message: "Forbidden"} ] }` after the rewrite
+    shipped: the rewrite lives in `_lms_link`, and this page never called it.
+
+    A file the student uploaded is stored as a relative `/static/nexora_uploads/`
+    path, which `_lms_link` refuses for having no host -- correctly, since it
+    cannot tell a relative LMS link from a broken one. Those are ours, served by
+    us, so they are allowed through explicitly rather than by loosening the gate.
+    """
+    text = str(url or "").strip()
+    if text.startswith("/static/nexora_uploads/"):
+        return text
+    return _lms_link(text)
+
+
+app.jinja_env.filters["content_href"] = content_href
+
+
 def task_to_dict(t):
     return {
         "id": t.id,
@@ -4757,6 +4781,255 @@ def restore_event(event_id):
         row.sync_state = "active"
     db.session.commit()
     return jsonify({"ok": True, "event": _event_json(task)})
+
+
+# ============================
+# "Biweekly tests, skipping reading week" -> the dates it means
+# ============================
+# Same split as /api/study-plan/ask: the model reads the REQUEST, the server
+# does the arithmetic. A model emitting the dates directly would be a different
+# calendar every time you asked, would cost quota to redraw, and could not be
+# checked -- and these are dates, which is the one thing this app must never be
+# creative about. So a sentence becomes a recurrence, and this expands it.
+#
+# Nothing here writes. The route previews, the student confirms, and only then
+# are events created: a misread "biweekly" as "daily" is the difference between
+# six entries and ninety, and that has to be visible BEFORE it happens.
+
+RECURRENCE_CAP = 60              # loud, reported as `truncated` -- never silent
+RECURRENCE_HORIZON_DAYS = 550    # ~18 months; a degree is not a recurrence
+_RECURRENCE_STEPS = {"weekly": 7, "biweekly": 14, "fortnightly": 14}
+
+
+def _add_months(day, n):
+    """Same day-of-month n months on, clamped to the end of a short month."""
+    month = day.month - 1 + n
+    year = day.year + month // 12
+    month = month % 12 + 1
+    last = [31, 29 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 28,
+            31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+    return date(year, month, min(day.day, last))
+
+
+def _recurrence_excluded(day, skip_dates, skip_ranges):
+    if day.isoformat() in skip_dates:
+        return True
+    return any(a <= day <= b for a, b in skip_ranges)
+
+
+def _expand_recurrence(spec, today=None):
+    """The exact dates a recurrence means. Pure arithmetic, no model, no writes.
+
+    Returns (dates, notes). `notes` is every reason the answer is not simply
+    "what you asked for" -- a cap hit, a horizon reached, holidays dropped --
+    because a limit a student cannot see is indistinguishable from a bug.
+
+    An excluded date does NOT consume `count`: "six tests, skipping reading
+    week" means six tests. The preview shows the real dates, so if that reading
+    is wrong it is wrong visibly.
+    """
+    today = today or date.today()
+    notes = []
+
+    start = parse_iso_date(str(spec.get("start") or "").strip())
+    if not start:
+        return [], ["No start date could be read, so nothing was worked out."]
+
+    repeat = str(spec.get("repeat") or "once").strip().lower()
+    until = parse_iso_date(str(spec.get("until") or "").strip())
+
+    try:
+        count = int(spec.get("count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if count <= 0 and not until and repeat != "once":
+        count = 12
+        notes.append("You did not say how many or until when, so this stops after 12.")
+    if count > RECURRENCE_CAP:
+        notes.append(f"You asked for {count}; capped at {RECURRENCE_CAP} entries.")
+        count = RECURRENCE_CAP
+    count = max(count, 0)
+
+    skip_dates = {str(d).strip() for d in (spec.get("skip_dates") or []) if str(d).strip()}
+    skip_ranges = []
+    for pair in (spec.get("skip_ranges") or []):
+        try:
+            a, b = parse_iso_date(str(pair[0])), parse_iso_date(str(pair[1]))
+        except (TypeError, IndexError, KeyError):
+            continue
+        if a and b:
+            skip_ranges.append((a, b) if a <= b else (b, a))
+
+    horizon = today + timedelta(days=RECURRENCE_HORIZON_DAYS)
+    step = _RECURRENCE_STEPS.get(repeat)
+    kept, dropped, guard, nth = [], 0, 0, 0
+    cur = start
+
+    while guard < 400:
+        guard += 1
+        if cur > horizon:
+            notes.append("Stopped about 18 months out; add the rest nearer the time.")
+            break
+        if until and cur > until:
+            break
+        if _recurrence_excluded(cur, skip_dates, skip_ranges):
+            dropped += 1
+        else:
+            kept.append(cur)
+            if count and len(kept) >= count:
+                break
+            if len(kept) >= RECURRENCE_CAP:
+                notes.append(f"Capped at {RECURRENCE_CAP} entries.")
+                break
+        if repeat == "once":
+            break
+        # Always step from the ORIGINAL date, never from the last one produced.
+        # Stepping from the result makes clamping cumulative: monthly from the
+        # 31st gave Jan 31, Feb 28, then Mar 28 -- the 31st silently became the
+        # 28th for the rest of the year. It also stops any drift accumulating.
+        nth += 1
+        cur = (_add_months(start, nth) if repeat == "monthly"
+               else start + timedelta(days=(step or 7) * nth))
+
+    if dropped:
+        notes.append(f"{dropped} date{'' if dropped == 1 else 's'} skipped for the dates you excluded.")
+    return kept, notes
+
+
+def _recurrence_events(spec, dates):
+    """One event payload per date, in the shape /api/events already validates."""
+    title = str(spec.get("title") or "").strip()[:500]
+    course = _normalize_course_code(str(spec.get("course") or "")) or "OTHER"
+    kind = str(spec.get("kind") or "event").strip().lower()
+    if kind in {"test", "midterm", "final", "quiz"}:
+        kind = "exam"          # EVENT_KINDS is due|exam|event; a test is an exam
+    if kind not in EVENT_KINDS:
+        kind = "event"
+    time_raw = str(spec.get("time") or "").strip()
+    if time_raw and not _TIME_RE.match(time_raw):
+        time_raw = ""
+    out = []
+    for i, day in enumerate(dates, start=1):
+        label = title or "Event"
+        if len(dates) > 1:
+            label = f"{label} {i}"
+        out.append({"title": label, "date": day.isoformat(), "time": time_raw,
+                    "course": course, "kind": kind,
+                    "location": str(spec.get("location") or "").strip()[:200]})
+    return out
+
+
+@app.route("/api/calendar/ai-events", methods=["POST"])
+@limiter.limit(AI_LIMIT)
+@login_required
+@requires_active
+def calendar_ai_events():
+    """Describe repeating work in your own words; confirm the dates it found.
+
+    Two calls on purpose. The first reads the sentence and returns a PREVIEW --
+    what it understood, and every date it would create -- and writes nothing.
+    The second takes that same spec back and creates them. Filling someone's
+    calendar is not an action to take on a model's first guess: "biweekly" read
+    as "daily" is six entries or ninety, and deleting ninety by hand is worse
+    than never having asked.
+
+    The model only ever produces the RECURRENCE. `_expand_recurrence` produces
+    the dates, so the preview and what gets created are the same arithmetic.
+    """
+    data = request.get_json(silent=True) or {}
+    today = _today_for_request()
+
+    if data.get("confirm"):
+        spec = data.get("spec") or {}
+        if not isinstance(spec, dict):
+            return jsonify({"error": "Nothing to create."}), 400
+        dates, notes = _expand_recurrence(spec, today)
+        if not dates:
+            return jsonify({"error": "No dates to add. " + (" ".join(notes) or "")}), 400
+        created = []
+        for payload in _recurrence_events(spec, dates):
+            fields, error = _event_fields(payload)
+            if error:                      # one bad date must not lose the rest
+                continue
+            fields.setdefault("course_full", "OTHER")
+            fields.setdefault("course_prefix", "OTHER")
+            base = fields["title"]
+            task = Task(id=uuid4().hex, user_id=current_user.id,
+                        group_id=make_group_id(fields["course_full"], base),
+                        base_title=base, is_deadline=True, source="manual",
+                        sync_state="active",
+                        created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        **fields)
+            db.session.add(task)
+            created.append(task)
+        db.session.commit()
+        return jsonify({"ok": True, "created": len(created),
+                        "events": [_event_json(t) for t in created], "notes": notes})
+
+    text = str(data.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Say what you want adding to the calendar."}), 400
+    if len(text) > 2000:
+        return jsonify({"error": "That is too long. Describe one set of dates at a time."}), 400
+
+    codes = sorted(_known_course_codes(current_user.id))
+    schema = {"title": "", "course": "", "kind": "exam", "time": "", "location": "",
+              "start": "", "repeat": "biweekly", "until": "", "count": 0,
+              "skip_dates": [], "skip_ranges": [], "understood": ""}
+    rules = [
+        "Turn the student's sentence into ONE recurring calendar entry.",
+        f"Today is {today.isoformat()}. Every date is ISO yyyy-mm-dd.",
+        'repeat is one of "once", "weekly", "biweekly", "monthly".',
+        'kind is "exam" for tests, midterms, finals and quizzes, "due" for work '
+        'to hand in, otherwise "event".',
+        "course must be one of the student's own codes, or \"\" if they named none. "
+        "Their courses are: " + (", ".join(codes) or "none imported yet") + ".",
+        "Never invent a course code that is not in that list.",
+        "start is the FIRST date it happens. count is how many, or 0 if they "
+        "said an end date instead; until is that end date, or \"\".",
+        "skip_ranges is [[from,to], ...] for holidays or reading weeks they "
+        "excluded; skip_dates is single days. Both [] if none.",
+        "time is 24-hour HH:MM, or \"\" if they gave none. Never guess a time.",
+        "understood is one short sentence, addressed to the student, saying what "
+        "you read -- including anything you were unsure about.",
+    ]
+    prompt = ("Return strict JSON matching this schema:\n" + json.dumps(schema, indent=2)
+              + "\n\n" + "\n".join(rules) + "\n\nREQUEST: " + text)
+    try:
+        spec = _gemini_json("You convert calendar requests into a JSON recurrence. "
+                            "Output only JSON.", prompt, max_tokens=900, mode="quick")
+    except Exception as exc:
+        app.logger.warning("Calendar AI failed: %s", exc)
+        message = ("Nexora's AI is at its limit right now. Add the dates with "
+                   "+ Add event in the meantime."
+                   if _looks_like_quota_error(exc) else
+                   "Nexora could not read that. Try naming the course, the first "
+                   "date, how often, and how many.")
+        return jsonify({"error": message}), 503
+    if isinstance(spec, list) and spec:
+        spec = spec[0]            # flash-lite sometimes wraps the object in a list
+    if not isinstance(spec, dict):
+        return jsonify({"error": "Nexora could not read that."}), 503
+
+    # A hallucinated code would file every one of these under a course the
+    # student does not have, which is silent and tedious to undo.
+    # "OTHER" is this app's sentinel for "no course", and _normalize_course_code
+    # returns it for an empty string -- so without this the guard reported the
+    # model's correct refusal to guess as "Ignored the course OTHER".
+    course = _normalize_course_code(str(spec.get("course") or ""))
+    if course and course != "OTHER" and course.upper() not in codes:
+        spec["course"] = ""
+        spec["understood"] = (str(spec.get("understood") or "").strip()
+                              + f" (Ignored the course {course}; it is not one of yours.)").strip()
+
+    dates, notes = _expand_recurrence(spec, today)
+    if not dates:
+        return jsonify({"error": "Nexora could not work out any dates from that. "
+                                 + (" ".join(notes) or ""),
+                        "understood": str(spec.get("understood") or "")}), 422
+    return jsonify({"ok": True, "preview": True, "spec": spec,
+                    "understood": str(spec.get("understood") or ""),
+                    "notes": notes, "events": _recurrence_events(spec, dates)})
 
 
 # ============================

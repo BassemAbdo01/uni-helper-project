@@ -26,6 +26,21 @@
 .monthnav .add{background:var(--amber);border-color:var(--amber);color:#140F09;font-weight:600;
   width:auto;padding:0 14px;font-size:13px}
 .monthnav .add:hover{filter:brightness(1.06);color:#140F09}
+.monthnav .ai{width:auto;padding:0 12px;font-size:12.5px;color:var(--amber);
+  border-color:rgba(232,169,74,.3)}
+.monthnav .ai:hover{border-color:var(--amber);color:var(--amber)}
+.sheet .hint{margin:0;font-size:12.5px;color:var(--fg-3);line-height:1.45}
+/* What it understood, shown before anything is created. A misread recurrence is
+   the one failure here that would look completely authoritative. */
+.sheet .understood{margin:0;font-size:12.5px;color:var(--fg);background:var(--amber-soft);
+  border:1px solid rgba(232,169,74,.28);border-radius:6px;padding:9px 11px;line-height:1.45}
+.sheet .preview{list-style:none;margin:0;padding:0;max-height:208px;overflow:auto;
+  border:1px solid var(--line);border-radius:6px}
+.sheet .preview li{display:flex;justify-content:space-between;gap:10px;padding:7px 11px;
+  border-bottom:1px solid var(--line);font-size:13px}
+.sheet .preview li:last-child{border-bottom:0}
+.sheet .preview time{font-family:var(--mono);font-size:11.5px;color:var(--fg-3);white-space:nowrap}
+.sheet .notes{margin:9px 0 0;font-size:12px;color:var(--fg-3);line-height:1.45}
 .monthnav .sync{width:auto;padding:0 12px;font-size:12.5px;gap:7px;grid-auto-flow:column}
 .monthnav .sync svg{width:14px;height:14px}
 @media (max-width:760px){ .monthnav .sync span{display:none} }
@@ -195,6 +210,8 @@ dialog.sheet::backdrop{background:#0B0908cc}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
       <span>Sync to Google Calendar</span>
     </button>
+    <button type="button" class="ai" id="aiEvents"
+            title="Describe repeating dates in your own words">&#10022; Repeating</button>
     <button type="button" class="add" id="addEvent">+ Add event</button>
   </div>
 </div>
@@ -313,6 +330,41 @@ dialog.sheet::backdrop{background:#0B0908cc}
       <span class="spacer"></span>
       <button type="button" id="evCancel">Cancel</button>
       <button type="submit" class="primary" id="evSave">Save</button>
+    </div>
+  </form>
+</dialog>
+
+{# Describe repeating work once instead of adding it twelve times by hand.
+   Two steps on purpose: the first reads the sentence and shows the dates, the
+   second creates them. Filling a calendar from a model's first guess is not
+   something to do without being asked -- "biweekly" read as "daily" is six
+   entries or ninety, and undoing ninety by hand is worse than never asking. #}
+<dialog class="sheet" id="aiSheet" aria-labelledby="aiTitle">
+  <form method="dialog" id="aiForm">
+    <h2 id="aiTitle">Add repeating dates</h2>
+    <p class="hint">Describe them the way you would to a friend. Nothing is added
+       to your calendar until you have seen the dates and confirmed them.</p>
+
+    <div>
+      <label for="aiText">What repeats</label>
+      <textarea id="aiText" maxlength="2000" placeholder="Biweekly SYSC2004 tests starting Oct 10, six of them, skipping Dec 20 to Jan 4"></textarea>
+    </div>
+
+    <p class="understood" id="aiUnderstood" hidden></p>
+
+    <div id="aiPreview" hidden>
+      <label id="aiCountLabel">Dates it found</label>
+      <ul class="preview" id="aiList"></ul>
+      <p class="notes" id="aiNotes" hidden></p>
+    </div>
+
+    <p class="err" id="aiError" role="alert"></p>
+
+    <div class="row">
+      <span class="spacer"></span>
+      <button type="button" id="aiCancel">Cancel</button>
+      <button type="button" class="primary" id="aiRead">Read it</button>
+      <button type="button" class="primary" id="aiCreate" hidden>Add them</button>
     </div>
   </form>
 </dialog>
@@ -484,6 +536,97 @@ dialog.sheet::backdrop{background:#0B0908cc}
   }
 
   $('addEvent').onclick = () => open(null, '{{ today_iso }}');
+
+  /* ---- repeating dates, described in a sentence ----
+     The model reads the request; the server works out the dates and creates
+     them. This never builds a date itself, and never renders a title through
+     innerHTML -- every value here came back from a model, so the preview rows
+     are built as nodes with textContent. */
+  const aiSheet = $('aiSheet');
+  let aiSpec = null;
+
+  const aiReset = () => {
+    aiSpec = null;
+    $('aiUnderstood').hidden = true;
+    $('aiPreview').hidden = true;
+    $('aiCreate').hidden = true;
+    $('aiRead').hidden = false;
+    $('aiRead').textContent = 'Read it';
+    $('aiError').textContent = '';
+    $('aiList').replaceChildren();
+    $('aiNotes').hidden = true;
+  };
+
+  $('aiEvents').onclick = () => { $('aiText').value = ''; aiReset(); aiSheet.showModal(); };
+  $('aiCancel').onclick = () => aiSheet.close();
+  // Editing the sentence invalidates the preview: the dates on screen must
+  // always be the dates that would be created.
+  $('aiText').addEventListener('input', () => { if (aiSpec) aiReset(); });
+
+  const aiPost = async body => {
+    const res = await fetch('/api/calendar/ai-events', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    let data = {};
+    try { data = await res.json(); } catch (_) {}
+    return { ok: res.ok, data };
+  };
+
+  $('aiRead').onclick = async () => {
+    const text = $('aiText').value.trim();
+    if (!text) { $('aiError').textContent = 'Describe the dates first.'; return; }
+    $('aiError').textContent = '';
+    $('aiRead').disabled = true;
+    $('aiRead').textContent = 'Reading…';
+    const { ok, data } = await aiPost({ text });
+    $('aiRead').disabled = false;
+    $('aiRead').textContent = 'Read it';
+    if (data.understood) {
+      $('aiUnderstood').textContent = data.understood;
+      $('aiUnderstood').hidden = false;
+    }
+    if (!ok) { $('aiError').textContent = data.error || 'That could not be read.'; return; }
+
+    aiSpec = data.spec;
+    const list = $('aiList');
+    list.replaceChildren();
+    (data.events || []).forEach(ev => {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.textContent = ev.title + (ev.time ? ' · ' + ev.time : '');
+      const when = document.createElement('time');
+      when.dateTime = ev.date;
+      when.textContent = ev.date;
+      li.append(name, when);
+      list.append(li);
+    });
+    const n = (data.events || []).length;
+    $('aiCountLabel').textContent = n + (n === 1 ? ' date it found' : ' dates it found');
+    if (data.notes && data.notes.length) {
+      $('aiNotes').textContent = data.notes.join(' ');
+      $('aiNotes').hidden = false;
+    }
+    $('aiPreview').hidden = false;
+    $('aiRead').hidden = true;
+    $('aiCreate').hidden = false;
+    $('aiCreate').textContent = n === 1 ? 'Add it' : 'Add all ' + n;
+  };
+
+  $('aiCreate').onclick = async () => {
+    if (!aiSpec) return;
+    $('aiCreate').disabled = true;
+    $('aiCreate').textContent = 'Adding…';
+    const { ok, data } = await aiPost({ spec: aiSpec, confirm: true });
+    $('aiCreate').disabled = false;
+    if (!ok) {
+      $('aiError').textContent = data.error || 'Those could not be added.';
+      $('aiCreate').textContent = 'Add them';
+      return;
+    }
+    aiSheet.close();
+    location.reload();          // the month is rendered by the server
+  };
   $('evCancel').onclick = () => sheet.close();
 
   // One listener for the whole grid: the cells are re-rendered by a page load,

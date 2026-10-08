@@ -28,6 +28,30 @@
 .task .t strong{display:block;font-size:14.5px;font-weight:500}
 .task .t small{display:block;color:var(--fg-3);font-size:12px;margin-top:2px}
 .task .m{font-family:var(--mono);font-size:11px;color:var(--fg-3);white-space:nowrap}
+
+/* Everything in the queue read the same. "Due today" and "Due in 11 days" were
+   both 11px grey mono at the far right, so the lab that has to be submitted
+   TONIGHT carried no more weight than something a fortnight out -- you only saw
+   it if you went looking, which is the opposite of what the queue is for.
+   `status_for` already buckets this server-side, so the row carries the bucket
+   and the styling follows from data rather than from matching label text. */
+.task[data-status="overdue"],.task[data-status="today"]{
+  padding-left:13px;border-left:2px solid transparent;border-radius:3px}
+.task[data-status="today"]{border-left-color:var(--amber);
+  background:linear-gradient(90deg,var(--amber-soft),transparent 58%)}
+.task[data-status="overdue"]{border-left-color:var(--red);
+  background:linear-gradient(90deg,var(--red-soft),transparent 58%)}
+.task[data-status="today"] .t strong,.task[data-status="overdue"] .t strong{font-weight:650}
+/* The label stops being a note and becomes a badge. */
+.task[data-status="today"] .m,.task[data-status="overdue"] .m{
+  padding:4px 10px;border-radius:999px;font-size:9.5px;font-weight:700;
+  letter-spacing:.11em;text-transform:uppercase}
+.task[data-status="today"] .m{background:var(--amber);color:#140F09}
+.task[data-status="overdue"] .m{background:var(--red);color:#fff}
+/* One to three days is pressing, not urgent: colour, no badge. */
+.task[data-status="panic"] .m{color:var(--amber)}
+/* A ticked row must go quiet again whatever it was. */
+.task[aria-pressed="true"][data-status]{background:none;border-left-color:transparent}
 .task[aria-pressed="true"]{opacity:.45}
 .task[aria-pressed="true"] .box{background:var(--amber);border-color:var(--amber);color:#140F09}
 .task[aria-pressed="true"] .t strong{text-decoration:line-through}
@@ -240,12 +264,12 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
             {# Two things a student does with a task: tick it off, or go and
                do it. The box ticks; the title opens the work in the LMS when
                the LMS gave a link (never one Nexora made up -- _lms_link). #}
-            <div class="task" data-group="{{ t.group_id }}" aria-pressed="false"{% if loop.index > 5 %} hidden{% endif %}>
+            <div class="task" data-group="{{ t.group_id }}" data-status="{{ t.status }}" aria-pressed="false"{% if loop.index > 5 %} hidden{% endif %}>
               <button type="button" class="box" aria-pressed="false" aria-label="Mark done: {{ t.title }}">&check;</button>
               <span class="t">
                 <strong>
-                  {%- if t.source_link -%}
-                    <a href="{{ t.source_link }}" target="_blank" rel="noopener noreferrer"
+                  {%- set href = t.source_link|content_href -%}{%- if href -%}
+                    <a href="{{ href }}" target="_blank" rel="noopener noreferrer"
                        title="Open this in your LMS (new tab)">{{ t.title }}<span class="go" aria-hidden="true">&#8599;</span></a>
                   {%- else -%}
                     {{ t.title }}
@@ -345,8 +369,8 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
             <div class="due">
               <span class="n">{{ '%02d'|format(loop.index) }}</span>
               <span class="t"><strong>
-                {%- if d.link -%}
-                  <a href="{{ d.link }}" target="_blank" rel="noopener noreferrer"
+                {%- set href = d.link|content_href -%}{%- if href -%}
+                  <a href="{{ href }}" target="_blank" rel="noopener noreferrer"
                      title="Open this in your LMS (new tab)">{{ d.title|truncate(34) }}<span class="go" aria-hidden="true">&#8599;</span></a>
                 {%- else -%}
                   {{ d.title|truncate(34) }}
@@ -368,8 +392,8 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
           {% for u in academic_updates %}
             {# Dated by Brightspace, not by the sync; linked only to a link
                Brightspace gave (see _lms_link). #}
-            {% if u.link %}
-              <a class="upd" href="{{ u.link }}" target="_blank" rel="noopener noreferrer" title="Open in Brightspace (new tab)">
+            {% set href = u.link|content_href %}{% if href %}
+              <a class="upd" href="{{ href }}" target="_blank" rel="noopener noreferrer" title="Open in Brightspace (new tab)">
                 <strong>{{ u.title|truncate(46) }}<span class="go" aria-hidden="true">&#8599;</span></strong>
                 <small>{{ u.kind|capitalize }} &middot; {{ u.course_full }} &middot; {{ u.pretty }}</small>
               </a>
