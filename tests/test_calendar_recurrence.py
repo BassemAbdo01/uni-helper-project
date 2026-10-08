@@ -30,15 +30,67 @@ def test_weekly_runs_to_an_end_date_and_stops():
     assert iso(days) == ["2026-10-08", "2026-10-15", "2026-10-22", "2026-10-29"]
 
 
-def test_an_excluded_week_is_skipped_and_does_not_cost_an_occurrence():
-    """"Six tests, skipping reading week" means six tests, not five."""
+def test_a_cancelled_date_is_dropped_and_does_not_cost_an_occurrence():
+    """"Six tests, that one is cancelled" means six tests, not five."""
     days, notes = nexora._expand_recurrence(
-        {"start": "2026-10-10", "repeat": "biweekly", "count": 4,
+        {"start": "2026-10-10", "repeat": "biweekly", "count": 4, "on_excluded": "drop",
          "skip_ranges": [["2026-11-01", "2026-11-14"]]}, TODAY)
     assert "2026-11-07" not in iso(days)      # the one inside reading week
     assert len(days) == 4                     # still four
     assert iso(days) == ["2026-10-10", "2026-10-24", "2026-11-21", "2026-12-05"]
-    assert any("skipped" in n for n in notes)
+    assert any("dropped" in n for n in notes)
+
+
+# --------------------------------------------------------------------------
+# A holiday week POSTPONES a schedule; it does not delete a test. This was
+# reported from the real thing: biweekly from Oct 13 with no university from
+# Oct 23-28 produced Oct 13 then Nov 10 -- a 28-day hole, carrying on as though
+# nothing had moved, when what was meant was "we continue after the break".
+# --------------------------------------------------------------------------
+
+def test_a_holiday_week_moves_the_test_instead_of_deleting_it():
+    days, notes = nexora._expand_recurrence(
+        {"start": "2026-10-13", "repeat": "biweekly", "count": 5,
+         "skip_ranges": [["2026-10-23", "2026-10-28"]]}, TODAY)
+    # Oct 27 is in the break, so it moves to the next Tuesday and the rest
+    # follow from there -- not back onto the original grid.
+    assert iso(days) == ["2026-10-13", "2026-11-03", "2026-11-17", "2026-12-01", "2026-12-15"]
+    assert any("moved" in n for n in notes)
+
+
+def test_shifting_keeps_the_weekday():
+    """A Tuesday test must not become a Thursday one: the weekday is half of a
+    class schedule and nobody restates it."""
+    days, _ = nexora._expand_recurrence(
+        {"start": "2026-10-13", "repeat": "biweekly", "count": 4,
+         "skip_ranges": [["2026-10-23", "2026-10-28"]]}, TODAY)
+    assert {d.weekday() for d in days} == {1}      # all Tuesdays
+
+
+def test_shift_is_the_default_because_a_week_off_postpones_work():
+    with_default, _ = nexora._expand_recurrence(
+        {"start": "2026-10-13", "repeat": "biweekly", "count": 3,
+         "skip_ranges": [["2026-10-23", "2026-10-28"]]}, TODAY)
+    explicit, _ = nexora._expand_recurrence(
+        {"start": "2026-10-13", "repeat": "biweekly", "count": 3, "on_excluded": "shift",
+         "skip_ranges": [["2026-10-23", "2026-10-28"]]}, TODAY)
+    assert with_default == explicit
+
+
+def test_a_long_closure_pushes_past_the_whole_of_it():
+    days, _ = nexora._expand_recurrence(
+        {"start": "2026-12-08", "repeat": "biweekly", "count": 3,
+         "skip_ranges": [["2026-12-18", "2027-01-10"]]}, TODAY)
+    # Dec 22 is inside the winter closure; it lands on the first Tuesday after
+    assert iso(days) == ["2026-12-08", "2027-01-12", "2027-01-26"]
+
+
+def test_the_note_names_the_date_that_moved_and_where_it_went():
+    _, notes = nexora._expand_recurrence(
+        {"start": "2026-10-13", "repeat": "biweekly", "count": 3,
+         "skip_ranges": [["2026-10-23", "2026-10-28"]]}, TODAY)
+    joined = " ".join(notes)
+    assert "2026-10-27" in joined and "2026-11-03" in joined
 
 
 def test_a_single_excluded_day_is_dropped():

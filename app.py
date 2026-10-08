@@ -1626,6 +1626,36 @@ def _ics_floating_uids(ics_text):
     return floating
 
 
+def _ics_all_day_uids(ics_text):
+    """UIDs whose DTSTART is a bare calendar day (`DTSTART;VALUE=DATE:20261007`).
+
+    An all-day event is a DAY, not an instant, and must never be converted. The
+    `ics` library hands it back as midnight UTC, which after parsing is
+    indistinguishable from a real `...T000000Z` -- so, exactly like the floating
+    case, the raw text is the only place the difference survives.
+
+    This was the Oct 7 career fair showing as **Oct 6 at 20:00**: midnight UTC on
+    the 7th is 20:00 Eastern on the 6th, so one missing check produced both a day
+    that was wrong and a time that was never in the feed. `_ics_floating_uids`
+    already said a VALUE=DATE "is a calendar day already and needs no shifting",
+    but excluding it from `floating` sent it down the branch that shifts.
+    """
+    all_day = set()
+    uid = ""
+    for line in str(ics_text or "").splitlines():
+        stripped = line.strip()
+        upper = stripped.upper()
+        if upper.startswith("BEGIN:VEVENT"):
+            uid = ""
+        elif upper.startswith("UID:"):
+            uid = stripped[4:].strip()
+        elif upper.startswith("DTSTART"):
+            head, _, _value = stripped.partition(":")
+            if "VALUE=DATE" in head.upper():
+                all_day.add(uid if uid else f"__line__{stripped}")
+    return all_day
+
+
 def _event_source_stamp(event, floating=False):
     """The instant the feed gave, verbatim, for later re-derivation."""
     for attr in ("begin", "end"):
@@ -1645,7 +1675,7 @@ def _event_source_stamp(event, floating=False):
     return ""
 
 
-def get_event_date_iso(event, zone=None, floating=False):
+def get_event_date_iso(event, zone=None, floating=False, all_day=False):
     """The calendar day this event falls on, in the student's timezone.
 
     `event.begin.date()` is the UTC day, and a Brightspace deadline of 11:59 PM
@@ -1661,8 +1691,10 @@ def get_event_date_iso(event, zone=None, floating=False):
                 continue
             stamp = getattr(moment, "datetime", None) or moment
             if isinstance(stamp, datetime):
-                if floating:
-                    # Wall-clock: the day is what the feed wrote, unshifted.
+                if floating or all_day:
+                    # Wall-clock, or a bare calendar day: the day is what the
+                    # feed wrote, unshifted. Applying an offset an all-day event
+                    # never had is how Oct 7 became Oct 6.
                     return stamp.replace(tzinfo=None).date().isoformat()
                 if stamp.tzinfo is None:
                     stamp = stamp.replace(tzinfo=timezone.utc)
@@ -2013,6 +2045,7 @@ def import_calendar_string(ics_text, mark_missing=True):
 
     feed_zone = _user_zone(current_user)
     floating_uids = _ics_floating_uids(ics_text)
+    all_day_uids = _ics_all_day_uids(ics_text)
     for event in cal.events:
         title = (getattr(event, "name", "") or "").strip()
         if not title:
@@ -2025,11 +2058,18 @@ def import_calendar_string(ics_text, mark_missing=True):
             counts["ignored"] += 1
             continue
 
-        is_floating = bool(getattr(event, "uid", "") and event.uid in floating_uids)
-        due_raw = get_event_date_iso(event, feed_zone, floating=is_floating)
-        source_stamp = _event_source_stamp(event, floating=is_floating)
-        due_time_label = local_time_label(source_stamp, feed_zone,
-                                          naive_is_utc=not is_floating)
+        uid_text = getattr(event, "uid", "")
+        is_floating = bool(uid_text and uid_text in floating_uids)
+        is_all_day = bool(uid_text and uid_text in all_day_uids)
+        due_raw = get_event_date_iso(event, feed_zone, floating=is_floating,
+                                     all_day=is_all_day)
+        source_stamp = _event_source_stamp(event, floating=is_floating or is_all_day)
+        # An all-day event has no clock time. Deriving one from midnight gave
+        # "20:00" on a career fair the feed only ever stated a DAY for, which
+        # reads as a real start time and is not one.
+        due_time_label = ("" if is_all_day else
+                          local_time_label(source_stamp, feed_zone,
+                                           naive_is_utc=not is_floating))
         due_date = parse_iso_date(due_raw)
         if not due_raw or (due_date and due_date < cutoff):
             counts["ignored"] += 1
@@ -4860,10 +4900,30 @@ def _expand_recurrence(spec, today=None):
         if a and b:
             skip_ranges.append((a, b) if a <= b else (b, a))
 
+    # What an excluded date MEANS. "There is no class that week" almost always
+    # postpones the schedule -- the test happens the week term resumes and the
+    # rhythm carries on from there -- it does not delete a test. Dropping was the
+    # only behaviour at first, and on a real request (biweekly from Oct 13, no
+    # uni Oct 23-28) it silently produced a 28-day hole and carried on as though
+    # nothing had moved. "shift" is the default for that reason; "drop" is for
+    # work that is genuinely cancelled rather than moved.
+    mode = str(spec.get("on_excluded") or "shift").strip().lower()
+    if mode not in {"shift", "drop"}:
+        mode = "shift"
+
     horizon = today + timedelta(days=RECURRENCE_HORIZON_DAYS)
     step = _RECURRENCE_STEPS.get(repeat)
-    kept, dropped, guard, nth = [], 0, 0, 0
+    # Shift a WEEK at a time for a weekly or biweekly series: moving day by day
+    # would land a Tuesday test on a Thursday, and the weekday is the half of a
+    # class schedule nobody restates.
+    hop = 7 if repeat in _RECURRENCE_STEPS else 1
+    kept, dropped, moved_notes, guard, nth = [], 0, [], 0, 0
+    anchor = start                      # the cadence is measured from here
     cur = start
+
+    def _next(n):
+        return (_add_months(anchor, n) if repeat == "monthly"
+                else anchor + timedelta(days=(step or 7) * n))
 
     while guard < 400:
         guard += 1
@@ -4872,8 +4932,37 @@ def _expand_recurrence(spec, today=None):
             break
         if until and cur > until:
             break
+
         if _recurrence_excluded(cur, skip_dates, skip_ranges):
-            dropped += 1
+            placed = None
+            if mode == "shift":
+                probe = cur
+                for _ in range(12):
+                    probe = probe + timedelta(days=hop)
+                    if probe > horizon or (until and probe > until):
+                        break
+                    if not _recurrence_excluded(probe, skip_dates, skip_ranges):
+                        placed = probe
+                        break
+            if placed is None:
+                dropped += 1
+            else:
+                moved_notes.append((cur, placed))
+                kept.append(placed)
+                # Re-anchor: everything after a postponement follows from the new
+                # date, which is what "then we continue" means. Keeping the old
+                # grid would put the next one 7 days after the moved test.
+                anchor, nth = placed, 0
+                if count and len(kept) >= count:
+                    break
+                if len(kept) >= RECURRENCE_CAP:
+                    notes.append(f"Capped at {RECURRENCE_CAP} entries.")
+                    break
+                if repeat == "once":
+                    break
+                nth += 1
+                cur = _next(nth)
+                continue
         else:
             kept.append(cur)
             if count and len(kept) >= count:
@@ -4881,18 +4970,24 @@ def _expand_recurrence(spec, today=None):
             if len(kept) >= RECURRENCE_CAP:
                 notes.append(f"Capped at {RECURRENCE_CAP} entries.")
                 break
+
         if repeat == "once":
             break
-        # Always step from the ORIGINAL date, never from the last one produced.
+        # Always step from the ANCHOR, never from the last date produced.
         # Stepping from the result makes clamping cumulative: monthly from the
         # 31st gave Jan 31, Feb 28, then Mar 28 -- the 31st silently became the
         # 28th for the rest of the year. It also stops any drift accumulating.
         nth += 1
-        cur = (_add_months(start, nth) if repeat == "monthly"
-               else start + timedelta(days=(step or 7) * nth))
+        cur = _next(nth)
 
+    for was, now in moved_notes[:3]:
+        notes.append(f"{was.isoformat()} fell in the dates you excluded, so it moved "
+                     f"to {now.isoformat()} and the rest follow from there.")
+    if len(moved_notes) > 3:
+        notes.append(f"{len(moved_notes) - 3} more were moved the same way.")
     if dropped:
-        notes.append(f"{dropped} date{'' if dropped == 1 else 's'} skipped for the dates you excluded.")
+        notes.append(f"{dropped} date{'' if dropped == 1 else 's'} could not be placed "
+                     f"outside the dates you excluded, so {'it was' if dropped == 1 else 'they were'} dropped.")
     return kept, notes
 
 
@@ -4919,117 +5014,308 @@ def _recurrence_events(spec, dates):
     return out
 
 
+CALENDAR_CONTEXT_DAYS = 150      # how far ahead the assistant can see and act
+CALENDAR_CONTEXT_BACK = 30
+CALENDAR_CONTEXT_MAX = 180
+CALENDAR_CHANGE_CAP = 80         # loud, never silent
+
+
+def _calendar_context(user_id, today):
+    """The entries the assistant may act on, oldest first.
+
+    Bounded on purpose: the model is given real ids and told to pick from them,
+    which is the whole reason it can never act on a row the student does not
+    have. An unbounded list would also put a four-year import into every prompt.
+    """
+    lo = (today - timedelta(days=CALENDAR_CONTEXT_BACK)).isoformat()
+    hi = (today + timedelta(days=CALENDAR_CONTEXT_DAYS)).isoformat()
+    rows = (Task.query.filter_by(user_id=user_id)
+            .filter(Task.sync_state != "dismissed")
+            .filter(Task.due_raw >= lo, Task.due_raw <= hi)
+            .order_by(Task.due_raw.asc(), Task.id.asc())
+            .limit(CALENDAR_CONTEXT_MAX).all())
+    return rows
+
+
+def _calendar_plan(operations, user_id, today):
+    """Turn the model's operations into concrete, checked changes.
+
+    Nothing is written here. Every id is looked up against the student's own
+    rows, so an id the model invented or copied from somewhere else simply does
+    not resolve. Dates are expanded by `_expand_recurrence`, never by the model.
+
+    Returns (changes, notes).
+    """
+    changes, notes = [], []
+    if not isinstance(operations, list):
+        return [], ["Nexora could not read that as calendar changes."]
+
+    owned = {t.id: t for t in Task.query.filter_by(user_id=user_id).all()}
+
+    def rows_for(op):
+        out, missing = [], 0
+        for raw in (op.get("ids") or []):
+            row = owned.get(str(raw).strip())
+            if row is None:
+                missing += 1
+            else:
+                out.append(row)
+        if missing:
+            notes.append(f"{missing} entr{'y' if missing == 1 else 'ies'} named in that "
+                         "request no longer exist, so they were left out.")
+        return out
+
+    for op in operations[:40]:
+        if not isinstance(op, dict):
+            continue
+        kind = str(op.get("op") or "").strip().lower()
+
+        if kind == "add":
+            dates, sub = _expand_recurrence(op, today)
+            notes.extend(sub)
+            for payload in _recurrence_events(op, dates):
+                changes.append({"op": "add", **payload,
+                                "label": f"Add “{payload['title']}” on {payload['date']}"
+                                         + (f" at {payload['time']}" if payload["time"] else "")})
+
+        elif kind == "delete":
+            for row in rows_for(op):
+                changes.append({"op": "delete", "id": row.id, "title": row.title,
+                                "date": row.due_raw or "",
+                                "label": f"Delete “{row.title}” on {row.due_raw or 'no date'}"})
+
+        elif kind == "move":
+            to = parse_iso_date(str(op.get("to") or "").strip())
+            by = op.get("by_days")
+            for row in rows_for(op):
+                if to:
+                    target = to
+                elif by not in (None, "", 0):
+                    base = parse_iso_date(row.due_raw or "")
+                    if not base:
+                        continue
+                    try:
+                        target = base + timedelta(days=int(by))
+                    except (TypeError, ValueError):
+                        continue
+                else:
+                    continue
+                changes.append({"op": "move", "id": row.id, "title": row.title,
+                                "from": row.due_raw or "", "date": target.isoformat(),
+                                "label": f"Move “{row.title}” from "
+                                         f"{row.due_raw or 'no date'} to {target.isoformat()}"})
+
+        elif kind == "retime":
+            time_raw = str(op.get("time") or "").strip()
+            if time_raw and not _TIME_RE.match(time_raw):
+                notes.append(f"Ignored the time “{time_raw}”; it is not a 24-hour time.")
+                continue
+            for row in rows_for(op):
+                changes.append({"op": "retime", "id": row.id, "title": row.title,
+                                "time": time_raw,
+                                "label": (f"Set “{row.title}” to {time_raw}"
+                                          if time_raw else f"Clear the time on “{row.title}”")})
+
+        elif kind == "rename":
+            title = str(op.get("title") or "").strip()[:500]
+            if not title:
+                continue
+            for row in rows_for(op):
+                changes.append({"op": "rename", "id": row.id, "title": title,
+                                "from_title": row.title,
+                                "label": f"Rename “{row.title}” to “{title}”"})
+
+    if len(changes) > CALENDAR_CHANGE_CAP:
+        notes.append(f"That came to {len(changes)} changes; showing the first "
+                     f"{CALENDAR_CHANGE_CAP}. Ask for the rest separately.")
+        changes = changes[:CALENDAR_CHANGE_CAP]
+    return changes, notes
+
+
+def _calendar_apply(changes, user_id):
+    """Apply a plan the student has confirmed. Ownership is re-checked here --
+    the plan makes a round trip through the browser, so it is not trusted."""
+    owned = {t.id: t for t in Task.query.filter_by(user_id=user_id).all()}
+    done = {"added": 0, "deleted": 0, "moved": 0, "retimed": 0, "renamed": 0}
+
+    for change in (changes or [])[:CALENDAR_CHANGE_CAP]:
+        if not isinstance(change, dict):
+            continue
+        op = str(change.get("op") or "").strip().lower()
+
+        if op == "add":
+            fields, error = _event_fields(change)
+            if error:
+                continue
+            fields.setdefault("course_full", "OTHER")
+            fields.setdefault("course_prefix", "OTHER")
+            base = fields["title"]
+            db.session.add(Task(
+                id=uuid4().hex, user_id=user_id,
+                group_id=make_group_id(fields["course_full"], base), base_title=base,
+                is_deadline=True, source="manual", sync_state="active",
+                created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), **fields))
+            done["added"] += 1
+            continue
+
+        row = owned.get(str(change.get("id") or "").strip())
+        if row is None:
+            continue
+
+        if op == "delete":
+            # The whole entry, not one row of it, and an import is dismissed
+            # rather than deleted -- the same rules as /api/events DELETE, or a
+            # three-row assignment reappears on its next date and the next sync
+            # undoes the student's decision.
+            for sib in Task.query.filter_by(user_id=user_id, group_id=row.group_id).all():
+                if (sib.source or "manual") == "manual":
+                    db.session.delete(sib)
+                else:
+                    sib.sync_state = "dismissed"
+            done["deleted"] += 1
+        elif op == "move":
+            target = parse_iso_date(str(change.get("date") or "").strip())
+            if target:
+                row.due_raw = target.isoformat()
+                done["moved"] += 1
+        elif op == "retime":
+            time_raw = str(change.get("time") or "").strip()
+            if not time_raw or _TIME_RE.match(time_raw):
+                row.due_time = time_raw
+                done["retimed"] += 1
+        elif op == "rename":
+            title = str(change.get("title") or "").strip()[:500]
+            if title:
+                row.title = title
+                if (row.source or "manual") == "manual":
+                    row.base_title = title
+                row.group_id = make_group_id(row.course_full or "OTHER", row.base_title or title)
+                done["renamed"] += 1
+
+    db.session.commit()
+    return done
+
+
 @app.route("/api/calendar/ai-events", methods=["POST"])
 @limiter.limit(AI_LIMIT)
 @login_required
 @requires_active
 def calendar_ai_events():
-    """Describe repeating work in your own words; confirm the dates it found.
+    """Say what you want done to your calendar; check the changes; apply them.
 
-    Two calls on purpose. The first reads the sentence and returns a PREVIEW --
-    what it understood, and every date it would create -- and writes nothing.
-    The second takes that same spec back and creates them. Filling someone's
-    calendar is not an action to take on a model's first guess: "biweekly" read
-    as "daily" is six entries or ninety, and deleting ninety by hand is worse
-    than never having asked.
+    This is an assistant with access to the calendar, not a form with a chat box
+    on it. It adds, moves, deletes, retimes and renames, and when a request is
+    none of those it says so -- the first version answered "change the colour for
+    CCDP2100" by offering to create an event called "Change course color", which
+    is the worst kind of wrong: confident, plausible and useless.
 
-    The model only ever produces the RECURRENCE. `_expand_recurrence` produces
-    the dates, so the preview and what gets created are the same arithmetic.
+    Two calls, always. The first reads the request against the student's real
+    entries and returns a PREVIEW of every change. The second applies the plan
+    they confirmed. Deletes are in scope now, so acting on a model's first guess
+    is out of the question.
+
+    The split that makes it safe is the one the planner uses: the model chooses
+    WHAT to do and to WHICH entries, picking from ids it was given; the server
+    works out every date, and re-checks every id on the way back in.
     """
     data = request.get_json(silent=True) or {}
     today = _today_for_request()
 
     if data.get("confirm"):
-        spec = data.get("spec") or {}
-        if not isinstance(spec, dict):
-            return jsonify({"error": "Nothing to create."}), 400
-        dates, notes = _expand_recurrence(spec, today)
-        if not dates:
-            return jsonify({"error": "No dates to add. " + (" ".join(notes) or "")}), 400
-        created = []
-        for payload in _recurrence_events(spec, dates):
-            fields, error = _event_fields(payload)
-            if error:                      # one bad date must not lose the rest
-                continue
-            fields.setdefault("course_full", "OTHER")
-            fields.setdefault("course_prefix", "OTHER")
-            base = fields["title"]
-            task = Task(id=uuid4().hex, user_id=current_user.id,
-                        group_id=make_group_id(fields["course_full"], base),
-                        base_title=base, is_deadline=True, source="manual",
-                        sync_state="active",
-                        created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        **fields)
-            db.session.add(task)
-            created.append(task)
-        db.session.commit()
-        return jsonify({"ok": True, "created": len(created),
-                        "events": [_event_json(t) for t in created], "notes": notes})
+        changes = data.get("changes")
+        if not isinstance(changes, list) or not changes:
+            return jsonify({"error": "Nothing to apply."}), 400
+        done = _calendar_apply(changes, current_user.id)
+        if not any(done.values()):
+            return jsonify({"error": "None of those changes could be applied."}), 400
+        return jsonify({"ok": True, "done": done})
 
     text = str(data.get("text") or "").strip()
     if not text:
-        return jsonify({"error": "Say what you want adding to the calendar."}), 400
+        return jsonify({"error": "Say what you want doing to your calendar."}), 400
     if len(text) > 2000:
-        return jsonify({"error": "That is too long. Describe one set of dates at a time."}), 400
+        return jsonify({"error": "That is too long. Ask for one thing at a time."}), 400
 
+    rows = _calendar_context(current_user.id, today)
+    listing = "\n".join(
+        f'{t.id}|{t.due_raw or "?"}|{(t.due_time or "--")}|{t.course_full or "OTHER"}|'
+        f'{(t.kind or "event")}|{(t.title or "")[:70]}' for t in rows)
     codes = sorted(_known_course_codes(current_user.id))
-    schema = {"title": "", "course": "", "kind": "exam", "time": "", "location": "",
-              "start": "", "repeat": "biweekly", "until": "", "count": 0,
-              "skip_dates": [], "skip_ranges": [], "understood": ""}
+
+    schema = {
+        "understood": "", "unsupported": "",
+        "operations": [{"op": "add", "title": "", "course": "", "kind": "exam",
+                        "time": "", "location": "", "start": "", "repeat": "once",
+                        "count": 0, "until": "", "skip_dates": [], "skip_ranges": [],
+                        "on_excluded": "shift", "ids": [], "to": "", "by_days": 0}],
+    }
     rules = [
-        "Turn the student's sentence into ONE recurring calendar entry.",
         f"Today is {today.isoformat()}. Every date is ISO yyyy-mm-dd.",
-        'repeat is one of "once", "weekly", "biweekly", "monthly".',
-        'kind is "exam" for tests, midterms, finals and quizzes, "due" for work '
-        'to hand in, otherwise "event".',
-        "course must be one of the student's own codes, or \"\" if they named none. "
-        "Their courses are: " + (", ".join(codes) or "none imported yet") + ".",
-        "Never invent a course code that is not in that list.",
-        "start is the FIRST date it happens. count is how many, or 0 if they "
-        "said an end date instead; until is that end date, or \"\".",
-        "skip_ranges is [[from,to], ...] for holidays or reading weeks they "
-        "excluded; skip_dates is single days. Both [] if none.",
+        "Each operation has an \"op\" of: add, move, delete, retime, rename.",
+        "ADD: set title, course, kind, time, start. For something repeating also "
+        'set repeat ("weekly", "biweekly", "monthly"), and count or until. '
+        "skip_ranges [[from,to],...] and skip_dates are holidays they excluded. "
+        'on_excluded is "shift" when a date landing in a gap should move after it '
+        'and the rest carry on ("no class that week", "we continue after"), and '
+        '"drop" only when that one is cancelled outright. Default "shift".',
+        "MOVE, DELETE, RETIME, RENAME: put the ids of the entries they mean in "
+        "\"ids\". Use ONLY ids from the list below; never invent one. move takes "
+        "\"to\" (a date) or \"by_days\". retime takes time. rename takes title.",
+        'kind is "exam" for tests, midterms, finals and quizzes, "due" for work to '
+        'hand in, otherwise "event".',
+        "course must be one of the student's own codes or \"\". Theirs are: "
+        + (", ".join(codes) or "none imported yet") + ".",
+        "Never invent a course code or an id that is not listed.",
         "time is 24-hour HH:MM, or \"\" if they gave none. Never guess a time.",
-        "understood is one short sentence, addressed to the student, saying what "
-        "you read -- including anything you were unsure about.",
+        "If the request is not something a calendar can do -- changing colours, "
+        "settings, grades, anything that is not an entry and a date -- put why in "
+        '"unsupported", leave operations empty, and do NOT invent an entry for it.',
+        "understood is one short sentence to the student saying what you are "
+        "about to do, including anything you were unsure about.",
+        "",
+        "THEIR CALENDAR (id|date|time|course|kind|title):",
+        listing or "(nothing in this window)",
     ]
     prompt = ("Return strict JSON matching this schema:\n" + json.dumps(schema, indent=2)
               + "\n\n" + "\n".join(rules) + "\n\nREQUEST: " + text)
     try:
-        spec = _gemini_json("You convert calendar requests into a JSON recurrence. "
-                            "Output only JSON.", prompt, max_tokens=900, mode="quick")
+        parsed = _gemini_json("You turn a student's request into calendar operations. "
+                              "Output only JSON.", prompt, max_tokens=1800, mode="quick")
     except Exception as exc:
         app.logger.warning("Calendar AI failed: %s", exc)
-        message = ("Nexora's AI is at its limit right now. Add the dates with "
-                   "+ Add event in the meantime."
+        message = ("Nexora's AI is at its limit right now. Use + Add event, or edit "
+                   "an entry by clicking it."
                    if _looks_like_quota_error(exc) else
-                   "Nexora could not read that. Try naming the course, the first "
-                   "date, how often, and how many.")
+                   "Nexora could not read that. Try naming the course, the dates, "
+                   "and what you want done.")
         return jsonify({"error": message}), 503
-    if isinstance(spec, list) and spec:
-        spec = spec[0]            # flash-lite sometimes wraps the object in a list
-    if not isinstance(spec, dict):
+    if isinstance(parsed, list) and parsed:
+        parsed = parsed[0]          # flash-lite sometimes wraps the object in a list
+    if not isinstance(parsed, dict):
         return jsonify({"error": "Nexora could not read that."}), 503
 
-    # A hallucinated code would file every one of these under a course the
-    # student does not have, which is silent and tedious to undo.
-    # "OTHER" is this app's sentinel for "no course", and _normalize_course_code
-    # returns it for an empty string -- so without this the guard reported the
-    # model's correct refusal to guess as "Ignored the course OTHER".
-    course = _normalize_course_code(str(spec.get("course") or ""))
-    if course and course != "OTHER" and course.upper() not in codes:
-        spec["course"] = ""
-        spec["understood"] = (str(spec.get("understood") or "").strip()
-                              + f" (Ignored the course {course}; it is not one of yours.)").strip()
+    understood = str(parsed.get("understood") or "").strip()
+    unsupported = str(parsed.get("unsupported") or "").strip()
+    if unsupported:
+        return jsonify({"error": unsupported, "understood": understood,
+                        "unsupported": True}), 422
 
-    dates, notes = _expand_recurrence(spec, today)
-    if not dates:
-        return jsonify({"error": "Nexora could not work out any dates from that. "
+    changes, notes = _calendar_plan(parsed.get("operations"), current_user.id, today)
+    if not changes:
+        # Usually this is not a misreading -- it is that nothing matched. Saying
+        # "could not work out any changes" sends a student off to rephrase a
+        # request that was perfectly clear and simply had no entries to act on.
+        return jsonify({"error": "Nexora found nothing to change. It can only act on "
+                                 "entries already in your calendar, between a month "
+                                 "back and about five months ahead. "
                                  + (" ".join(notes) or ""),
-                        "understood": str(spec.get("understood") or "")}), 422
-    return jsonify({"ok": True, "preview": True, "spec": spec,
-                    "understood": str(spec.get("understood") or ""),
-                    "notes": notes, "events": _recurrence_events(spec, dates)})
+                        "understood": understood}), 422
+
+    counts = {}
+    for c in changes:
+        counts[c["op"]] = counts.get(c["op"], 0) + 1
+    return jsonify({"ok": True, "preview": True, "understood": understood,
+                    "notes": notes, "counts": counts, "changes": changes})
 
 
 # ============================

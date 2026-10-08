@@ -211,7 +211,7 @@ dialog.sheet::backdrop{background:#0B0908cc}
       <span>Sync to Google Calendar</span>
     </button>
     <button type="button" class="ai" id="aiEvents"
-            title="Describe repeating dates in your own words">&#10022; Repeating</button>
+            title="Add, move, rename or delete entries by describing it">&#10022; Edit with AI</button>
     <button type="button" class="add" id="addEvent">+ Add event</button>
   </div>
 </div>
@@ -334,26 +334,30 @@ dialog.sheet::backdrop{background:#0B0908cc}
   </form>
 </dialog>
 
-{# Describe repeating work once instead of adding it twelve times by hand.
-   Two steps on purpose: the first reads the sentence and shows the dates, the
-   second creates them. Filling a calendar from a model's first guess is not
-   something to do without being asked -- "biweekly" read as "daily" is six
-   entries or ninety, and undoing ninety by hand is worse than never asking. #}
+{# An assistant with access to the calendar, not a form with a chat box on it.
+   It adds, moves, deletes, retimes and renames -- and when a request is none of
+   those it says so. The first version answered "change the colour for CCDP2100"
+   by offering to create an event called "Change course color".
+
+   Two steps, always, and more so now that deleting is in scope: the first reads
+   the request against the entries the student really has and lists every change,
+   the second applies the ones they confirmed. #}
 <dialog class="sheet" id="aiSheet" aria-labelledby="aiTitle">
   <form method="dialog" id="aiForm">
-    <h2 id="aiTitle">Add repeating dates</h2>
-    <p class="hint">Describe them the way you would to a friend. Nothing is added
-       to your calendar until you have seen the dates and confirmed them.</p>
+    <h2 id="aiTitle">Edit your calendar</h2>
+    <p class="hint">Say what you want done &mdash; add a series of tests, move
+       something, rename it, delete it. Nothing changes until you have seen the
+       list and confirmed it.</p>
 
     <div>
-      <label for="aiText">What repeats</label>
-      <textarea id="aiText" maxlength="2000" placeholder="Biweekly SYSC2004 tests starting Oct 10, six of them, skipping Dec 20 to Jan 4"></textarea>
+      <label for="aiText">What should change</label>
+      <textarea id="aiText" maxlength="2000" placeholder="Biweekly ELEC2501B tests from Oct 13, five of them, no uni Oct 23-28 so continue after"></textarea>
     </div>
 
     <p class="understood" id="aiUnderstood" hidden></p>
 
     <div id="aiPreview" hidden>
-      <label id="aiCountLabel">Dates it found</label>
+      <label id="aiCountLabel">Changes</label>
       <ul class="preview" id="aiList"></ul>
       <p class="notes" id="aiNotes" hidden></p>
     </div>
@@ -364,7 +368,7 @@ dialog.sheet::backdrop{background:#0B0908cc}
       <span class="spacer"></span>
       <button type="button" id="aiCancel">Cancel</button>
       <button type="button" class="primary" id="aiRead">Read it</button>
-      <button type="button" class="primary" id="aiCreate" hidden>Add them</button>
+      <button type="button" class="primary" id="aiCreate" hidden>Apply</button>
     </div>
   </form>
 </dialog>
@@ -537,16 +541,17 @@ dialog.sheet::backdrop{background:#0B0908cc}
 
   $('addEvent').onclick = () => open(null, '{{ today_iso }}');
 
-  /* ---- repeating dates, described in a sentence ----
-     The model reads the request; the server works out the dates and creates
-     them. This never builds a date itself, and never renders a title through
-     innerHTML -- every value here came back from a model, so the preview rows
+  /* ---- the calendar assistant ----
+     The model chooses WHAT to do and to WHICH entries, picking from ids the
+     server gave it; the server works out every date and re-checks every id on
+     the way back. Nothing here builds a date, and no label is ever rendered
+     through innerHTML -- every string below came back from a model, so the rows
      are built as nodes with textContent. */
   const aiSheet = $('aiSheet');
-  let aiSpec = null;
+  let aiChanges = null;
 
   const aiReset = () => {
-    aiSpec = null;
+    aiChanges = null;
     $('aiUnderstood').hidden = true;
     $('aiPreview').hidden = true;
     $('aiCreate').hidden = true;
@@ -559,9 +564,9 @@ dialog.sheet::backdrop{background:#0B0908cc}
 
   $('aiEvents').onclick = () => { $('aiText').value = ''; aiReset(); aiSheet.showModal(); };
   $('aiCancel').onclick = () => aiSheet.close();
-  // Editing the sentence invalidates the preview: the dates on screen must
-  // always be the dates that would be created.
-  $('aiText').addEventListener('input', () => { if (aiSpec) aiReset(); });
+  // Editing the request invalidates the preview: the list on screen must always
+  // be the list that would be applied.
+  $('aiText').addEventListener('input', () => { if (aiChanges) aiReset(); });
 
   const aiPost = async body => {
     const res = await fetch('/api/calendar/ai-events', {
@@ -573,12 +578,14 @@ dialog.sheet::backdrop{background:#0B0908cc}
     return { ok: res.ok, data };
   };
 
+  const AI_VERB = { add: 'Add', delete: 'Delete', move: 'Move', retime: 'Retime', rename: 'Rename' };
+
   $('aiRead').onclick = async () => {
     const text = $('aiText').value.trim();
-    if (!text) { $('aiError').textContent = 'Describe the dates first.'; return; }
+    if (!text) { $('aiError').textContent = 'Say what you want doing first.'; return; }
     $('aiError').textContent = '';
     $('aiRead').disabled = true;
-    $('aiRead').textContent = 'Reading…';
+    $('aiRead').textContent = 'Reading\u2026';
     const { ok, data } = await aiPost({ text });
     $('aiRead').disabled = false;
     $('aiRead').textContent = 'Read it';
@@ -588,21 +595,22 @@ dialog.sheet::backdrop{background:#0B0908cc}
     }
     if (!ok) { $('aiError').textContent = data.error || 'That could not be read.'; return; }
 
-    aiSpec = data.spec;
+    aiChanges = data.changes || [];
     const list = $('aiList');
     list.replaceChildren();
-    (data.events || []).forEach(ev => {
+    aiChanges.forEach(ch => {
       const li = document.createElement('li');
-      const name = document.createElement('span');
-      name.textContent = ev.title + (ev.time ? ' · ' + ev.time : '');
-      const when = document.createElement('time');
-      when.dateTime = ev.date;
-      when.textContent = ev.date;
-      li.append(name, when);
+      const what = document.createElement('span');
+      what.textContent = ch.label || (AI_VERB[ch.op] || ch.op);
+      const tag = document.createElement('time');
+      tag.textContent = AI_VERB[ch.op] || ch.op;
+      li.append(what, tag);
       list.append(li);
     });
-    const n = (data.events || []).length;
-    $('aiCountLabel').textContent = n + (n === 1 ? ' date it found' : ' dates it found');
+    const n = aiChanges.length;
+    const parts = Object.entries(data.counts || {})
+      .map(([op, c]) => c + ' ' + (AI_VERB[op] || op).toLowerCase());
+    $('aiCountLabel').textContent = parts.length ? parts.join(' \u00b7 ') : 'Changes';
     if (data.notes && data.notes.length) {
       $('aiNotes').textContent = data.notes.join(' ');
       $('aiNotes').hidden = false;
@@ -610,18 +618,18 @@ dialog.sheet::backdrop{background:#0B0908cc}
     $('aiPreview').hidden = false;
     $('aiRead').hidden = true;
     $('aiCreate').hidden = false;
-    $('aiCreate').textContent = n === 1 ? 'Add it' : 'Add all ' + n;
+    $('aiCreate').textContent = n === 1 ? 'Apply 1 change' : 'Apply ' + n + ' changes';
   };
 
   $('aiCreate').onclick = async () => {
-    if (!aiSpec) return;
+    if (!aiChanges || !aiChanges.length) return;
     $('aiCreate').disabled = true;
-    $('aiCreate').textContent = 'Adding…';
-    const { ok, data } = await aiPost({ spec: aiSpec, confirm: true });
+    $('aiCreate').textContent = 'Applying\u2026';
+    const { ok, data } = await aiPost({ changes: aiChanges, confirm: true });
     $('aiCreate').disabled = false;
     if (!ok) {
-      $('aiError').textContent = data.error || 'Those could not be added.';
-      $('aiCreate').textContent = 'Add them';
+      $('aiError').textContent = data.error || 'Those could not be applied.';
+      $('aiCreate').textContent = 'Apply';
       return;
     }
     aiSheet.close();
