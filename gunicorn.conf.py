@@ -61,8 +61,15 @@ def post_fork(server, worker):
     after the fork makes each worker open its own; it does not reconnect
     eagerly, so this costs nothing at boot.
     """
-    from app import db
-    db.engine.dispose()
+    # `app.app_context()` is required: Flask-SQLAlchemy 3 resolves `db.engine`
+    # through the current app, and a gunicorn hook runs outside any context, so
+    # reaching for it raises "Working outside of application context" and the
+    # worker dies at fork. Every worker died, the health check failed and the
+    # deploy was rejected -- Render kept the previous version serving, which is
+    # why this lives in its own commit.
+    from app import app, db
+    with app.app_context():
+        db.engine.dispose()
 
 
 # Recycle workers periodically so a slow leak in a long-lived thread cannot
