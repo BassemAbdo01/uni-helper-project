@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Nexora Sync",
-  "version": "3.5.1",
+  "version": "3.5.2",
   "description": "Import your courses, deadlines, lectures and announcements from Brightspace or Canvas into Nexora. Works with any university.",
   "icons": {
     "16": "icons/icon16.png",

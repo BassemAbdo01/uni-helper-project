@@ -59,6 +59,19 @@
    read them, and removing rows to filter a view is how a calendar starts
    disagreeing with itself. */
 .cal.exams-only .ev:not(.major){display:none}
+.ev.course-off{display:none}
+/* Deliberately NOT remembered. "Hide everything but ELEC for a minute" is a
+   glance, not a setting, and a filter that survives a refresh is one you forget
+   you applied and then report as missing deadlines. */
+.lg.lgc{border:0;background:none;font:inherit;cursor:pointer;padding:0;
+  display:inline-flex;align-items:center;gap:6px;color:inherit;
+  transition:opacity .18s var(--ease)}
+.lg.lgc:hover{opacity:.78}
+.lg.lgc[aria-pressed="true"]{opacity:.34;text-decoration:line-through}
+.lg.lgc[aria-pressed="true"] .sw{background:transparent;
+  box-shadow:inset 0 0 0 1px var(--line-2)}
+.lg.lgc:focus-visible{outline:2px solid var(--amber);outline-offset:3px;border-radius:4px}
+
 @media (max-width:700px){.lgfilter{margin-left:0;width:100%}}
 
 .annfound{display:flex;align-items:center;gap:16px;margin:0 0 20px;padding:16px 18px;
@@ -275,7 +288,9 @@ dialog.sheet::backdrop{background:#0B0908cc}
     {% if course_legend %}
       <span class="k">Courses</span>
       {% for c in course_legend %}
-        <span class="lg"><span class="sw" style="--ev:var(--c{{ c.color_index }})"></span>{{ c.course }}</span>
+        <button type="button" class="lg lgc" data-course="{{ c.course }}"
+                aria-pressed="false" title="Hide {{ c.course }} for now"><span class="sw"
+                style="--ev:var(--c{{ c.color_index }})"></span>{{ c.course }}</button>
       {% endfor %}
       <span class="lg ex"><span class="sw"></span>Exams &amp; midterms are outlined</span>
     {% endif %}
@@ -602,6 +617,27 @@ dialog.sheet::backdrop{background:#0B0908cc}
   /* ---- exams only ----
      Kept for the visit, not just the page: clicking to next month and losing
      the filter is the kind of thing that makes a control feel broken. */
+  /* ---- hide a course for a moment ----
+     Held in memory only, so a reload brings everything back. The rows stay in
+     the DOM for the same reason the exam filter leaves them there: the editor
+     and the day cells read them. */
+  const hiddenCourses = new Set();
+  const applyCourseFilter = () => {
+    document.querySelectorAll('.ev').forEach(ev => {
+      ev.classList.toggle('course-off', hiddenCourses.has(ev.dataset.course || ''));
+    });
+  };
+  document.querySelectorAll('.lg.lgc').forEach(chip => {
+    chip.onclick = () => {
+      const course = chip.dataset.course || '';
+      const off = !hiddenCourses.has(course);
+      if (off) hiddenCourses.add(course); else hiddenCourses.delete(course);
+      chip.setAttribute('aria-pressed', off ? 'true' : 'false');
+      chip.title = (off ? 'Show ' : 'Hide ') + course + (off ? ' again' : ' for now');
+      applyCourseFilter();
+    };
+  });
+
   const examsBtn = $('examsOnly'), calEl = document.querySelector('.cal');
   if (examsBtn && calEl) {
     const applyExams = on => {

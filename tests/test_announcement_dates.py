@@ -206,7 +206,9 @@ def test_the_exams_only_filter_is_on_every_month(client):
     _signed_in(client)
     body = client.get("/calendar?month=2030-07").get_data(as_text=True)
     assert 'id="examsOnly"' in body
-    assert "Courses" not in body          # no legend on an empty month
+    # no course chips on a month with nothing in it -- checking for the word
+    # "Courses" anywhere in the page matched the rail and proved nothing
+    assert 'class="lg lgc"' not in body
     assert ".cal.exams-only .ev:not(.major){display:none}" in body
 
 
@@ -216,3 +218,55 @@ def test_filtering_hides_rather_than_removes(client):
     _signed_in(client)
     body = client.get("/calendar").get_data(as_text=True)
     assert "display:none" in body.split(".cal.exams-only")[1][:60]
+
+
+# --------------------------------------------------------------------------
+# "Plan my day" planned from every task ever imported, oldest first.
+# --------------------------------------------------------------------------
+
+def _task_for(uid, title, due, source="ics"):
+    with nexora.app.app_context():
+        nexora.db.session.add(nexora.Task(
+            id=uuid4().hex, user_id=uid, title=title, base_title=title,
+            group_id=uuid4().hex, due_raw=due, course_full="SYSC2004",
+            course_prefix="SYSC2004", kind="due", is_deadline=True, source=source,
+            sync_state="active", created_at="2026-10-01 00:00:00"))
+        nexora.db.session.commit()
+
+
+def test_plan_my_day_ignores_work_from_a_previous_year(client):
+    """An account that imported first year was told its next five hours were
+    "Lab 0 Pre-lab quiz, Sep 07 2025" -- while the dashboard beside it correctly
+    said one thing was due."""
+    uid = _signed_in(client)
+    _task_for(uid, "Lab 0 Pre-lab quiz", "2025-09-07")
+    _task_for(uid, "Lab 1 Pre-lab quiz", "2025-09-14")
+    data = client.get("/api/start-my-day").get_json()
+    titles = [p["title"] for p in data["plan"]]
+    assert "Lab 0 Pre-lab quiz" not in titles
+    assert "Lab 1 Pre-lab quiz" not in titles
+    assert data["count"] == 0
+
+
+def test_plan_my_day_still_plans_work_that_is_actually_due(client):
+    uid = _signed_in(client)
+    with nexora.app.app_context():
+        soon = (nexora._today_for_request() + nexora.timedelta(days=2)).isoformat()
+    _task_for(uid, "Assignment 2", soon)
+    data = client.get("/api/start-my-day").get_json()
+    assert [p["title"] for p in data["plan"]] == ["Assignment 2"]
+    assert data["total_minutes"] > 0
+
+
+def test_plan_my_day_agrees_with_the_dashboard_queue(client):
+    """They read one list now, because two screens disagreeing about what to do
+    next is the same class of bug as two disagreeing about a grade."""
+    uid = _signed_in(client)
+    with nexora.app.app_context():
+        soon = (nexora._today_for_request() + nexora.timedelta(days=1)).isoformat()
+    _task_for(uid, "Old thing", "2025-09-07")
+    _task_for(uid, "Real thing", soon)
+    planned = [p["title"] for p in client.get("/api/start-my-day").get_json()["plan"]]
+    page = client.get("/dashboard").get_data(as_text=True)
+    assert planned == ["Real thing"]
+    assert "Old thing" not in page

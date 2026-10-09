@@ -7627,7 +7627,13 @@ def tour_state():
 @app.route("/api/start-my-day", methods=["GET"])
 @login_required
 def start_my_day():
-    cards = sort_cards(build_grouped_cards(load_tasks()))
+    # The SAME list the dashboard queue shows. Without view_filter this planned
+    # from every task ever imported, oldest first -- so an account that imported
+    # first year got "Lab 0 Pre-lab quiz, Sep 07 2025" as the next thing to do
+    # today, five items of it, while the dashboard beside it correctly said one
+    # thing was due. Two screens disagreeing about what to do next is the same
+    # class of bug as two disagreeing about a grade.
+    cards = sort_cards(view_filter(build_grouped_cards(load_tasks()), "all"))
     plan = []
     total_minutes = 0
     for card in cards[:5]:
