@@ -2272,15 +2272,52 @@ def _gemini_model_candidates(vision=False, reasoning=False):
     # drops selection_rules on a multi-option outline (see the corpus note in
     # CLAUDE.md). The eval was failing on the weakest model in the list purely
     # because the two above it were unavailable.
+    # Re-probed 2026-10-09 -- three text passes and two vision passes, on the
+    # live key, against a real screenshot. The September order had
+    # gemini-3.7-flash leading, and it now answers NOTHING:
+    #
+    #   model                     text (3)        vision (2)   fastest OK
+    #   gemini-3.7-flash          timeout,503,503 timeout,503  never
+    #   gemini-3.8-flash          503,200,503     timeout,x2   4.0s text only
+    #   gemini-3.6-flash          200,200,503     503,200      1.1s / 9.1s
+    #   gemini-3.5-flash-lite     200,200,200     200,200      0.4s / 1.8s
+    #   gemini-flash-lite-latest  200,200,200     200,200      0.5s / 2.5s
+    #   gemini-flash-latest       200,200,503     200,200      4.0s / 13.2s
+    #   gemini-3.1-flash-lite     503,200,200     200,200      6.4s / 9.4s
+    #
+    # So the two models at the front of the chain were costing every call the
+    # price of a timeout and a 503 before anything answered -- about seventy
+    # seconds on the vision path. They are now last: kept, because availability
+    # moves and they may come back, but never paid for first.
+    #
+    # Capability still leads where it survives. 3.6-flash answers two text calls
+    # in three and is the strongest that does, so it stays in front of
+    # flash-lite, which is the model documented as dropping selection_rules on a
+    # multi-option outline. Ordering purely by uptime would put the weakest model
+    # first on the one task where reasoning decides a student's grade.
     defaults = [
-        "gemini-3.7-flash",
         "gemini-3.6-flash",
+        "gemini-flash-latest",
         "gemini-3.8-flash",
         "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
-        "gemini-flash-latest",
         "gemini-flash-lite-latest",
+        "gemini-3.1-flash-lite",
+        "gemini-3.7-flash",
     ]
+    if vision:
+        # 3.8-flash timed out on BOTH vision passes while answering text once in
+        # three, so one order cannot serve both. Reading an image is closer to
+        # transcription than reasoning, and flash-lite transcribed a real
+        # timetable completely in 1.8s, so it sits second rather than last.
+        defaults = [
+            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-flash-lite-latest",
+            "gemini-flash-latest",
+            "gemini-3.1-flash-lite",
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+        ]
     if reasoning:
         # Outline analysis is the one task where reasoning quality decides
         # whether a student is shown a correct grade. Prefer Pro-tier models

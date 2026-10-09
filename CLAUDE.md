@@ -145,12 +145,37 @@ Pro candidates 429 on every call with a free key, so the reasoning chain lands
 on the flash list in practice, and whichever id leads that list is the model
 that reads a student's outline.
 
-Probed 2026-09-05, three passes each:
+Re-probed **2026-10-09** -- three text passes, two vision passes against a real
+screenshot. The September table below it had gone completely stale, and trusting
+it cost every call the price of a timeout plus a 503 before anything answered:
 
-| Model | Result |
+| Model | Text (3) | Vision (2) | Fastest success |
+|---|---|---|---|
+| `gemini-pro-latest` | 429 x3 | 429 x2 | never -- free key cannot serve Pro |
+| `gemini-3.1-pro-preview` | 429 x3 | 429 x2 | never |
+| `gemini-3.7-flash` | timeout, 503, 503 | timeout, 503 | **never -- and it led both chains** |
+| `gemini-3.8-flash` | 503, 200, 503 | timeout x2 | 4.0s text only |
+| `gemini-3.6-flash` | 200, 200, 503 | 503, 200 | 1.1s / 9.1s |
+| `gemini-3.5-flash-lite` | 200 x3 | 200 x2 | 0.4s / 1.8s |
+| `gemini-flash-lite-latest` | 200 x3 | 200 x2 | 0.5s / 2.5s |
+| `gemini-flash-latest` | 200, 200, 503 | 200 x2 | 4.0s / 13.2s |
+| `gemini-3.1-flash-lite` | 503, 200, 200 | 200 x2 | 6.4s / 9.4s |
+
+**Text and vision now have separate orders**, because one list cannot serve both:
+`gemini-3.8-flash` answers text one time in three and timed out on *both* vision
+passes. Reading an outline screenshot went from ~40s to 9.8-16.5s on the same
+image, and a timetable read through its own lite-first list takes 4.8s.
+
+Capability still leads where it survives: `gemini-3.6-flash` is the strongest
+model that answers at all, so it stays ahead of flash-lite, which is the one
+documented below as dropping `selection_rules`. Ordering purely by uptime would
+put the weakest model first on the task where reasoning decides a grade.
+
+For the record, what the September probe said -- every line of which is now
+wrong, which is the point:
+
+| Model | Result (2026-09-05) |
 |---|---|
-| `gemini-pro-latest` | 429 every time -- free key cannot serve Pro |
-| `gemini-3.1-pro-preview` | 429 every time |
 | `gemini-3.7-flash` | 200, ~1s, 3/3 |
 | `gemini-3.6-flash` | 429 on 2 of 3; 24.5s on the one that answered |
 | `gemini-3.8-flash` | 503 UNAVAILABLE, 6-12s wasted per attempt |
