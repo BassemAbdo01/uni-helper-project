@@ -3197,7 +3197,7 @@ def _select_course_content(user_id, prompt, limit=8):
 
 
 
-def _gemini_image_to_outline_text(raw, mime_type):
+def _gemini_image_to_outline_text(raw, mime_type, prompt=None, models=None):
     """Read a grading screenshot with Gemini Vision.
 
     This uses the REST API's canonical camelCase fields (inlineData / mimeType).  The
@@ -3208,9 +3208,15 @@ def _gemini_image_to_outline_text(raw, mime_type):
     if not api_key:
         raise RuntimeError('Gemini is not configured for screenshot reading.')
 
-    models=_gemini_model_candidates(vision=True)
+    # The default chain is ordered for reading a course OUTLINE -- dense prose
+    # with grading rules, where flash-lite is documented as the model that drops
+    # things. A caller reading something simpler may hand in its own order.
+    models=models or _gemini_model_candidates(vision=True)
 
-    prompt=(
+    # The default asks for an outline; an exam timetable is a different document
+    # with the same need -- transcribe, do not summarise. The model chain, the
+    # retries and the timeout ceiling are the valuable part and are shared.
+    prompt=prompt or (
         "Read this university course-outline screenshot exactly. Transcribe all visible text and preserve the "
         "logical table rows. Pay special attention to assessment names, weights, alternative grading options, "
         "minimum final/test/lab requirements, attendance rules, bonus rules, prerequisite letter-grade rules, "
@@ -5471,6 +5477,157 @@ def _outline_dated_assessments(user_id, today, zone):
                 "why": (description or raw)[:240],
             })
     return out
+
+
+IMAGE_MAX_BYTES = 8 * 1024 * 1024
+IMAGE_MIMES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+
+# A timetable is a small table, not an outline, and the default vision chain is
+# ordered for the harder job. Measured on a real Carleton exam schedule,
+# 2026-10-09: 3.7-flash (which leads that chain) timed out at 60s, 3.6-flash
+# answered 503 after 8.3s, 3.8-flash took 29.1s -- so roughly 70 seconds was
+# spent on dead candidates before anything answered. flash-lite transcribed the
+# same image in 2.0s with all seven courses and every date present. The full
+# chain still follows, so a lite failure costs nothing but the usual fallback.
+# End to end on that image: 106s before, 4.8s after.
+_TIMETABLE_VISION_MODELS = (["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+                            + _gemini_model_candidates(vision=True))
+
+_SCHEDULE_OCR_PROMPT = (
+    "Read this screenshot of a university exam or class timetable exactly. "
+    "Transcribe every visible row and preserve the table structure, keeping each "
+    "row on its own line with its columns in order. Include column headers. Do "
+    "not summarise, reorder, omit or infer anything that is not printed. Return "
+    "plain text only."
+)
+
+
+@app.route("/api/calendar/from-image", methods=["POST"])
+@limiter.limit(AI_LIMIT)
+@login_required
+@requires_active
+def calendar_from_image():
+    """Read an exam timetable out of a screenshot.
+
+    A university publishes finals as a table -- course, type, date, start, end --
+    and a student otherwise types seven of them in by hand, which is both the
+    most tedious thing Nexora could ask for and the easiest place to make a
+    mistake that matters.
+
+    Two passes, both of which already exist here: vision OCR transcribes the
+    table, then the JSON path turns the text into rows. Dates are never left to
+    the model's prose -- every one is parsed and checked on the server -- and
+    nothing is written until the student confirms, through the same preview the
+    rest of the calendar uses.
+    """
+    upload = request.files.get("image")
+    if upload is None:
+        return jsonify({"error": "Attach a screenshot of your timetable."}), 400
+    raw = upload.read(IMAGE_MAX_BYTES + 1)
+    if not raw:
+        return jsonify({"error": "That file was empty."}), 400
+    if len(raw) > IMAGE_MAX_BYTES:
+        return jsonify({"error": "That image is too large. Keep it under 8 MB."}), 400
+    mime = (upload.mimetype or "").split(";")[0].strip().lower()
+    if mime not in IMAGE_MIMES:
+        return jsonify({"error": "Attach a PNG, JPG, WEBP or GIF."}), 400
+
+    today = _today_for_request()
+    try:
+        text = _gemini_image_to_outline_text(raw, mime, prompt=_SCHEDULE_OCR_PROMPT,
+                                             models=_TIMETABLE_VISION_MODELS)
+    except Exception as exc:
+        app.logger.warning("Timetable OCR failed: %s", exc)
+        return jsonify({"error": ("Nexora's AI is at its limit right now. Try again "
+                                  "later, or add the dates with + Add event."
+                                  if _looks_like_quota_error(exc) else
+                                  "Nexora could not read that image.")}), 503
+    if not str(text or "").strip():
+        return jsonify({"error": "Nexora could not read any text in that image."}), 422
+
+    codes = sorted(_known_course_codes(current_user.id))
+    schema = {"rows": [{"course": "", "title": "", "kind": "exam", "date": "",
+                        "time": "", "location": "", "skip": False, "why": ""}]}
+    rules = [
+        f"Today is {today.isoformat()}. Every date is ISO yyyy-mm-dd.",
+        "The text below was transcribed from a student's exam timetable. Turn "
+        "each row that states a SITTING into one entry.",
+        "Use the exam START date and START time. Ignore end times and durations.",
+        'Set skip true for any row with no exam -- a type of "None", a blank '
+        "date, a co-op or placeholder row -- and leave it out of the calendar.",
+        "course should match one of the student's own codes where the row names "
+        "the same course, even if the timetable writes it without the section "
+        "letter. Theirs are: " + (", ".join(codes) or "none imported yet") + ". "
+        "If none matches, use the code exactly as the timetable prints it.",
+        'title names the sitting for a calendar, such as "Final Exam" plus the '
+        "course's own name when the row gives one.",
+        'kind is "exam" for any sitting.',
+        'time is 24-hour HH:MM taken from the start time, or "" if blank.',
+        "why is the row as printed, so the student can check it.",
+        "",
+        "TIMETABLE TEXT:",
+        str(text)[:12000],
+    ]
+    try:
+        parsed = _gemini_json("You turn a transcribed exam timetable into JSON rows. "
+                              "Output only JSON.",
+                              "Return strict JSON matching this schema:\n"
+                              + json.dumps(schema, indent=2) + "\n\n" + "\n".join(rules),
+                              # Turning a transcribed table into rows is
+                              # mechanical, so it starts on flash-lite rather
+                              # than walking the thinking chain.
+                              max_tokens=2000, mode="fast")
+    except Exception as exc:
+        app.logger.warning("Timetable parse failed: %s", exc)
+        return jsonify({"error": "Nexora read the image but could not make sense of "
+                                 "the table. Try a clearer screenshot."}), 503
+    if isinstance(parsed, list):
+        parsed = {"rows": parsed}
+    rows = (parsed or {}).get("rows") if isinstance(parsed, dict) else None
+    if not isinstance(rows, list):
+        rows = []
+
+    changes, notes, skipped, undated, already = [], [], 0, 0, 0
+    for item in rows[:40]:
+        if not isinstance(item, dict):
+            continue
+        if item.get("skip"):
+            skipped += 1
+            continue
+        day = parse_iso_date(str(item.get("date") or "").strip())
+        if not day:
+            undated += 1
+            continue
+        course = _normalize_course_code(str(item.get("course") or "")) or "OTHER"
+        title = str(item.get("title") or "").strip()[:200] or "Exam"
+        if _already_on_the_calendar(current_user.id, course, day, title):
+            already += 1
+            continue
+        time_raw = str(item.get("time") or "").strip()
+        if time_raw and not _TIME_RE.match(time_raw):
+            time_raw = ""
+        changes.append({
+            "op": "add", "title": title, "date": day.isoformat(), "time": time_raw,
+            "course": course, "kind": "exam",
+            "location": str(item.get("location") or "").strip()[:200],
+            "source_title": "Exam timetable",
+            "why": str(item.get("why") or "").strip()[:240],
+            "label": f"Add “{title}” on {day.isoformat()}"
+                     + (f" at {time_raw}" if time_raw else "")
+                     + f" · {course}",
+        })
+
+    if skipped:
+        notes.append(f"{skipped} row{'s' if skipped != 1 else ''} had no exam scheduled.")
+    if undated:
+        notes.append(f"{undated} row{'s' if undated != 1 else ''} stated no date.")
+    if already:
+        notes.append(f"{already} {'is' if already == 1 else 'are'} already on your calendar.")
+    if not changes and not notes:
+        notes.append("Nexora found no exam rows in that image.")
+    return jsonify({"ok": True, "preview": True, "changes": changes,
+                    "counts": {"add": len(changes)} if changes else {},
+                    "understood": "", "notes": notes})
 
 
 @app.route("/api/calendar/scan-announcements", methods=["POST"])

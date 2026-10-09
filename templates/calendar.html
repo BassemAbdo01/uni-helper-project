@@ -259,6 +259,12 @@ dialog.sheet::backdrop{background:#0B0908cc}
             title="Add, move, rename or delete entries by describing it">&#10022; Edit with AI</button>
     <button type="button" class="ai" id="scanAnn"
             title="Find dates your instructors announced but never put on the calendar">&#9906; Check announcements</button>
+    {# A university publishes finals as a table. Typing seven of them in by hand
+       is the most tedious thing Nexora could ask for and the easiest place to
+       make a mistake that matters. #}
+    <button type="button" class="ai" id="shotBtn"
+            title="Read an exam timetable from a screenshot">&#9707; From a screenshot</button>
+    <input type="file" id="shotFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
     <button type="button" class="add" id="addEvent">+ Add event</button>
   </div>
 </div>
@@ -733,6 +739,43 @@ dialog.sheet::backdrop{background:#0B0908cc}
     $('aiText').closest('div').hidden = true;
     $('aiRead').hidden = true;
     aiSheet.showModal();
+  };
+
+  /* ---- an exam timetable, from a picture of one ----
+     Two passes on the server: vision OCR transcribes the table, then the JSON
+     path turns it into rows. Every date is parsed and checked there; nothing
+     here reads a date out of prose, and nothing is written until confirmed. */
+  $('shotBtn').onclick = () => $('shotFile').click();
+  $('shotFile').onchange = async () => {
+    const file = $('shotFile').files[0];
+    $('shotFile').value = '';                 // so the same file can be retried
+    if (!file) return;
+    openScanSheet();
+    $('aiTitle').textContent = 'Exams found in your timetable';
+    $('aiHint').textContent = 'Nexora read your screenshot. Check the dates against '
+      + 'it before adding them — nothing is on your calendar yet.';
+    $('aiUnderstood').textContent = 'Reading the image…';
+    $('aiUnderstood').hidden = false;
+
+    const form = new FormData();
+    form.append('image', file);
+    let data = {}, ok = false;
+    try {
+      const res = await fetch('/api/calendar/from-image', { method: 'POST', body: form });
+      ok = res.ok;
+      data = await res.json();
+    } catch (_) {
+      data = { error: 'That upload did not go through.' };
+    }
+    if (!ok) {
+      $('aiUnderstood').hidden = true;
+      $('aiError').textContent = data.error || 'Nexora could not read that image.';
+      return;
+    }
+    showScan(data);
+    if (!(data.changes || []).length) {
+      $('aiUnderstood').textContent = 'Nexora found no exam rows in that image.';
+    }
   };
 
   $('scanAnn').onclick = async () => {

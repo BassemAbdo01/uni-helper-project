@@ -317,13 +317,20 @@ def test_one_thing_does_not_eat_a_whole_day(student):
               work=[("Project", "BIOL1103", 10, "project"), ("Essay", "SYSC2004", 10, "essay")],
               components=[("BIOL1103", "Project", 30), ("SYSC2004", "Essay", 25)])
     sessions = generate(student)["sessions"]
-    # The first day WITH ROOM. This runs against the real clock, and today's
-    # window opens at the next quarter-hour after now -- run in the evening,
-    # today holds one block and is not evidence about interleaving.
+    # The first WHOLE day, which is never today. Today's window opens at the
+    # next quarter-hour after now, so how many blocks it holds depends on the
+    # hour the suite runs at -- and a day truncated to exactly two blocks is
+    # legitimately allowed to hold two of the same title, because
+    # MAX_CONSECUTIVE_SAME is 2. Judging interleaving on that is judging it on
+    # a fragment. This failed for the first time at 16:00 on a Friday with the
+    # planner behaving correctly.
+    from datetime import date as _date
+    today_iso = _date.today().isoformat()
     by_day = {}
     for s in sessions:
         by_day.setdefault(s["date"], []).append(s)
-    first_full = next(day for day in sorted(by_day) if len(by_day[day]) >= 2)
+    first_full = next(day for day in sorted(by_day)
+                      if day > today_iso and len(by_day[day]) >= 2)
     assert len({s["title"] for s in by_day[first_full]}) > 1, "the first full day is all one thing"
 
     run, previous, longest = 0, None, 0
