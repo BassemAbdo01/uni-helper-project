@@ -111,3 +111,62 @@ def test_the_store_link_opens_safely(client):
     i = body.index(nexora.EXTENSION_URL)
     around = body[max(0, i - 200):i + 200]
     assert 'rel="noopener"' in around
+
+
+# --------------------------------------------------------------------------
+# The workspace carried nine tabs. Overview was contents[:8] -- a digest of the
+# other eight -- and Resources was a tab of its own for material a student looks
+# for alongside the lectures. Removing a TAB must not remove the FILES.
+# --------------------------------------------------------------------------
+
+def _course_with(client, rows):
+    _signup(client)
+    with nexora.app.app_context():
+        user = nexora.User.query.order_by(nexora.User.id.desc()).first()
+        nexora.db.session.add(nexora.SyncedCourse(
+            id=uuid4().hex, user_id=user.id, source_uid="u1", course_code="SYSC2004",
+            course_name="Software", term="Fall 2026"))
+        for title, ctype, module in rows:
+            nexora.db.session.add(nexora.CourseContent(
+                id=uuid4().hex, user_id=user.id, course_full="SYSC2004",
+                content_type=ctype, title=title, content_text="",
+                published_at="2026-10-01T00:00:00Z", source_uid=uuid4().hex,
+                module_name=module))
+        nexora.db.session.commit()
+    return client.get("/course/SYSC2004").get_data(as_text=True)
+
+
+def test_overview_and_resources_are_gone_from_the_tab_strip(client):
+    body = _course_with(client, [])
+    assert 'data-tab="lectures"' in body
+    assert 'data-tab="overview"' not in body
+    assert 'data-tab="resources"' not in body
+
+
+def test_resource_items_are_still_reachable_under_lectures(client):
+    """49 files on a real course. Deleting the tab must not delete the way to
+    them."""
+    body = _course_with(client, [
+        ("Lab 3 Manual.pdf", "resource", "Lab Manuals"),
+        ("Course policies", "page", "Resources"),
+    ])
+    assert "Other course material" in body
+    assert "Lab 3 Manual.pdf" in body
+    assert "Course policies" in body
+
+
+def test_a_bookmarked_overview_tab_lands_somewhere_real(client):
+    """Otherwise every panel is hidden and the page looks broken."""
+    import re
+    _course_with(client, [])
+    body = client.get("/course/SYSC2004?tab=overview").get_data(as_text=True)
+
+    # the lectures panel is the one showing...
+    shown = re.search(r'data-panel="lectures"([^>]*)>', body)
+    assert shown and "hidden" not in shown.group(1)
+    # ...and every other panel is hidden, so the page is never blank
+    for panel in ("assignments", "quizzes", "announcements", "outline", "grades", "study"):
+        m = re.search(r'data-panel="%s"([^>]*)>' % panel, body)
+        assert m and "hidden" in m.group(1), panel
+    # ...and Lectures is the tab marked active
+    assert re.search(r'class="tab active" data-tab="lectures"', body)

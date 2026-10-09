@@ -163,23 +163,23 @@ a.update:hover{border-color:var(--amber,#E8A94A)}
       <div class="stat"><small>Course updates</small><strong>{{ updates|length }}</strong></div>
     </section>
 
-    {% set active_tab = request.args.get('tab', 'overview') %}
+    {# Overview was a digest of the other tabs and Resources now lives under
+       Lectures. A bookmarked ?tab=overview must land somewhere real rather than
+       on a page with every panel hidden. #}
+    {% set workspace_tabs = [('lectures','Lectures'),('assignments','Assignments'),
+                             ('quizzes','Quizzes'),('announcements','Announcements'),
+                             ('outline','Course Outline'),('grades','Grade Intelligence'),
+                             ('study','Study Tools')] %}
+    {% set _keys = workspace_tabs|map(attribute=0)|list %}
+    {% set active_tab = request.args.get('tab') if request.args.get('tab') in _keys else 'lectures' %}
     <div class="tabs" id="workspace-tabs">
-      {% for key, label in [('overview','Overview'),('lectures','Lectures'),('assignments','Assignments'),('resources','Resources'),('quizzes','Quizzes'),('announcements','Announcements'),('outline','Course Outline'),('grades','Grade Intelligence'),('study','Study Tools')] %}
+      {% for key, label in workspace_tabs %}
       <a class="tab{% if active_tab == key %} active{% endif %}" data-tab="{{ key }}" href="?tab={{ key }}#workspace-tabs">{{ label }}</a>
       {% endfor %}
     </div>
 
     <section class="grid">
       <div>
-        <article class="panel tab-panel" data-panel="overview" {% if active_tab != 'overview' %}hidden{% endif %}>
-          <h3>Course overview</h3>
-          <div class="list">
-            {% for item in contents[:8] %}
-            <a class="item" {% set href = item.source_url|content_href %}{% if href %}href="{{ href }}" target="_blank" rel="noopener noreferrer"{% endif %}><div><strong>{{ item.title }}</strong><div class="meta">{{ item.module_name or 'Course content' }}{% if item.published_at %} · {{ item.published_at }}{% endif %}</div></div><span class="type">{{ item.content_type }}</span></a>
-            {% else %}<div class="empty">No structured content has been synced yet.</div>{% endfor %}
-          </div>
-        </article>
         <article class="panel tab-panel" data-panel="lectures" {% if active_tab != 'lectures' %}hidden{% endif %}><h3>Lectures</h3>
           {# Grouped on the FIRST breadcrumb segment. Grouping on the whole
              path gave a heading per topic -- twenty of them over twenty-two
@@ -189,13 +189,15 @@ a.update:hover{border-color:var(--amber,#E8A94A)}
           <div class="matgroup"><span>{{ group.heading }}</span><em>{{ group['items']|length }}</em></div><div class="list">
           {% for entry in group['items'] %}<a class="item" {% set href = entry.row.source_url|content_href %}{% if href %}href="{{ href }}" target="_blank" rel="noopener noreferrer"{% endif %}><div><strong>{{ entry.title }}</strong><div class="meta">{% if entry.label %}{{ entry.label }} &middot; {% endif %}{% if '/static/nexora_uploads/' in entry.row.source_url %}Copied privately to Nexora{% else %}Brightspace source{% endif %}</div></div><span class="type">lecture</span></a>{% endfor %}</div>
           {% else %}<div class="empty">No lectures synced yet.</div>{% endfor %}
+        {% if resource_groups %}
+          <div class="matgroup" style="margin-top:30px"><span>Other course material</span><em>{{ resource_groups|length }} group{{ '' if resource_groups|length == 1 else 's' }}</em></div>
+          {% for group in resource_groups %}<div class="matgroup"><span>{{ group.heading }}</span><em>{{ group['items']|length }}</em></div><div class="list">{% for entry in group['items'] %}<a class="item" {% set href = entry.row.source_url|content_href %}{% if href %}href="{{ href }}" target="_blank" rel="noopener noreferrer"{% endif %}><div><strong>{{ entry.title }}</strong><div class="meta">{% if entry.label %}{{ entry.label }} &middot; {% endif %}{% if '/static/nexora_uploads/' in entry.row.source_url %}Copied privately to Nexora{% else %}External or Brightspace resource{% endif %}</div></div><span class="type">{{ entry.row.content_type }}</span></a>{% endfor %}</div>{% else %}<div class="empty">No resources synced yet.</div>{% endfor %}
+          {% endif %}
         </article>
         <article class="panel tab-panel" data-panel="assignments" {% if active_tab != 'assignments' %}hidden{% endif %}><h3>Assignments and deadlines</h3><div class="list">
           {% for item in assignments %}<div class="item"><div><strong>{{ item.title }}</strong><div class="meta">Due {{ item.main_due_pretty or 'No date' }}</div></div><span class="type">{{ item.status_label }}</span></div>{% endfor %}
           {% for item in synced_assignments %}<a class="item" {% set href = item.source_url|content_href %}{% if href %}href="{{ href }}" target="_blank" rel="noopener noreferrer"{% endif %}><div><strong>{{ item.title }}</strong><div class="meta">Imported from Brightspace</div></div><span class="type">assignment</span></a>{% endfor %}
           {% if not assignments and not synced_assignments %}<div class="empty">No assignments found for this course.</div>{% endif %}</div></article>
-        <article class="panel tab-panel" data-panel="resources" {% if active_tab != 'resources' %}hidden{% endif %}><h3>Resources</h3>
-          {% for group in resource_groups %}<div class="matgroup"><span>{{ group.heading }}</span><em>{{ group['items']|length }}</em></div><div class="list">{% for entry in group['items'] %}<a class="item" {% set href = entry.row.source_url|content_href %}{% if href %}href="{{ href }}" target="_blank" rel="noopener noreferrer"{% endif %}><div><strong>{{ entry.title }}</strong><div class="meta">{% if entry.label %}{{ entry.label }} &middot; {% endif %}{% if '/static/nexora_uploads/' in entry.row.source_url %}Copied privately to Nexora{% else %}External or Brightspace resource{% endif %}</div></div><span class="type">{{ entry.row.content_type }}</span></a>{% endfor %}</div>{% else %}<div class="empty">No resources synced yet.</div>{% endfor %}</article>
         <article class="panel tab-panel" data-panel="quizzes" {% if active_tab != 'quizzes' %}hidden{% endif %}><h3>Quizzes</h3><div class="list">{% for item in quizzes %}<a class="item" {% set href = item.source_url|content_href %}{% if href %}href="{{ href }}" target="_blank" rel="noopener noreferrer"{% endif %}><div><strong>{{ item.title }}</strong><div class="meta">Imported from Brightspace</div></div><span class="type">quiz</span></a>{% else %}<div class="empty">No quizzes synced yet.</div>{% endfor %}</div></article>
         <article class="panel tab-panel" data-panel="announcements" {% if active_tab != 'announcements' %}hidden{% endif %}><h3>Announcements</h3><div class="list">{% for item in announcements %}<div class="item" style="align-items:flex-start"><div><strong>{{ item.title }}</strong><div class="meta" style="line-height:1.55;margin-top:8px">{{ item.content_text[:420] }}</div></div><span class="type">announcement</span></div>{% else %}<div class="empty">No announcements synced yet.</div>{% endfor %}</div></article>
 
