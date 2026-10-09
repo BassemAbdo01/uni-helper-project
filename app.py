@@ -3911,6 +3911,50 @@ def change_password():
     return jsonify({"ok": True, "message": "Password changed."})
 
 
+@app.route("/api/password/email-link", methods=["POST"])
+@limiter.limit("5 per hour; 15 per day")
+@login_required
+def email_my_reset_link():
+    """Send a reset link to your own address while signed in.
+
+    /forgot-password exists for someone who cannot get in, and it redirects an
+    authenticated user to the dashboard -- which is right for that route and
+    meant a signed-in student had no way to ask for the email at all. They can
+    change it on the profile directly, but some people would rather do it from
+    a link, and taking that away was a loss.
+
+    It goes to the address on the account and nowhere else: a field here would
+    be a way to send Nexora-branded mail to anyone.
+    """
+    if not email_is_configured():
+        return jsonify({"error": "Email is not set up yet, so Nexora cannot send "
+                                 "the link. Change your password here instead."}), 503
+
+    PasswordResetToken.query.filter_by(user_id=current_user.id, used_at=None).delete()
+    token = secrets.token_urlsafe(32)
+    db.session.add(PasswordResetToken(
+        id=uuid4().hex, user_id=current_user.id, token_hash=_hash_reset_token(token),
+        expires_at=datetime.utcnow() + PASSWORD_RESET_TTL))
+    db.session.commit()
+    link = url_for("reset_password", token=token, _external=True)
+    sent = send_email(
+        current_user.email,
+        "Reset your Nexora password",
+        f"Hi {current_user.name},\n\n"
+        f"Use this link to choose a new password:\n{link}\n\n"
+        "The link works once and expires in one hour.\n\n"
+        "If you did not ask for this, you can ignore this email -- your password "
+        "has not changed.\n",
+    )
+    if not sent:
+        # Signed in, so there is no account to hide: say what happened instead
+        # of the deliberately vague answer /forgot-password has to give.
+        return jsonify({"error": "Nexora could not send that email. Check the mail "
+                                 "settings, or change your password here instead."}), 502
+    return jsonify({"ok": True,
+                    "message": f"Sent to {current_user.email}. The link expires in an hour."})
+
+
 @app.route("/reset-password/<token>", methods=["GET", "POST"])
 @limiter.limit("10 per hour; 40 per day")
 def reset_password(token):

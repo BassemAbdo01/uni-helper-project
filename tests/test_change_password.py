@@ -92,3 +92,69 @@ def test_an_outstanding_reset_link_dies_with_the_change(client):
 
 def test_it_needs_an_account(client):
     assert _change(client, PW, "a-brand-new-one-99").status_code in (302, 401)
+
+
+# --------------------------------------------------------------------------
+# Some people would rather do it from a link in their inbox. /forgot-password
+# cannot serve them -- it redirects a signed-in user away, correctly, since it
+# is for people who cannot get in. Taking that option away was a loss.
+# --------------------------------------------------------------------------
+
+def test_a_signed_in_student_can_ask_for_the_email(client, monkeypatch):
+    _account(client)
+    sent = {}
+    monkeypatch.setattr(nexora, "email_is_configured", lambda: True)
+    monkeypatch.setattr(nexora, "send_email",
+                        lambda to, subject, body: sent.update(to=to, body=body) or True)
+    res = client.post("/api/password/email-link")
+    assert res.status_code == 200
+    with nexora.app.app_context():
+        user = nexora.User.query.order_by(nexora.User.id.desc()).first()
+        assert sent["to"] == user.email
+    assert "/reset-password/" in sent["body"]
+
+
+def test_the_link_only_ever_goes_to_the_address_on_the_account(client, monkeypatch):
+    """A field here would be a way to send Nexora-branded mail to anyone."""
+    email = _account(client)
+    sent = {}
+    monkeypatch.setattr(nexora, "email_is_configured", lambda: True)
+    monkeypatch.setattr(nexora, "send_email",
+                        lambda to, subject, body: sent.update(to=to) or True)
+    client.post("/api/password/email-link", json={"email": "someone-else@example.com"})
+    assert sent["to"] == email
+
+
+def test_it_says_so_plainly_when_email_is_not_set_up(client, monkeypatch):
+    """Signed in, so there is no account to hide -- unlike /forgot-password,
+    which has to stay vague."""
+    _account(client)
+    monkeypatch.setattr(nexora, "email_is_configured", lambda: False)
+    res = client.post("/api/password/email-link")
+    assert res.status_code == 503
+    assert "not set up" in res.get_json()["error"]
+
+
+def test_a_failed_send_is_reported_rather_than_claimed_as_sent(client, monkeypatch):
+    _account(client)
+    monkeypatch.setattr(nexora, "email_is_configured", lambda: True)
+    monkeypatch.setattr(nexora, "send_email", lambda *a, **k: False)
+    res = client.post("/api/password/email-link")
+    assert res.status_code == 502
+    assert "could not send" in res.get_json()["error"].lower()
+
+
+def test_asking_again_invalidates_the_previous_link(client, monkeypatch):
+    _account(client)
+    monkeypatch.setattr(nexora, "email_is_configured", lambda: True)
+    monkeypatch.setattr(nexora, "send_email", lambda *a, **k: True)
+    client.post("/api/password/email-link")
+    client.post("/api/password/email-link")
+    with nexora.app.app_context():
+        user = nexora.User.query.order_by(nexora.User.id.desc()).first()
+        live = nexora.PasswordResetToken.query.filter_by(user_id=user.id, used_at=None).count()
+    assert live == 1
+
+
+def test_it_needs_an_account_too(client):
+    assert client.post("/api/password/email-link").status_code in (302, 401)

@@ -139,6 +139,10 @@
         </div>
         <div class="pwact">
           <button class="btn" type="submit" id="pwSave">Change password</button>
+          {# Some people would rather do it from a link in their inbox.
+             /forgot-password cannot serve them -- it redirects a signed-in user
+             away, correctly, since it is for people who cannot get in. #}
+          <button class="btn quiet" type="button" id="pwEmail">Email me a link instead</button>
           <span class="meta" id="pwMsg" role="status"></span>
         </div>
       </form>
@@ -189,6 +193,27 @@
                            : (data.error || 'That could not be changed.');
       if (ok) form.reset();
     });
+
+    document.getElementById('pwEmail').onclick = async () => {
+      const btn2 = document.getElementById('pwEmail');
+      msg.className = 'meta';
+      msg.textContent = '';
+      btn2.disabled = true;
+      const was = btn2.textContent;
+      btn2.textContent = 'Sending…';
+      let data = {}, ok = false;
+      try {
+        const res = await fetch('/api/password/email-link', { method: 'POST' });
+        ok = res.ok;
+        data = await res.json();
+      } catch (_) {
+        data = { error: 'That did not go through.' };
+      }
+      btn2.disabled = false;
+      btn2.textContent = was;
+      msg.className = 'meta ' + (ok ? 'good' : 'bad');
+      msg.textContent = ok ? (data.message || 'Sent.') : (data.error || 'Could not send.');
+    };
   }
 })();
 </script>
