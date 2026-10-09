@@ -5424,6 +5424,55 @@ def _already_on_the_calendar(user_id, course, day, title):
     return False
 
 
+def _outline_dated_assessments(user_id, today, zone):
+    """Dates the outline pipeline already pulled out, that never reached the calendar.
+
+    An analysed outline records `important_dates` -- "Midterm 2, October 30, 6pm,
+    Southam" -- and the course workspace shows them while the calendar, the one
+    place a student goes to find out when things are, never did.
+
+    No model runs here. The pipeline did that work when the outline was analysed,
+    and re-reading structured output with an LLM would spend quota to learn
+    nothing. That also means this picks up a REVISED outline for free: a
+    re-analysis rewrites `grading_json`, and the next scan sees the new dates.
+
+    `_looks_like_an_exam` is deliberately not the gate, for the same reason it is
+    not the gate on announcements: it is `_EXAM_WORDS and not _NOT_AN_EXAM`, and
+    _NOT_AN_EXAM vetoes an entry for mentioning a review. A row in
+    `important_dates` is already the outline saying "this date matters".
+    """
+    out = []
+    rows = CourseOutlineProfile.query.filter_by(user_id=user_id).all()
+    for profile in rows:
+        try:
+            analysis = json.loads(profile.grading_json or "{}")
+        except (ValueError, TypeError):
+            continue
+        course = profile.course_full or "OTHER"
+        # The outline's own year is the reference, so "Oct 30" in a Fall outline
+        # is this Fall and not whichever one the server happens to be in.
+        reference = today
+        for item in (analysis.get("important_dates") or [])[:60]:
+            if not isinstance(item, dict):
+                continue
+            description = str(item.get("description") or item.get("title") or "").strip()
+            raw = str(item.get("date") or "").strip()
+            if not description and not raw:
+                continue
+            when = _find_date(raw, reference) or _find_date(description, reference)
+            if not when:
+                continue
+            out.append({
+                "course": course,
+                "date": when,
+                "title": _exam_title(description or raw, course),
+                "time": _find_time(raw) or _find_time(description) or "",
+                "location": _find_location(description) or "",
+                "why": (description or raw)[:240],
+            })
+    return out
+
+
 @app.route("/api/calendar/scan-announcements", methods=["POST"])
 @limiter.limit(AI_LIMIT)
 @login_required
@@ -5439,19 +5488,47 @@ def scan_announcements():
     Nothing is written. It returns changes in the same shape the calendar
     assistant uses, so the student confirms them through the same path.
     """
+    data = request.get_json(silent=True) or {}
     today = _today_for_request()
     zone = _user_zone(current_user)
-    # Only an automatic scan moves the clock. Pressing the button is the student
-    # asking, and must always work however recently the page scanned by itself.
-    if (request.get_json(silent=True) or {}).get("auto"):
-        current_user.announce_scan_at = datetime.utcnow()
-        db.session.commit()
+    # Dates the outline pipeline already extracted. Deterministic, so these cost
+    # nothing and are collected whether or not anything is announced.
+    outline_changes, outline_past, outline_have = [], 0, 0
+    for found in _outline_dated_assessments(current_user.id, today, zone):
+        day = found["date"]
+        if day < today:
+            outline_past += 1
+            continue
+        if day > today + timedelta(days=ANNOUNCEMENT_HORIZON_DAYS):
+            continue
+        if _already_on_the_calendar(current_user.id, found["course"], day, found["title"]):
+            outline_have += 1
+            continue
+        outline_changes.append({
+            "op": "add", "title": found["title"], "date": day.isoformat(),
+            "time": found["time"], "course": found["course"], "kind": "exam",
+            "location": found["location"], "source_title": "Course outline",
+            "why": found["why"],
+            "label": f"Add “{found['title']}” on {day.isoformat()}"
+                     + (f" at {found['time']}" if found["time"] else "")
+                     + f" · {found['course']}",
+        })
+
     candidates = _announcement_candidates(current_user.id, today, zone)
     if not candidates:
-        return jsonify({"ok": True, "preview": True, "changes": [], "counts": {},
-                        "understood": "",
-                        "notes": ["No recent announcement states a date for a test, "
-                                  "midterm, exam or quiz."]})
+        notes = []
+        if outline_past:
+            notes.append(f"{outline_past} date{'s' if outline_past != 1 else ''} in your "
+                         "outlines have already passed.")
+        if outline_have:
+            notes.append(f"{outline_have} {'is' if outline_have == 1 else 'are'} already "
+                         "on your calendar.")
+        if not outline_changes and not notes:
+            notes.append("No announcement or course outline states a date that is not "
+                         "already on your calendar.")
+        return jsonify({"ok": True, "preview": True, "changes": outline_changes,
+                        "counts": {"add": len(outline_changes)} if outline_changes else {},
+                        "understood": "", "notes": notes})
 
     listing = []
     for i, (row, ref, blob) in enumerate(candidates):
@@ -5479,6 +5556,13 @@ def scan_announcements():
         "ANNOUNCEMENTS:",
         "\n\n".join(listing),
     ]
+    # The clock moves when a CALL is about to be spent, not when the page asks.
+    # An outline-only scan costs nothing and must not use up the budget that
+    # stops a student's ten calendar visits becoming ten Gemini calls.
+    if data.get("auto"):
+        current_user.announce_scan_at = datetime.utcnow()
+        db.session.commit()
+
     try:
         parsed = _gemini_json("You find dated assessments in course announcements. "
                               "Output only JSON.",
@@ -5537,6 +5621,13 @@ def scan_announcements():
                      + (f" at {time_raw}" if time_raw else "")
                      + f" · {course}",
         })
+
+    # Outline dates first: they are the course's own statement of when things
+    # are, and an announcement is usually a change to one of them.
+    seen = {(c["course"], c["date"]) for c in outline_changes}
+    changes = outline_changes + [c for c in changes if (c["course"], c["date"]) not in seen]
+    skipped_past += outline_past
+    skipped_have += outline_have
 
     if skipped_past:
         notes.append(f"{skipped_past} stated a date that has already passed.")
@@ -11111,12 +11202,20 @@ def calendar_page():
     # page spend a call on reading it.
     _scan_at = getattr(current_user, "announce_scan_at", None)
     _stale = _scan_at is None or (datetime.utcnow() - _scan_at) > timedelta(hours=ANNOUNCE_RESCAN_HOURS)
-    _has_candidates = bool(_announcement_candidates(
-        current_user.id, _today_for_request(), _user_zone(current_user)))
+    _today = _today_for_request()
+    _zone = _user_zone(current_user)
+    # Outline dates are free -- already extracted, no model -- so they are worth
+    # offering whenever one is pending, throttle or no throttle. Only reading
+    # ANNOUNCEMENTS costs a call, and only that is rate limited.
+    _outline_pending = any(
+        _today <= f["date"] <= _today + timedelta(days=ANNOUNCEMENT_HORIZON_DAYS)
+        and not _already_on_the_calendar(current_user.id, f["course"], f["date"], f["title"])
+        for f in _outline_dated_assessments(current_user.id, _today, _zone))
+    _ann_pending = bool(_announcement_candidates(current_user.id, _today, _zone))
 
     return render_template(
         "calendar.html",
-        announce_scan_due=bool(_has_candidates and _stale),
+        announce_scan_due=bool(_outline_pending or (_ann_pending and _stale)),
         weeks=weeks,
         calendar_feed_url=url_for("calendar_feed", token=feed_token, _external=True) if feed_token else "",
         month_title=current_month.strftime("%B %Y"),

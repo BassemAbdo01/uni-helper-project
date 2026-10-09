@@ -270,3 +270,77 @@ def test_plan_my_day_agrees_with_the_dashboard_queue(client):
     page = client.get("/dashboard").get_data(as_text=True)
     assert planned == ["Real thing"]
     assert "Old thing" not in page
+
+
+# --------------------------------------------------------------------------
+# The outline states dates too, and it gets revised.
+# --------------------------------------------------------------------------
+
+def _outline(uid, course, dates):
+    import json as _json
+    with nexora.app.app_context():
+        nexora.db.session.add(nexora.CourseOutlineProfile(
+            id=uuid4().hex, user_id=uid, course_full=course,
+            outline_title="Outline",
+            grading_json=_json.dumps({"important_dates": dates})))
+        nexora.db.session.commit()
+
+
+def test_a_date_the_outline_states_is_offered(client):
+    """The pipeline already pulled these out; the calendar never saw them."""
+    uid = _signed_in(client)
+    _outline(uid, "SYSC2310", [{"description": "Midterm 2", "date": "November 30, 2026"}])
+    with nexora.app.app_context():
+        found = nexora._outline_dated_assessments(uid, TODAY, nexora.timezone.utc)
+    assert [(f["course"], f["date"].isoformat()) for f in found] == [("SYSC2310", "2026-11-30")]
+
+
+def test_a_time_and_place_in_the_outline_are_kept(client):
+    uid = _signed_in(client)
+    _outline(uid, "SYSC2310", [{"description": "Midterm 2 at 6pm in Southam Hall",
+                                "date": "October 30, 2026"}])
+    with nexora.app.app_context():
+        found = nexora._outline_dated_assessments(uid, TODAY, nexora.timezone.utc)
+    assert found[0]["time"] == "18:00"
+    assert "Southam" in found[0]["location"]
+
+
+def test_reading_the_outline_costs_no_model_call(client):
+    """It is already structured. Re-reading it with an LLM would spend quota to
+    learn nothing -- and it is what lets a REVISED outline be picked up free."""
+    uid = _signed_in(client)
+    _outline(uid, "SYSC2310", [{"description": "Final exam", "date": "December 12, 2026"}])
+    body = client.get("/calendar").get_data(as_text=True)
+    assert "auto: true" in body          # the banner is offered...
+    with nexora.app.app_context():
+        user = nexora.User.query.filter_by(id=uid).first()
+        assert user.announce_scan_at is None   # ...without having spent a call
+
+
+def test_a_revised_outline_brings_the_new_date_with_it(client):
+    """"Sometimes it gets updated." A re-analysis rewrites grading_json, and the
+    next scan reads whatever it now says."""
+    import json as _json
+    uid = _signed_in(client)
+    _outline(uid, "SYSC2310", [{"description": "Midterm 2", "date": "November 30, 2026"}])
+    with nexora.app.app_context():
+        prof = nexora.CourseOutlineProfile.query.filter_by(user_id=uid).first()
+        prof.grading_json = _json.dumps({"important_dates": [
+            {"description": "Midterm 2", "date": "December 4, 2026"}]})
+        nexora.db.session.commit()
+        found = nexora._outline_dated_assessments(uid, TODAY, nexora.timezone.utc)
+    assert [f["date"].isoformat() for f in found] == ["2026-12-04"]
+
+
+def test_an_outline_date_already_on_the_calendar_is_not_offered(client):
+    uid = _signed_in(client)
+    _outline(uid, "SYSC2310", [{"description": "Midterm 2", "date": "November 30, 2026"}])
+    with nexora.app.app_context():
+        nexora.db.session.add(nexora.Task(
+            id=uuid4().hex, user_id=uid, title="Midterm 2", base_title="Midterm 2",
+            group_id="g9", due_raw="2026-11-30", course_full="SYSC2310",
+            course_prefix="SYSC2310", kind="exam", is_deadline=True, source="manual",
+            sync_state="active", created_at="2026-10-01 00:00:00"))
+        nexora.db.session.commit()
+    body = client.get("/calendar").get_data(as_text=True)
+    assert "auto: true" not in body

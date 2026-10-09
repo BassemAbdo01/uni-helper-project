@@ -778,9 +778,18 @@ dialog.sheet::backdrop{background:#0B0908cc}
 
     const n = data.changes.length;
     const first = data.changes[0];
-    $('annFoundTitle').textContent = n === 1
-      ? 'An announcement names a date that is not on your calendar'
-      : n + ' announcements name dates that are not on your calendar';
+    // Say where it came from. These arrive from two places -- the course outline
+    // the pipeline analysed, and announcements posted since -- and calling an
+    // outline date "an announcement" is the kind of small wrongness that makes a
+    // student stop believing the rest of it.
+    const fromOutline = data.changes.some(c => c.source_title === 'Course outline');
+    const fromNews = data.changes.some(c => c.source_title !== 'Course outline');
+    const where = fromOutline && fromNews ? 'Your outline and your announcements name'
+                : fromOutline ? (n === 1 ? 'Your course outline names' : 'Your course outlines name')
+                : (n === 1 ? 'An announcement names' : 'Your announcements name');
+    $('annFoundTitle').textContent = where + ' ' +
+      (n === 1 ? 'a date that is not on your calendar'
+               : n + ' dates that are not on your calendar');
     // Name the actual thing. "We found something" is a notification; "your
     // SYSC2310 midterm is on Nov 7 at 14:00" is a reason to look.
     $('annFoundText').textContent = (first.label || '').replace(/^Add /, '')
