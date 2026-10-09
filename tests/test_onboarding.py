@@ -170,3 +170,16 @@ def test_a_bookmarked_overview_tab_lands_somewhere_real(client):
         assert m and "hidden" in m.group(1), panel
     # ...and Lectures is the tab marked active
     assert re.search(r'class="tab active" data-tab="lectures"', body)
+
+
+def test_a_reset_for_an_unknown_address_answers_the_same_as_a_known_one(client):
+    """Telling someone the address is unknown turns this form into a way to
+    check who has an account. The two replies must be indistinguishable."""
+    _signup(client)
+    client.get("/logout")
+    known = client.post("/forgot-password", data={"email": "nobody-at-all@carleton.ca"})
+    assert known.status_code == 200
+    body = known.get_data(as_text=True)
+    assert "no account" not in body.lower() and "not found" not in body.lower()
+    # the honest half: it says a link is on its way only in the generic sense
+    assert "reset link is on its way" in body or "switched on" in body

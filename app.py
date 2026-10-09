@@ -3849,6 +3849,13 @@ def forgot_password():
                                support_email=SUPPORT_EMAIL)
 
     user = User.query.filter_by(email=email).first()
+    if not user:
+        # The REPLY stays identical -- saying "no such account" turns this form
+        # into a way to check who has one. But the operator needs to be able to
+        # tell "no account" from "the mail failed", and from the outside those
+        # look the same: a 200 and nothing in the inbox. This took a round trip
+        # through the logs to work out the first time it happened.
+        app.logger.info("Password reset asked for an address with no account; nothing sent.")
     if user:
         PasswordResetToken.query.filter_by(user_id=user.id, used_at=None).delete()
         token = secrets.token_urlsafe(32)
@@ -3866,6 +3873,42 @@ def forgot_password():
             "If you did not ask for this, you can ignore this email -- your password has not changed.\n",
         )
     return render_template("forgot_password.html", configured=True, sent=sent_message)
+
+
+@app.route("/api/password", methods=["POST"])
+@limiter.limit("10 per hour; 30 per day")
+@login_required
+def change_password():
+    """Change your own password while signed in.
+
+    The profile page said this was "not built yet" and offered /forgot-password
+    instead -- which redirects a signed-in user straight to the dashboard, so
+    the one link on the one page that mentioned passwords could never work for
+    the only people who could see it. A student who simply wanted to change
+    their password had no way to, and the fallback was to log out and claim to
+    be locked out.
+
+    The current password is required. Without it, anyone who finds an unlocked
+    laptop owns the account permanently rather than until it is locked again.
+    """
+    data = request.get_json(silent=True) or {}
+    current = str(data.get("current") or "")
+    new_password = str(data.get("new") or "")
+
+    if not check_password_hash(current_user.password_hash, current):
+        return jsonify({"error": "That is not your current password."}), 400
+    problem = _password_problem(new_password)
+    if problem:
+        return jsonify({"error": problem}), 400
+    if check_password_hash(current_user.password_hash, new_password):
+        return jsonify({"error": "That is the password you already have."}), 400
+
+    current_user.password_hash = generate_password_hash(new_password)
+    # Any outstanding reset link is stale the moment the password changes --
+    # otherwise an old email in an inbox still opens the account.
+    PasswordResetToken.query.filter_by(user_id=current_user.id, used_at=None).delete()
+    db.session.commit()
+    return jsonify({"ok": True, "message": "Password changed."})
 
 
 @app.route("/reset-password/<token>", methods=["GET", "POST"])
@@ -12083,6 +12126,9 @@ def _inject_contact():
     """
     return {"contact_email": SUPPORT_EMAIL,
             "trial_days": TRIAL_DAYS,
+            # Quoted to the student on the profile form and enforced by
+            # _password_problem. Two copies of a number drift.
+            "min_password_length": MIN_PASSWORD_LENGTH,
             "corpus_cases": OUTLINE_CORPUS_CASES,
             "extension_url": EXTENSION_URL,
             "extension_zip": EXTENSION_ZIP_AVAILABLE}
