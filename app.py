@@ -499,6 +499,7 @@ class User(db.Model, UserMixin):
     last_sync = db.Column(db.DateTime, nullable=True)
     # The last ATTEMPT, so a feed that cannot succeed still backs off.
     last_sync_attempt = db.Column(db.DateTime, nullable=True)
+    announce_scan_at = db.Column(db.DateTime, nullable=True)
     sync_status = db.Column(db.String(30), default="never")
     sync_message = db.Column(db.Text, default="Not synchronized yet.")
     extension_token = db.Column(db.String(128), default="")
@@ -869,6 +870,10 @@ def ensure_schema_columns():
             # succeeded. Without it a failing feed retried on every page
             # load, for ever -- see should_auto_sync.
             "last_sync_attempt": "TIMESTAMP NULL",
+            # When the announcement scan last SPENT quota. The scan costs a
+            # Gemini call, and a student who opens the calendar ten times a day
+            # must not cost ten of them.
+            "announce_scan_at": "TIMESTAMP NULL",
             "tour_done": "BOOLEAN DEFAULT FALSE",
             "sync_status": "VARCHAR(30) DEFAULT 'never'",
             "sync_message": "TEXT DEFAULT 'Not synchronized yet.'",
@@ -5347,6 +5352,7 @@ def _calendar_apply(changes, user_id):
     return done
 
 
+ANNOUNCE_RESCAN_HOURS = 6        # how often the calendar may spend a call unasked
 ANNOUNCEMENT_SCAN_DAYS = 75      # how far back an announcement can be and still be about work to come
 ANNOUNCEMENT_SCAN_MAX = 14       # how many candidates reach the model
 ANNOUNCEMENT_HORIZON_DAYS = 300  # how far ahead a stated date may be
@@ -5435,6 +5441,11 @@ def scan_announcements():
     """
     today = _today_for_request()
     zone = _user_zone(current_user)
+    # Only an automatic scan moves the clock. Pressing the button is the student
+    # asking, and must always work however recently the page scanned by itself.
+    if (request.get_json(silent=True) or {}).get("auto"):
+        current_user.announce_scan_at = datetime.utcnow()
+        db.session.commit()
     candidates = _announcement_candidates(current_user.id, today, zone)
     if not candidates:
         return jsonify({"ok": True, "preview": True, "changes": [], "counts": {},
@@ -11088,8 +11099,18 @@ def calendar_page():
     # The existing feed address, if there is one; the page creates it on the
     # first press of Sync rather than on every visit.
     feed_token = _calendar_token(current_user)
+    # Whether to offer the scan at all, decided WITHOUT a model: candidates are
+    # plain SQL and a regex, so a calendar with nothing announced costs nothing.
+    # Only when there is something new, and only once every few hours, does the
+    # page spend a call on reading it.
+    _scan_at = getattr(current_user, "announce_scan_at", None)
+    _stale = _scan_at is None or (datetime.utcnow() - _scan_at) > timedelta(hours=ANNOUNCE_RESCAN_HOURS)
+    _has_candidates = bool(_announcement_candidates(
+        current_user.id, _today_for_request(), _user_zone(current_user)))
+
     return render_template(
         "calendar.html",
+        announce_scan_due=bool(_has_candidates and _stale),
         weeks=weeks,
         calendar_feed_url=url_for("calendar_feed", token=feed_token, _external=True) if feed_token else "",
         month_title=current_month.strftime("%B %Y"),

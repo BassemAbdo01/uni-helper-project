@@ -146,3 +146,73 @@ def test_the_scan_writes_nothing_by_itself(client):
         before = nexora.Task.query.filter_by(user_id=uid).count()
         nexora._announcement_candidates(uid, TODAY, nexora.timezone.utc)
         assert nexora.Task.query.filter_by(user_id=uid).count() == before
+
+
+# --------------------------------------------------------------------------
+# The calendar checks by itself -- but only when it is worth a Gemini call.
+# --------------------------------------------------------------------------
+
+def _signed_in(client):
+    client.post("/signup", data={"name": "S", "email": f"cal{uuid4().hex[:7]}@carleton.ca",
+                                 "password": "nexorademo1"})
+    with nexora.app.app_context():
+        return nexora.User.query.order_by(nexora.User.id.desc()).first().id
+
+
+def test_a_calendar_with_nothing_announced_never_spends_a_call(client):
+    """The decision to scan is plain SQL and a regex. No candidates, no call."""
+    _signed_in(client)
+    body = client.get("/calendar").get_data(as_text=True)
+    assert "auto: true" not in body
+
+
+def test_a_new_dated_announcement_makes_the_calendar_check(client):
+    uid = _signed_in(client)
+    _announce(uid, "Midterm exam date", REAL, "2026-10-08T15:23:00.000Z")
+    body = client.get("/calendar").get_data(as_text=True)
+    assert "auto: true" in body
+
+
+def test_it_does_not_check_again_straight_away(client):
+    """Opening the calendar ten times a day must not cost ten Gemini calls."""
+    uid = _signed_in(client)
+    _announce(uid, "Midterm exam date", REAL, "2026-10-08T15:23:00.000Z")
+    assert "auto: true" in client.get("/calendar").get_data(as_text=True)
+    with nexora.app.app_context():
+        user = nexora.User.query.filter_by(id=uid).first()
+        user.announce_scan_at = nexora.datetime.utcnow()
+        nexora.db.session.commit()
+    assert "auto: true" not in client.get("/calendar").get_data(as_text=True)
+
+
+def test_the_button_still_works_however_recently_it_scanned(client):
+    """Pressing it is the student asking; a throttle on the automatic check must
+    not disable the manual one."""
+    uid = _signed_in(client)
+    with nexora.app.app_context():
+        user = nexora.User.query.filter_by(id=uid).first()
+        user.announce_scan_at = nexora.datetime.utcnow()
+        nexora.db.session.commit()
+    assert 'id="scanAnn"' in client.get("/calendar").get_data(as_text=True)
+
+
+# --------------------------------------------------------------------------
+# Exams only
+# --------------------------------------------------------------------------
+
+def test_the_exams_only_filter_is_on_every_month(client):
+    """It lived inside the per-month course legend, so it vanished on a month
+    with nothing in it -- exactly when someone is flicking ahead for tests."""
+    _signed_in(client)
+    body = client.get("/calendar?month=2030-07").get_data(as_text=True)
+    assert 'id="examsOnly"' in body
+    assert "Courses" not in body          # no legend on an empty month
+    assert ".cal.exams-only .ev:not(.major){display:none}" in body
+
+
+def test_filtering_hides_rather_than_removes(client):
+    """The editor, the colour map and the day cells all read those rows.
+    Removing them to filter a view is how a calendar disagrees with itself."""
+    _signed_in(client)
+    body = client.get("/calendar").get_data(as_text=True)
+    assert "display:none" in body.split(".cal.exams-only")[1][:60]

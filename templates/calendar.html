@@ -50,6 +50,37 @@
    sideways by 3px after the shell fix. Let the row wrap instead of inventing a
    narrower button. */
 @media (max-width:560px){ .monthnav{flex-wrap:wrap} }
+.lgfilter{margin-left:auto;border:1px solid var(--line-2);background:transparent;
+  color:var(--fg-2);font:inherit;font-size:11.5px;padding:6px 13px;border-radius:999px;
+  cursor:pointer;white-space:nowrap;transition:border-color .2s var(--ease),color .2s var(--ease),background .2s var(--ease)}
+.lgfilter:hover{border-color:var(--fg-3);color:var(--fg)}
+.lgfilter[aria-pressed="true"]{border-color:var(--amber);background:var(--amber-soft);color:var(--amber);font-weight:600}
+/* The events stay in the DOM: the editor, the colour map and the day cells all
+   read them, and removing rows to filter a view is how a calendar starts
+   disagreeing with itself. */
+.cal.exams-only .ev:not(.major){display:none}
+@media (max-width:700px){.lgfilter{margin-left:0;width:100%}}
+
+.annfound{display:flex;align-items:center;gap:16px;margin:0 0 20px;padding:16px 18px;
+  border:1px solid var(--amber);border-radius:12px;
+  background:linear-gradient(90deg,rgba(232,169,74,.16),rgba(232,169,74,.04) 70%);
+  box-shadow:0 10px 30px rgba(0,0,0,.35);animation:affade .45s var(--ease)}
+@keyframes affade{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.annfound[hidden]{display:none}
+.af-icon{flex:none;width:30px;height:30px;border-radius:50%;background:var(--amber);
+  color:#140F09;display:grid;place-items:center;font-weight:800;font-size:17px;
+  font-family:var(--serif)}
+.af-body{flex:1;min-width:0}
+.af-body strong{display:block;font-size:15px;font-weight:600;letter-spacing:-.01em}
+.af-body p{margin:3px 0 0;font-size:13px;color:var(--fg-2);line-height:1.5}
+.af-acts{display:flex;gap:9px;flex:none}
+.af-acts button{border-radius:7px;font:inherit;font-size:13px;padding:9px 15px;cursor:pointer}
+.af-later{border:1px solid var(--line-2);background:transparent;color:var(--fg-2)}
+.af-later:hover{border-color:var(--fg-3);color:var(--fg)}
+.af-go{border:1px solid var(--amber);background:var(--amber);color:#140F09;font-weight:600}
+.af-go:hover{filter:brightness(1.06)}
+@media (max-width:700px){.annfound{flex-wrap:wrap}.af-acts{width:100%}.af-acts button{flex:1}}
+
 
 .weekhead,.month{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px}
 .weekhead{padding:0 0 8px}
@@ -219,16 +250,40 @@ dialog.sheet::backdrop{background:#0B0908cc}
   </div>
 </div>
 
+{# Brightspace publishes "the midterm is Saturday Nov 7 at 2PM" as prose in an
+   announcement and never as a calendar item. Waiting for the student to press a
+   button means the ones who most need telling never find out, so the calendar
+   checks by itself -- but only when there is something new to read, and at most
+   once every few hours, because every check costs a Gemini call. #}
+<div class="annfound" id="annFound" hidden>
+  <span class="af-icon" aria-hidden="true">!</span>
+  <div class="af-body">
+    <strong id="annFoundTitle"></strong>
+    <p id="annFoundText"></p>
+  </div>
+  <div class="af-acts">
+    <button type="button" class="af-later" id="annLater">Not now</button>
+    <button type="button" class="af-go" id="annReview">Review them</button>
+  </div>
+</div>
+
 <div class="cal">
-  {% if course_legend %}
-    <div class="legend">
+  {# The legend is per-month -- it lists only the courses that appear -- but the
+     filter is not. Inside the conditional it vanished on any month with nothing
+     in it, which is exactly when someone is flicking ahead looking for tests. #}
+  <div class="legend">
+    {% if course_legend %}
       <span class="k">Courses</span>
       {% for c in course_legend %}
         <span class="lg"><span class="sw" style="--ev:var(--c{{ c.color_index }})"></span>{{ c.course }}</span>
       {% endfor %}
       <span class="lg ex"><span class="sw"></span>Exams &amp; midterms are outlined</span>
-    </div>
-  {% endif %}
+    {% endif %}
+    {# "What tests have I got" is a different question from "what is due", and a
+       term of quizzes and submissions buries the answer. Outlining them was not
+       enough -- you still have to find them. #}
+    <button type="button" class="lgfilter" id="examsOnly" aria-pressed="false">Exams only</button>
+  </div>
   <div class="weekhead" aria-hidden="true">
     <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
   </div>
@@ -544,6 +599,26 @@ dialog.sheet::backdrop{background:#0B0908cc}
 
   $('addEvent').onclick = () => open(null, '{{ today_iso }}');
 
+  /* ---- exams only ----
+     Kept for the visit, not just the page: clicking to next month and losing
+     the filter is the kind of thing that makes a control feel broken. */
+  const examsBtn = $('examsOnly'), calEl = document.querySelector('.cal');
+  if (examsBtn && calEl) {
+    const applyExams = on => {
+      calEl.classList.toggle('exams-only', on);
+      examsBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      examsBtn.textContent = on ? 'Showing exams only' : 'Exams only';
+    };
+    let saved = false;
+    try { saved = sessionStorage.getItem('nexora-exams-only') === '1'; } catch (_) {}
+    applyExams(saved);
+    examsBtn.onclick = () => {
+      const on = examsBtn.getAttribute('aria-pressed') !== 'true';
+      applyExams(on);
+      try { sessionStorage.setItem('nexora-exams-only', on ? '1' : '0'); } catch (_) {}
+    };
+  }
+
   /* ---- the calendar assistant ----
      The model chooses WHAT to do and to WHICH entries, picking from ids the
      server gave it; the server works out every date and re-checks every id on
@@ -577,23 +652,9 @@ dialog.sheet::backdrop{background:#0B0908cc}
      announcement and never as a calendar item, so Nexora held every word of it
      and the calendar stayed empty. The scan returns changes in the assistant's
      own shape, so the preview and the Apply path are the same code. */
-  $('scanAnn').onclick = async () => {
-    aiReset();
-    $('aiTitle').textContent = 'Dates found in your announcements';
-    $('aiHint').textContent = 'Your instructors announce dates in prose that never '
-      + 'becomes a calendar entry. Nexora reads the recent ones and shows you what '
-      + 'it found; nothing is added until you confirm.';
-    $('aiText').closest('div').hidden = true;
-    $('aiRead').hidden = true;
-    aiSheet.showModal();
-    $('aiUnderstood').textContent = 'Reading your recent announcements…';
-    $('aiUnderstood').hidden = false;
-    const { ok, data } = await aiPost({ scan: true });
-    if (!ok) {
-      $('aiUnderstood').hidden = true;
-      $('aiError').textContent = data.error || 'Those could not be read.';
-      return;
-    }
+  // Shared by the button and the banner. `pre` is a result already fetched, so
+  // reviewing what the banner found does not pay for a second call.
+  const showScan = (data) => {
     aiChanges = data.changes || [];
     const list = $('aiList');
     list.replaceChildren();
@@ -616,6 +677,7 @@ dialog.sheet::backdrop{background:#0B0908cc}
     $('aiUnderstood').textContent = n
       ? 'Found in announcements your instructors posted. Nothing is added until you confirm.'
       : 'Nothing new to add.';
+    $('aiUnderstood').hidden = false;
     $('aiCountLabel').textContent = n === 1 ? '1 date found' : n + ' dates found';
     if (data.notes && data.notes.length) {
       $('aiNotes').textContent = data.notes.join(' ');
@@ -624,6 +686,30 @@ dialog.sheet::backdrop{background:#0B0908cc}
     $('aiPreview').hidden = !n;
     $('aiCreate').hidden = !n;
     $('aiCreate').textContent = n === 1 ? 'Add it' : 'Add all ' + n;
+  };
+
+  const openScanSheet = () => {
+    aiReset();
+    $('aiTitle').textContent = 'Dates found in your announcements';
+    $('aiHint').textContent = 'Your instructors announce dates in prose that never '
+      + 'becomes a calendar entry. Nexora reads the recent ones and shows you what '
+      + 'it found; nothing is added until you confirm.';
+    $('aiText').closest('div').hidden = true;
+    $('aiRead').hidden = true;
+    aiSheet.showModal();
+  };
+
+  $('scanAnn').onclick = async () => {
+    openScanSheet();
+    $('aiUnderstood').textContent = 'Reading your recent announcements…';
+    $('aiUnderstood').hidden = false;
+    const { ok, data } = await aiPost({ scan: true });
+    if (!ok) {
+      $('aiUnderstood').hidden = true;
+      $('aiError').textContent = data.error || 'Those could not be read.';
+      return;
+    }
+    showScan(data);
   };
   $('aiCancel').onclick = () => aiSheet.close();
   // Editing the request invalidates the preview: the list on screen must always
@@ -639,6 +725,44 @@ dialog.sheet::backdrop{background:#0B0908cc}
     try { data = await res.json(); } catch (_) {}
     return { ok: res.ok, data };
   };
+
+  /* ---- the calendar checks by itself ----
+     Waiting for a student to press a button means the ones who most need
+     telling never find out. The server has already decided, without a model,
+     that there is something new worth reading and that it has not spent a call
+     in the last few hours -- so this only ever runs when it is worth running.
+     The page renders first; the banner arrives when the answer does. */
+  {% if announce_scan_due %}
+  (async () => {
+    let hushed = false;
+    try { hushed = sessionStorage.getItem('nexora-ann-hush') === '1'; } catch (_) {}
+    if (hushed) return;
+    const { ok, data } = await aiPost({ scan: true, auto: true });
+    if (!ok || !(data.changes || []).length) return;
+
+    const n = data.changes.length;
+    const first = data.changes[0];
+    $('annFoundTitle').textContent = n === 1
+      ? 'An announcement names a date that is not on your calendar'
+      : n + ' announcements name dates that are not on your calendar';
+    // Name the actual thing. "We found something" is a notification; "your
+    // SYSC2310 midterm is on Nov 7 at 14:00" is a reason to look.
+    $('annFoundText').textContent = (first.label || '').replace(/^Add /, '')
+      + (n > 1 ? ', and ' + (n - 1) + ' other' + (n > 2 ? 's' : '') + '.' : '.');
+    $('annFound').hidden = false;
+
+    $('annReview').onclick = () => {
+      $('annFound').hidden = true;
+      openScanSheet();
+      showScan(data);          // already paid for; do not call again
+    };
+    $('annLater').onclick = () => {
+      $('annFound').hidden = true;
+      try { sessionStorage.setItem('nexora-ann-hush', '1'); } catch (_) {}
+    };
+  })();
+  {% endif %}
+
 
   const AI_VERB = { add: 'Add', delete: 'Delete', move: 'Move', retime: 'Retime', rename: 'Rename' };
 
