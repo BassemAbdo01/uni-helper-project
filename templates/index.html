@@ -18,6 +18,26 @@
 .setupnag .sn-t{font-size:14.5px;font-weight:600}
 .setupnag .sn-s{font-size:12.5px;color:var(--fg-2)}
 .setupnag .sn-go{margin-top:6px;font-size:13px;font-weight:600;color:var(--amber)}
+#mylist #noteForm{display:flex;gap:10px;margin-bottom:4px}
+#mylist #noteText{flex:1;min-width:0;background:var(--surface-2);border:1px solid var(--line-2);
+  color:var(--fg);padding:10px 12px;border-radius:7px;font:inherit;font-size:14px}
+#mylist #noteText:focus{outline:none;border-color:var(--amber)}
+#mylist .notes{list-style:none;margin:14px 0 0;padding:0}
+#mylist .notes li{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
+  padding:11px 0;border-bottom:1px solid var(--line)}
+#mylist .notes li:last-child{border-bottom:0}
+#mylist .notes .box{width:17px;height:17px;border-radius:4px;border:1px solid var(--line-2);
+  background:none;color:transparent;font-size:11px;line-height:1;cursor:pointer;
+  display:grid;place-items:center;padding:0;flex:none}
+#mylist .notes li:hover .box{border-color:var(--amber)}
+#mylist .notes li.on .box{background:var(--amber);border-color:var(--amber);color:#140F09}
+#mylist .notes li.on .txt{text-decoration:line-through;opacity:.5}
+#mylist .notes .txt{font-size:14.5px;min-width:0;overflow-wrap:anywhere}
+#mylist .notes .from{display:block;font-size:11px;color:var(--amber);margin-top:3px;
+  font-family:var(--mono);letter-spacing:.06em}
+#mylist .notes .del{border:0;background:none;color:var(--fg-3);cursor:pointer;font-size:16px;
+  line-height:1;padding:2px 6px;border-radius:5px}
+#mylist .notes .del:hover{color:var(--red);background:var(--red-soft)}
 .task[hidden]{display:none}
 .task{display:grid;grid-template-columns:auto 1fr auto;gap:13px;align-items:center;
   padding:13px 0;border-bottom:1px solid var(--line);width:100%;background:none;border-left:0;
@@ -320,6 +340,27 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
       </div>
     </section>
 
+    {# The queue above is what Nexora knows is due. This is what the student
+       decided -- "email the prof", "print the lab sheet" -- which nothing else
+       on the page can know. Kept out of Task on purpose: the calendar, the ics
+       feed and the planner all read Tasks, and none of this belongs there. #}
+    <section class="card" id="mylist">
+      <header>
+        <div><span class="k">Today</span><h2>What I want to do</h2></div>
+        <span class="k" style="margin:0" id="noteCount"></span>
+      </header>
+      <div class="body pad">
+        <form id="noteForm" autocomplete="off">
+          <input id="noteText" maxlength="500" placeholder="Email Prof about the lab report&hellip;"
+                 aria-label="Something you want to do today">
+          <button class="btn" type="submit">Add</button>
+        </form>
+        <ul class="notes" id="noteList"></ul>
+        <p class="empty" id="noteEmpty" hidden>Nothing yet. This is your own list &mdash;
+           Nexora never puts anything here.</p>
+      </div>
+    </section>
+
     <section class="card" id="courses">
       <header>
         <div><span class="k">Course intelligence</span><h2>Your courses</h2></div>
@@ -616,6 +657,75 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
     document.body.style.overflow = 'hidden';
     show(0);
   }
+
+  /* ---- your own list ----
+     Rendered from the server's copy every time, so the page and the database
+     cannot drift. Text is set with textContent: this is the one list on the
+     dashboard whose contents a student typed, and it goes nowhere near
+     innerHTML. */
+  const noteList = $('#noteList'), noteEmpty = $('#noteEmpty'), noteCount = $('#noteCount');
+  const drawNotes = (notes) => {
+    noteList.replaceChildren();
+    const left = notes.filter(n => !n.done).length;
+    noteCount.textContent = notes.length ? (left + ' to go') : '';
+    noteEmpty.hidden = notes.length > 0;
+    notes.forEach(n => {
+      const li = document.createElement('li');
+      if (n.done) li.className = 'on';
+
+      const box = document.createElement('button');
+      box.type = 'button';
+      box.className = 'box';
+      box.textContent = '✓';
+      box.setAttribute('aria-pressed', n.done ? 'true' : 'false');
+      box.setAttribute('aria-label', (n.done ? 'Undo: ' : 'Mark done: ') + n.text);
+      box.onclick = () => sendNote('/api/day-notes/' + encodeURIComponent(n.id), 'POST');
+
+      const txt = document.createElement('span');
+      txt.className = 'txt';
+      txt.textContent = n.text;
+      if (n.carried) {
+        const from = document.createElement('span');
+        from.className = 'from';
+        from.textContent = 'carried over';
+        txt.append(from);
+      }
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'del';
+      del.textContent = '×';
+      del.setAttribute('aria-label', 'Remove: ' + n.text);
+      del.onclick = () => sendNote('/api/day-notes/' + encodeURIComponent(n.id), 'DELETE');
+
+      li.append(box, txt, del);
+      noteList.append(li);
+    });
+  };
+
+  const sendNote = async (url, method, body) => {
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json();
+      if (data.notes) drawNotes(data.notes);
+      else if (data.error) showToast ? showToast(data.error) : alert(data.error);
+    } catch (_) { /* leave the list as it was rather than guessing */ }
+  };
+
+  $('#noteForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const field = $('#noteText');
+    const text = field.value.trim();
+    if (!text) return;
+    field.value = '';
+    sendNote('/api/day-notes', 'POST', { text });
+  });
+
+  drawNotes({{ day_notes | tojson }});
 
   /* ---- which term is on screen ----
      Importing every term is a legitimate choice; opening on all of them is

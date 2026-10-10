@@ -836,6 +836,29 @@ class UserGradingScale(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class DayNote(db.Model):
+    """Something the student wants to do today, in their own words.
+
+    Deliberately NOT a Task. A Task is a dated deadline, and the dashboard
+    queue, the calendar, the .ics feed and the study planner all read Tasks --
+    so "email my prof about the lab" would appear on a calendar as a deadline,
+    be exported to Google, and have study hours allocated to it. Teaching each
+    of those to ignore a new kind is the trap CLAUDE.md records with
+    build_grouped_cards, where an unknown kind silently landed on no day.
+
+    `day` is the student's own day, not the server's -- the same rule as every
+    other date here.
+    """
+    __tablename__ = "day_note"
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    text = db.Column(db.String(500), nullable=False)
+    day = db.Column(db.String(10), default="", index=True)
+    done = db.Column(db.Boolean, default=False)
+    done_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class AcademicUpdate(db.Model):
     id = db.Column(db.String(64), primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
@@ -4695,6 +4718,7 @@ def home():
         # anything is connected -- a setup prompt that outlives setup reads
         # as the app being broken.
         setup=_setup_state(current_user.id),
+        day_notes=_day_notes_for(current_user.id, _student_today(current_user)),
         task_preview=task_preview,
         done_cards=done_cards,
         upcoming_cards=upcoming_cards,
@@ -7994,6 +8018,72 @@ def tour_state():
     current_user.tour_done = request.method == "POST"
     db.session.commit()
     return jsonify({"ok": True, "tour_done": bool(current_user.tour_done)})
+
+
+DAY_NOTE_MAX = 40            # per day, loud rather than silent
+
+
+def _day_notes_for(user_id, today):
+    """Today's list, plus anything unfinished from before.
+
+    Something written yesterday and not done has not stopped mattering, and a
+    list that empties itself overnight teaches people not to use it. Finished
+    items stay on the day they were finished, so today's list does not fill up
+    with last week's ticks.
+    """
+    rows = (DayNote.query.filter_by(user_id=user_id)
+            .filter(db.or_(DayNote.day == today.isoformat(),
+                           db.and_(DayNote.done == False,  # noqa: E712
+                                   DayNote.day < today.isoformat())))
+            .order_by(DayNote.done.asc(), DayNote.created_at.asc())
+            .limit(DAY_NOTE_MAX * 2).all())
+    return [{
+        "id": r.id, "text": r.text, "done": bool(r.done),
+        "day": r.day or "",
+        # Shown so a carried-over item reads as carried over rather than as
+        # something the student wrote this morning and forgot.
+        "carried": bool(r.day and r.day < today.isoformat() and not r.done),
+    } for r in rows]
+
+
+@app.route("/api/day-notes", methods=["POST"])
+@limiter.limit("120 per hour")
+@login_required
+def add_day_note():
+    text = str((request.get_json(silent=True) or {}).get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Write something first."}), 400
+    today = _student_today(current_user)
+    existing = DayNote.query.filter_by(
+        user_id=current_user.id, day=today.isoformat()).count()
+    if existing >= DAY_NOTE_MAX:
+        return jsonify({"error": f"That is {DAY_NOTE_MAX} things for one day, which "
+                                 "is already more than a day holds."}), 400
+    row = DayNote(id=uuid4().hex, user_id=current_user.id, text=text[:500],
+                  day=today.isoformat())
+    db.session.add(row)
+    db.session.commit()
+    return jsonify({"ok": True, "notes": _day_notes_for(current_user.id, today)}), 201
+
+
+@app.route("/api/day-notes/<note_id>", methods=["POST", "DELETE"])
+@login_required
+def update_day_note(note_id):
+    row = DayNote.query.filter_by(user_id=current_user.id, id=note_id).first()
+    if not row:
+        return jsonify({"error": "That is no longer on your list."}), 404
+    today = _student_today(current_user)
+    if request.method == "DELETE":
+        db.session.delete(row)
+    else:
+        row.done = not row.done
+        row.done_at = datetime.utcnow() if row.done else None
+        # A carried-over item that gets ticked belongs to the day it was
+        # actually done, or tomorrow's list shows it again as unfinished.
+        if row.done:
+            row.day = today.isoformat()
+    db.session.commit()
+    return jsonify({"ok": True, "notes": _day_notes_for(current_user.id, today)})
 
 
 @app.route("/api/start-my-day", methods=["GET"])
