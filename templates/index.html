@@ -18,13 +18,26 @@
 .setupnag .sn-t{font-size:14.5px;font-weight:600}
 .setupnag .sn-s{font-size:12.5px;color:var(--fg-2)}
 .setupnag .sn-go{margin-top:6px;font-size:13px;font-weight:600;color:var(--amber)}
-#mylist #noteForm{display:flex;gap:10px;margin-bottom:4px}
+/* The student's own list, now a block inside the task card rather than a card
+   of its own. The rule above it is what keeps the two lists from reading as
+   one -- Nexora's half, then yours. */
+.mine{margin-top:15px;padding-top:13px;border-top:1px solid var(--line-2)}
+.mine-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.mine-t{margin:0;font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--fg-3);font-weight:400}
+.mine-n{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--fg-3)}
+/* .empty is the big centred card-level state ("Nothing queued"); inside the
+   card it only needs to be a quiet line. */
+.mine-empty{margin:9px 0 0;font-size:13px;color:var(--fg-3)}
+/* The form sits BELOW the list now: at the top of its own card it was the
+   headline, here the list is, and an input at the end reads as "add to it". */
+#mylist #noteForm{display:flex;gap:9px;margin-top:11px}
 #mylist #noteText{flex:1;min-width:0;background:var(--surface-2);border:1px solid var(--line-2);
-  color:var(--fg);padding:10px 12px;border-radius:7px;font:inherit;font-size:14px}
+  color:var(--fg);padding:9px 11px;border-radius:7px;font:inherit;font-size:13.5px}
 #mylist #noteText:focus{outline:none;border-color:var(--amber)}
-#mylist .notes{list-style:none;margin:14px 0 0;padding:0}
+#mylist .notes{list-style:none;margin:7px 0 0;padding:0}
 #mylist .notes li{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
-  padding:11px 0;border-bottom:1px solid var(--line)}
+  padding:9px 0;border-bottom:1px solid var(--line)}
 #mylist .notes li:last-child{border-bottom:0}
 #mylist .notes .box{width:17px;height:17px;border-radius:4px;border:1px solid var(--line-2);
   background:none;color:transparent;font-size:11px;line-height:1;cursor:pointer;
@@ -337,27 +350,34 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
             {% endfor %}
           </div>
         </details>
-      </div>
-    </section>
 
-    {# The queue above is what Nexora knows is due. This is what the student
-       decided -- "email the prof", "print the lab sheet" -- which nothing else
-       on the page can know. Kept out of Task on purpose: the calendar, the ics
-       feed and the planner all read Tasks, and none of this belongs there. #}
-    <section class="card" id="mylist">
-      <header>
-        <div><span class="k">Today</span><h2>What I want to do</h2></div>
-        <span class="k" style="margin:0" id="noteCount"></span>
-      </header>
-      <div class="body pad">
-        <form id="noteForm" autocomplete="off">
-          <input id="noteText" maxlength="500" placeholder="Email Prof about the lab report&hellip;"
-                 aria-label="Something you want to do today">
-          <button class="btn" type="submit">Add</button>
-        </form>
-        <ul class="notes" id="noteList"></ul>
-        <p class="empty" id="noteEmpty" hidden>Nothing yet. This is your own list &mdash;
-           Nexora never puts anything here.</p>
+        {# The queue above is what Nexora knows is due. This is what the student
+           decided -- "email the prof", "print the lab sheet" -- which nothing
+           else on the page can know.
+
+           It lives INSIDE this card. As its own card it carried a second
+           "TODAY" label and a second heading directly under the first, which
+           reads as two separate features rather than one day; it also ate
+           ~200px of the widest column for a two-item list and pushed the
+           course grid down. One card, two lists, separated by a rule.
+
+           Still deliberately NOT a Task, and the merge is visual only: the
+           calendar, the .ics feed and the planner all read Tasks, and none of
+           this belongs in any of them. #}
+        <div class="mine" id="mylist">
+          <div class="mine-h">
+            <h3 class="mine-t">Yours</h3>
+            <span class="mine-n" id="noteCount"></span>
+          </div>
+          <ul class="notes" id="noteList"></ul>
+          <p class="mine-empty" id="noteEmpty" hidden>Anything Nexora cannot know about &mdash;
+             it never puts anything here itself.</p>
+          <form id="noteForm" autocomplete="off">
+            <input id="noteText" maxlength="500" placeholder="Email Prof about the lab report&hellip;"
+                   aria-label="Something you want to do today">
+            <button class="btn" type="submit">Add</button>
+          </form>
+        </div>
       </div>
     </section>
 

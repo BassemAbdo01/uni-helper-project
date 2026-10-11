@@ -138,3 +138,35 @@ def test_it_is_not_a_task_so_it_never_reaches_the_calendar(client):
 
 def test_it_needs_an_account(client):
     assert _add(client, "x").status_code in (302, 401)
+
+
+def test_the_personal_list_lives_inside_the_task_card(client):
+    """Two cards on one screen both headed TODAY read as two separate
+    features rather than one day, and the owner asked for one card. The merge
+    is visual only -- a DayNote is still not a Task -- so what has to hold is
+    that `#mylist` renders INSIDE `#tasks` and not as a sibling card after it.
+
+    Pinned because the failure is silent: split back into two cards the page
+    still works, still shows every note, and only looks wrong.
+    """
+    _account(client)
+    _add(client, "Email the prof")
+    body = client.get("/dashboard").get_data(as_text=True)
+
+    tasks = body.index('id="tasks"')
+    mine = body.index('id="mylist"')
+    end_of_tasks = body.index("</section>", tasks)
+    assert tasks < mine < end_of_tasks, "the personal list escaped the task card"
+
+    # ...and it is a plain block, not a second card with its own header
+    assert 'class="mine"' in body
+    assert 'class="card" id="mylist"' not in body
+
+
+def test_the_add_box_is_still_reachable_with_no_notes_yet(client):
+    """The empty state replaced a card-level `.empty`, which is centred and
+    padded for a whole card. Whatever it looks like, the form has to survive."""
+    _account(client)
+    body = client.get("/dashboard").get_data(as_text=True)
+    assert 'id="noteForm"' in body and 'id="noteText"' in body
+    assert 'id="noteEmpty"' in body
