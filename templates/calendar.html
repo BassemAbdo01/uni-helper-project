@@ -40,6 +40,25 @@
   border-bottom:1px solid var(--line);font-size:13px}
 .sheet .preview li:last-child{border-bottom:0}
 .sheet .preview time{font-family:var(--mono);font-size:11.5px;color:var(--fg-3);white-space:nowrap}
+/* Attaching a picture to the instruction box. */
+.sheet .attach{display:flex;align-items:center;gap:9px;margin-top:-2px}
+.sheet .attach button{font-size:12.5px;padding:7px 11px}
+.sheet .attach-name{font-size:12.5px;color:var(--fg-2);min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.sheet .attach #aiDrop{padding:4px 8px;font-size:14px;line-height:1;color:var(--fg-3)}
+/* A term schedule always carries weeks that have already gone. They are shown
+   rather than dropped -- a row the student can see in their own picture must
+   not vanish without a word -- but they start unticked. */
+/* `.sheet input` is the full-width form field for this dialog -- width:100%,
+   padding, a border and a surface -- and a checkbox is an input. Left to it the
+   tick rendered as a 355x344 grey panel covering the whole preview. Every one
+   of those has to be undone by hand. */
+.sheet .preview li .pick{width:15px;height:15px;min-width:0;flex:none;margin:3px 0 0;
+  padding:0;border:0;border-radius:0;background:none;accent-color:var(--amber);cursor:pointer}
+.sheet .preview li > span{flex:1;min-width:0}
+.sheet .preview li.off{opacity:.55}
+.sheet .preview .gone{display:inline-block;margin-left:7px;font-family:var(--mono);
+  font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3)}
 .sheet .preview .why{display:block;margin-top:4px;font-size:11.5px;color:var(--fg-3);font-style:italic;line-height:1.45}
 .sheet .notes{margin:9px 0 0;font-size:12px;color:var(--fg-3);line-height:1.45}
 .monthnav .sync{width:auto;padding:0 12px;font-size:12.5px;gap:7px;grid-auto-flow:column}
@@ -430,7 +449,18 @@ dialog.sheet::backdrop{background:#0B0908cc}
 
     <div>
       <label for="aiText">What should change</label>
-      <textarea id="aiText" maxlength="2000" placeholder="Biweekly ELEC2501B tests from Oct 13, five of them, no uni Oct 23-28 so continue after"></textarea>
+      <textarea id="aiText" maxlength="2000" placeholder="Biweekly ELEC2501B tests from Oct 13, five of them, no uni Oct 23-28 so continue after&#10;&#10;— or attach your course schedule below and say: for everything written as Tutorial here, treat it as a Test for ELEC2501B"></textarea>
+    </div>
+
+    {# The picture and the sentence are halves of one request. A schedule image
+       read on its own can only give back what the table already says, which the
+       student can already see; "treat every Tutorial as a Test" is the part that
+       is not printed anywhere on it. So the attach row lives in the SAME sheet
+       as the instruction box rather than being its own flow. #}
+    <div class="attach" id="aiAttach">
+      <button type="button" id="aiPick">&#9707; Attach a picture</button>
+      <span class="attach-name" id="aiFileName" hidden></span>
+      <button type="button" id="aiDrop" hidden aria-label="Remove the attached picture">&times;</button>
     </div>
 
     <p class="understood" id="aiUnderstood" hidden></p>
@@ -669,17 +699,99 @@ dialog.sheet::backdrop{background:#0B0908cc}
      are built as nodes with textContent. */
   const aiSheet = $('aiSheet');
   let aiChanges = null;
+  let aiFile = null;              // the attached picture, if there is one
+
+  const AI_VERB = { add: 'Add', delete: 'Delete', move: 'Move', retime: 'Retime', rename: 'Rename' };
+
+  /* One preview renderer for all three paths -- the assistant, the announcement
+     scan and a picture -- and every row carries a tick.
+
+     A term schedule always holds rows the student does not want: the table that
+     prompted this runs from 07-Sep, and half of it had already happened by the
+     time it was read. "Add all 14" is not an answer to that, and silently
+     dropping the weeks that have gone is worse, because the student can see
+     them in their own picture. So they are listed, marked past, and start
+     unticked. The server re-checks every change on the way back in, so the
+     ticks only decide what gets sent. */
+  const drawPreview = (changes) => {
+    aiChanges = changes || [];
+    const list = $('aiList');
+    list.replaceChildren();
+    aiChanges.forEach((ch, i) => {
+      const li = document.createElement('li');
+      const pick = document.createElement('input');
+      pick.type = 'checkbox';
+      pick.className = 'pick';
+      pick.checked = !ch.past;
+      pick.dataset.i = String(i);
+      pick.setAttribute('aria-label', ch.label || 'This change');
+      if (ch.past) li.classList.add('off');
+      pick.onchange = () => { li.classList.toggle('off', !pick.checked); countPicked(); };
+
+      const what = document.createElement('span');
+      const line = document.createElement('b');
+      line.textContent = ch.label || (AI_VERB[ch.op] || ch.op);
+      what.append(line);
+      if (ch.past) {
+        const gone = document.createElement('span');
+        gone.className = 'gone';
+        gone.textContent = 'past';
+        line.append(gone);
+      }
+      if (ch.why) {
+        const q = document.createElement('span');
+        q.className = 'why';
+        q.textContent = '“' + ch.why + '”';
+        what.append(q);
+      }
+      li.append(pick, what);
+      if (ch.op && ch.op !== 'add') {
+        const tag = document.createElement('time');
+        tag.textContent = AI_VERB[ch.op] || ch.op;
+        li.append(tag);
+      }
+      list.append(li);
+    });
+    countPicked();
+  };
+
+  const picked = () => [...$('aiList').querySelectorAll('.pick')]
+    .filter(p => p.checked)
+    .map(p => aiChanges[Number(p.dataset.i)])
+    .filter(Boolean);
+
+  const countPicked = () => {
+    const n = picked().length;
+    const adds = aiChanges && aiChanges.length && aiChanges.every(c => c.op === 'add');
+    $('aiCreate').disabled = !n;
+    $('aiCreate').textContent = !n ? 'Nothing ticked'
+      : adds ? (n === 1 ? 'Add it' : 'Add all ' + n)
+             : (n === 1 ? 'Apply 1 change' : 'Apply ' + n + ' changes');
+  };
+
+  // The attached picture. It is cleared on every reset, so a sheet reopened
+  // after one reading never silently re-sends the last image.
+  const showAttached = () => {
+    $('aiFileName').textContent = aiFile ? aiFile.name : '';
+    $('aiFileName').hidden = !aiFile;
+    $('aiDrop').hidden = !aiFile;
+    $('aiPick').textContent = aiFile ? '◻ Change picture' : '◻ Attach a picture';
+  };
 
   const aiReset = () => {
     aiChanges = null;
+    aiFile = null;
+    showAttached();
+    $('aiAttach').hidden = false;
     $('aiTitle').textContent = 'Edit your calendar';
     $('aiHint').textContent = 'Say what you want done — add a series of tests, '
-      + 'move something, rename it, delete it. Nothing changes until you have seen '
-      + 'the list and confirmed it.';
+      + 'move something, rename it, delete it. Attach a timetable and say how to '
+      + 'read it. Nothing changes until you have seen the list and confirmed it.';
     $('aiText').closest('div').hidden = false;
     $('aiUnderstood').hidden = true;
     $('aiPreview').hidden = true;
     $('aiCreate').hidden = true;
+    $('aiCreate').disabled = false;
     $('aiRead').hidden = false;
     $('aiRead').textContent = 'Read it';
     $('aiError').textContent = '';
@@ -689,6 +801,14 @@ dialog.sheet::backdrop{background:#0B0908cc}
 
   $('aiEvents').onclick = () => { $('aiText').value = ''; aiReset(); aiSheet.showModal(); };
 
+  $('aiPick').onclick = () => $('shotFile').click();
+  $('aiDrop').onclick = () => { aiFile = null; showAttached(); };
+  $('shotFile').onchange = () => {
+    aiFile = $('shotFile').files[0] || null;
+    $('shotFile').value = '';          // so the same file can be picked again
+    showAttached();
+  };
+
   /* ---- dates your instructors announced ----
      Brightspace publishes "the midterm is Saturday Nov 7 at 2PM" as prose in an
      announcement and never as a calendar item, so Nexora held every word of it
@@ -696,29 +816,18 @@ dialog.sheet::backdrop{background:#0B0908cc}
      own shape, so the preview and the Apply path are the same code. */
   // Shared by the button and the banner. `pre` is a result already fetched, so
   // reviewing what the banner found does not pay for a second call.
-  const showScan = (data) => {
-    aiChanges = data.changes || [];
-    const list = $('aiList');
-    list.replaceChildren();
-    aiChanges.forEach(ch => {
-      const li = document.createElement('li');
-      const what = document.createElement('span');
-      const line = document.createElement('b');
-      line.textContent = ch.label || '';
-      what.append(line);
-      if (ch.why) {
-        const q = document.createElement('span');
-        q.className = 'why';
-        q.textContent = '“' + ch.why + '”';
-        what.append(q);
-      }
-      li.append(what);
-      list.append(li);
-    });
+  // `source` is 'image' or 'announcements'. It used to say "found in
+  // announcements your instructors posted" on both paths, so a screenshot the
+  // student had just attached was described as something their instructors had
+  // written -- a confident sentence about where a date came from, and wrong.
+  const showScan = (data, source) => {
+    drawPreview(data.changes);
     const n = aiChanges.length;
-    $('aiUnderstood').textContent = n
-      ? 'Found in announcements your instructors posted. Nothing is added until you confirm.'
-      : 'Nothing new to add.';
+    $('aiUnderstood').textContent = data.understood || (n
+      ? (source === 'image'
+          ? 'Nexora read your picture. Check it against the dates before adding them — nothing is on your calendar yet.'
+          : 'Found in announcements your instructors posted. Nothing is added until you confirm.')
+      : 'Nothing new to add.');
     $('aiUnderstood').hidden = false;
     $('aiCountLabel').textContent = n === 1 ? '1 date found' : n + ' dates found';
     if (data.notes && data.notes.length) {
@@ -727,7 +836,6 @@ dialog.sheet::backdrop{background:#0B0908cc}
     }
     $('aiPreview').hidden = !n;
     $('aiCreate').hidden = !n;
-    $('aiCreate').textContent = n === 1 ? 'Add it' : 'Add all ' + n;
   };
 
   const openScanSheet = () => {
@@ -737,45 +845,29 @@ dialog.sheet::backdrop{background:#0B0908cc}
       + 'becomes a calendar entry. Nexora reads the recent ones and shows you what '
       + 'it found; nothing is added until you confirm.';
     $('aiText').closest('div').hidden = true;
+    $('aiAttach').hidden = true;     // nothing to attach to an announcement scan
     $('aiRead').hidden = true;
     aiSheet.showModal();
   };
 
-  /* ---- an exam timetable, from a picture of one ----
+  /* ---- a timetable, from a picture of one ----
      Two passes on the server: vision OCR transcribes the table, then the JSON
      path turns it into rows. Every date is parsed and checked there; nothing
      here reads a date out of prose, and nothing is written until confirmed. */
-  $('shotBtn').onclick = () => $('shotFile').click();
-  $('shotFile').onchange = async () => {
-    const file = $('shotFile').files[0];
-    $('shotFile').value = '';                 // so the same file can be retried
-    if (!file) return;
-    openScanSheet();
-    $('aiTitle').textContent = 'Exams found in your timetable';
-    $('aiHint').textContent = 'Nexora read your screenshot. Check the dates against '
-      + 'it before adding them — nothing is on your calendar yet.';
-    $('aiUnderstood').textContent = 'Reading the image…';
-    $('aiUnderstood').hidden = false;
-
-    const form = new FormData();
-    form.append('image', file);
-    let data = {}, ok = false;
-    try {
-      const res = await fetch('/api/calendar/from-image', { method: 'POST', body: form });
-      ok = res.ok;
-      data = await res.json();
-    } catch (_) {
-      data = { error: 'That upload did not go through.' };
-    }
-    if (!ok) {
-      $('aiUnderstood').hidden = true;
-      $('aiError').textContent = data.error || 'Nexora could not read that image.';
-      return;
-    }
-    showScan(data);
-    if (!(data.changes || []).length) {
-      $('aiUnderstood').textContent = 'Nexora found no exam rows in that image.';
-    }
+  /* The picture opens the assistant rather than uploading on the spot. Reading
+     a schedule with no instruction can only give back what the table already
+     says -- the student is looking straight at it -- so the sheet opens with
+     the file picker AND the instruction box, and the reading happens when they
+     press Read it. */
+  $('shotBtn').onclick = () => {
+    $('aiText').value = '';
+    aiReset();
+    aiSheet.showModal();
+    $('aiTitle').textContent = 'Read a timetable';
+    $('aiHint').textContent = 'Attach your timetable, and say anything Nexora needs '
+      + 'to know about it — what to call the rows, which course they belong to, '
+      + 'what to leave out. Nothing is added until you have seen the list.';
+    $('shotFile').click();
   };
 
   $('scanAnn').onclick = async () => {
@@ -788,7 +880,7 @@ dialog.sheet::backdrop{background:#0B0908cc}
       $('aiError').textContent = data.error || 'Those could not be read.';
       return;
     }
-    showScan(data);
+    showScan(data, 'announcements');
   };
   $('aiCancel').onclick = () => aiSheet.close();
   // Editing the request invalidates the preview: the list on screen must always
@@ -842,7 +934,7 @@ dialog.sheet::backdrop{background:#0B0908cc}
     $('annReview').onclick = () => {
       $('annFound').hidden = true;
       openScanSheet();
-      showScan(data);          // already paid for; do not call again
+      showScan(data, 'announcements');   // already paid for; do not call again
     };
     $('annLater').onclick = () => {
       $('annFound').hidden = true;
@@ -852,35 +944,56 @@ dialog.sheet::backdrop{background:#0B0908cc}
   {% endif %}
 
 
-  const AI_VERB = { add: 'Add', delete: 'Delete', move: 'Move', retime: 'Retime', rename: 'Rename' };
 
+  /* One button, two readers. With a picture attached the sentence becomes the
+     INSTRUCTION for reading it -- "for everything written as Tutorial here,
+     treat it as a Test for ELEC2501B" -- and the image route answers in the
+     assistant's own change shape, so the preview and Apply below are the same
+     code either way. */
   $('aiRead').onclick = async () => {
     const text = $('aiText').value.trim();
-    if (!text) { $('aiError').textContent = 'Say what you want doing first.'; return; }
+    if (!aiFile && !text) {
+      $('aiError').textContent = 'Say what you want doing, or attach a timetable.';
+      return;
+    }
     $('aiError').textContent = '';
     $('aiRead').disabled = true;
     $('aiRead').textContent = 'Reading\u2026';
-    const { ok, data } = await aiPost({ text });
+    if (aiFile) {
+      $('aiUnderstood').textContent = 'Reading the picture\u2026';
+      $('aiUnderstood').hidden = false;
+    }
+
+    let ok = false, data = {};
+    if (aiFile) {
+      const form = new FormData();
+      form.append('image', aiFile);
+      if (text) form.append('instruction', text);
+      try {
+        const res = await fetch('/api/calendar/from-image', { method: 'POST', body: form });
+        ok = res.ok;
+        data = await res.json();
+      } catch (_) {
+        data = { error: 'That upload did not go through.' };
+      }
+    } else {
+      ({ ok, data } = await aiPost({ text }));
+    }
     $('aiRead').disabled = false;
     $('aiRead').textContent = 'Read it';
+
     if (data.understood) {
       $('aiUnderstood').textContent = data.understood;
       $('aiUnderstood').hidden = false;
+    } else if (aiFile) {
+      $('aiUnderstood').hidden = true;
     }
-    if (!ok) { $('aiError').textContent = data.error || 'That could not be read.'; return; }
+    if (!ok) {
+      $('aiError').textContent = data.error || 'That could not be read.';
+      return;
+    }
 
-    aiChanges = data.changes || [];
-    const list = $('aiList');
-    list.replaceChildren();
-    aiChanges.forEach(ch => {
-      const li = document.createElement('li');
-      const what = document.createElement('span');
-      what.textContent = ch.label || (AI_VERB[ch.op] || ch.op);
-      const tag = document.createElement('time');
-      tag.textContent = AI_VERB[ch.op] || ch.op;
-      li.append(what, tag);
-      list.append(li);
-    });
+    drawPreview(data.changes);
     const n = aiChanges.length;
     const parts = Object.entries(data.counts || {})
       .map(([op, c]) => c + ' ' + (AI_VERB[op] || op).toLowerCase());
@@ -889,21 +1002,29 @@ dialog.sheet::backdrop{background:#0B0908cc}
       $('aiNotes').textContent = data.notes.join(' ');
       $('aiNotes').hidden = false;
     }
+    if (!n) {
+      $('aiError').textContent = aiFile
+        ? 'Nexora found nothing dated in that picture.'
+        : 'Nexora found nothing to change.';
+      return;
+    }
     $('aiPreview').hidden = false;
     $('aiRead').hidden = true;
     $('aiCreate').hidden = false;
-    $('aiCreate').textContent = n === 1 ? 'Apply 1 change' : 'Apply ' + n + ' changes';
   };
 
   $('aiCreate').onclick = async () => {
-    if (!aiChanges || !aiChanges.length) return;
+    // Only the rows still ticked. The server re-checks every change it is
+    // handed, so this decides what gets sent and never what is allowed.
+    const chosen = picked();
+    if (!chosen.length) return;
     $('aiCreate').disabled = true;
     $('aiCreate').textContent = 'Applying\u2026';
-    const { ok, data } = await aiPost({ changes: aiChanges, confirm: true });
+    const { ok, data } = await aiPost({ changes: chosen, confirm: true });
     $('aiCreate').disabled = false;
     if (!ok) {
       $('aiError').textContent = data.error || 'Those could not be applied.';
-      $('aiCreate').textContent = 'Apply';
+      countPicked();
       return;
     }
     aiSheet.close();

@@ -525,6 +525,54 @@ reaches the work through `StudySession.task_id`, so no column was needed there.
 No extension release is required: `source_url` and `due_at` already travel on
 the same item, in both `background.js` and `content.js`.
 
+## Three D2L URLs for one lecture, and only one of them saves it
+
+Reported three times, wrong for a different reason each time, and the third
+reason was that nobody had asked D2L what it was offering.
+
+| URL | As a fetch | As a link |
+|---|---|---|
+| `/d2l/api/le/<v>/<ou>/content/topics/<id>/file` | 200, `attachment` | **`{ Errors: [ {Message: "Forbidden"} ] }`** on a blank page |
+| `topic.Url`, e.g. `/content/enforced/<ou>-<n>.<term>/Lecture_3.pdf` | 200, no disposition | opens the browser's PDF **viewer** |
+| `/d2l/le/content/<ou>/topics/files/download/<id>/DirectFileTopicDownload` | 200, `attachment` | **saves the file** |
+
+Measured against a real Carleton lecture (ELEC2501B, topic 4894237) before any
+of it was written down. The first round fixed the Forbidden page by rewriting
+the API URL into D2L's **viewer** route (`_browsable_d2l`) -- which opens, so
+the error went away and the lecture still did not download. The owner reported
+it as still broken, correctly.
+
+**The TOC was already handing over everything needed.** Each topic carries
+`TypeIdentifier: "File"` and a real `Url`; what threw it away was
+`source_url: file.download_url || file.source_url`, which preferred the API
+endpoint for **every topic that had an id**. So a stored `/file` URL says
+nothing about whether the item is a file, which is exactly why the server
+cannot repair old rows: `CourseContent` has no `file_ext` or `download_url`
+column -- the extension sends both and `_import_content` drops them -- so for a
+stale row it cannot tell a PDF from an HTML page. `_browsable_d2l` therefore
+still points at the viewer, which works for every topic type. **Do not make it
+guess**; a download link that 404s on a discussion board is worse than a viewer
+link that opens.
+
+`fileInfoFromTopic` builds the download route **only** when D2L itself says
+`TypeIdentifier` is `File`, and `classify_url` carries the extension-bearing URL
+alongside it, because `classifyContent` reads the file extension off the link
+and the download route contains no `.pdf` -- handing it the download URL files
+every lecture as a `page`, which hides it rather than losing it.
+
+**An empty href is not a link.** `new URL('', base)` resolves to the base and
+that string is truthy, so a topic with no `Url` of its own linked to
+Brightspace's front page from the worker, and to whatever page the scraper
+happened to be on from the content script. Found by *running*
+`fileInfoFromTopic` against a topic with no `Url`, not by reading it -- which is
+the point of `extension/topicfile-check.html`, where the real function runs
+against the real TOC JSON Brightspace returned.
+
+This needs an extension release: the link is built during the scrape, so
+**existing rows keep the link they were imported with until the next sync
+rewrites them.** Same shape as the deadline-date fix -- a sync repairs them, a
+migration cannot.
+
 ## A stored timestamp is UTC; a displayed one is the student's clock
 
 `local_stamp(value, fmt, user)`, registered as the Jinja filter
@@ -596,6 +644,63 @@ sources update their own row instead of fighting over one.
 short-circuits an item whose hash has not changed, so a deadline attached to
 already-imported content would never be created retroactively -- which is every
 student who synced before this shipped.
+
+## A picture and a sentence are one request
+
+`/api/calendar/from-image` takes an `instruction` beside the image, and the
+calendar assistant's sheet is where both are typed -- one box, not two flows.
+
+The table that prompted it is a weekly lab/tutorial schedule, and what was
+wanted from it was *"for everything thats written as tutorial here, treat it as
+Test, for example Tutorial 2 would be Test 2 for elec"*. The word **Test**
+appears nowhere on that image, and neither does the course. An image reader with
+no instruction can only ever hand back what the table already says, which the
+student is looking straight at -- so the route read the picture, titled
+everything "Exam", and was useless for the commonest schedule a student owns.
+
+The split is the one the rest of the calendar uses: the model decides what each
+row MEANS, the server decides every date, and nothing is written until the
+preview is confirmed. `understood` comes back and is shown, because a misread
+instruction reshapes a whole term and would look completely authoritative doing
+it -- the same reason `/api/study-plan/ask` returns it.
+
+**The year is never the model's to choose.** A course schedule is written for
+people who already know which term it is, so it prints `07-Sep` and nothing
+else, and the year is then the one thing on the row nobody wrote down. This is
+exactly what got the old "exams found in your course material" panel deleted: it
+offered a first-year MATH 1004 test as "Tue, Sep 29" this September. The model
+returns `year_printed`, and when it is false `_anchor_undated_year` takes the
+**nearest occurrence to the student's own today** -- right in both directions for
+a term read during that term, and at worst six months out where a guess is a
+whole year out. Where it cannot anchor at all (29 February, with no leap year
+within reach) it returns None and the model's date stands, because a row
+vanishing is worse than a year that may be off.
+
+**The course is as often named in the instruction as in the table**, and named
+loosely: "for elec" has to resolve to ELEC2501B against the student's own codes,
+or the entries land under a code that joins to no outline, no grades and no study
+plan. Measured on the live key: "for sysc 2310" resolved to SYSC2310, and "skip
+the labs" dropped them.
+
+**Every preview row carries a tick, and the past ones start off.** A term
+schedule always holds weeks that have already happened -- the reported table runs
+from 07-Sep and half of it had gone. "Add all 14" is not an answer to that, and
+dropping them silently is worse, because the student can see them in their own
+picture. They are listed, marked `past`, and unticked. Apply sends only what is
+ticked; the server re-checks every change regardless, so the ticks decide what is
+sent and never what is allowed.
+
+Two things found by running it rather than reading it:
+
+- **`.sheet input` is the full-width form field for that dialog**, and a
+  checkbox is an input -- width, padding, border and surface all applied, so the
+  tick rendered as a 355x344 grey panel covering the entire preview. Every one
+  of those has to be undone by hand on `.pick`.
+- **A second `const AI_VERB` killed the whole page.** It was moved up so the
+  shared preview renderer could use it and the original was left in place;
+  `Uncaught SyntaxError: Identifier 'AI_VERB' has already been declared` takes
+  out every handler on the calendar, not just the new one. Read the console
+  after touching this file -- the page looks completely normal until clicked.
 
 ## Events, exams and the calendar feed
 
@@ -1283,7 +1388,7 @@ the student grants for their own origin.
   runs for minutes. `holdWorkerAwake()` / `releaseWorker()` bracket long work;
   without them, clicking away kills the sync mid-run.
 - `extension/*-check.html` are browser-run checks for the parser, the term
-  helpers and the popup state machine. They are excluded from the package.
+  helpers, the popup state machine and the topic-file link. They are excluded from the package.
   `fetch()` needs an origin, so serve the folder first --
   `venv/Scripts/python.exe -m http.server 8777 --directory extension` -- and
   open `http://localhost:8777/term-check.html`. There is no node on this

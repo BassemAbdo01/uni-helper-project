@@ -5638,15 +5638,48 @@ IMAGE_MIMES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 # same image in 2.0s with all seven courses and every date present. The full
 # chain still follows, so a lite failure costs nothing but the usual fallback.
 # End to end on that image: 106s before, 4.8s after.
+def _anchor_undated_year(month, day, today):
+    """The year for a row printed as "07-Sep", which states no year at all.
+
+    A course schedule is written for people who already know which term it is,
+    so most of them print the day and the month and nothing else. The year is
+    then the one thing on the row that nobody wrote down -- and it is exactly
+    what the "exams found in your course material" panel got wrong before it was
+    deleted: it offered a MATH 1004 test from first year as "Tue, Sep 29" this
+    September, ten of them above the calendar.
+
+    So the year is never the model's to choose. The server takes the nearest
+    occurrence to the student's own today, which is right for a term schedule
+    read during that term in either direction -- 07-Sep lands in the autumn just
+    gone, 07-Dec in the December ahead -- and is at worst six months out where a
+    guess could be a whole year out.
+    """
+    best = None
+    for year in (today.year - 1, today.year, today.year + 1):
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            continue                      # 29 February in a common year
+        gap = abs((candidate - today).days)
+        if best is None or gap < best[0]:
+            best = (gap, candidate)
+    return best[1] if best else None
+
+
 _TIMETABLE_VISION_MODELS = (["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
                             + _gemini_model_candidates(vision=True))
 
+# Deliberately not "exam timetable": the table that prompted the instruction
+# support is a weekly lab/tutorial schedule with a Note column carrying
+# "Thanksgiving Monday", "Fall Break" and "Midterm", and the note column is
+# where half the meaning lives.
 _SCHEDULE_OCR_PROMPT = (
-    "Read this screenshot of a university exam or class timetable exactly. "
+    "Read this screenshot of a university timetable or course schedule exactly. "
     "Transcribe every visible row and preserve the table structure, keeping each "
-    "row on its own line with its columns in order. Include column headers. Do "
-    "not summarise, reorder, omit or infer anything that is not printed. Return "
-    "plain text only."
+    "row on its own line with its columns in order. Include column headers, and "
+    "include every note or comment column even when most of its cells are empty. "
+    "Do not summarise, reorder, omit or infer anything that is not printed. "
+    "Return plain text only."
 )
 
 
@@ -5655,18 +5688,28 @@ _SCHEDULE_OCR_PROMPT = (
 @login_required
 @requires_active
 def calendar_from_image():
-    """Read an exam timetable out of a screenshot.
+    """Read a timetable out of a screenshot, following what the student says.
 
     A university publishes finals as a table -- course, type, date, start, end --
     and a student otherwise types seven of them in by hand, which is both the
     most tedious thing Nexora could ask for and the easiest place to make a
     mistake that matters.
 
-    Two passes, both of which already exist here: vision OCR transcribes the
-    table, then the JSON path turns the text into rows. Dates are never left to
-    the model's prose -- every one is parsed and checked on the server -- and
-    nothing is written until the student confirms, through the same preview the
-    rest of the calendar uses.
+    **The picture is half of it; the sentence beside it is the other half.** The
+    table that prompted this is a weekly lab/tutorial schedule, and what the
+    owner wanted from it was "for everything written as Tutorial here, treat it
+    as Test -- Tutorial 2 would be Test 2 for ELEC". No amount of reading the
+    image produces that: the word Test is not printed anywhere on it, and nor is
+    the course. An image reader with no instruction can only ever give back what
+    the table already says, which the student can already see.
+
+    So `instruction` reaches the same call the image does, and may rename rows,
+    change what kind of entry they become, say which course they belong to, and
+    drop the rows that are not wanted. Everything the rest of the calendar does
+    still holds: the model decides WHAT each row means, the SERVER resolves every
+    date, and nothing is written until the student has seen the list and
+    confirmed it. `understood` comes back with the plan so a misread instruction
+    is visible on the page rather than silently reshaping a term.
     """
     upload = request.files.get("image")
     if upload is None:
@@ -5680,6 +5723,7 @@ def calendar_from_image():
     if mime not in IMAGE_MIMES:
         return jsonify({"error": "Attach a PNG, JPG, WEBP or GIF."}), 400
 
+    instruction = str(request.form.get("instruction") or "").strip()[:500]
     today = _today_for_request()
     try:
         text = _gemini_image_to_outline_text(raw, mime, prompt=_SCHEDULE_OCR_PROMPT,
@@ -5694,28 +5738,57 @@ def calendar_from_image():
         return jsonify({"error": "Nexora could not read any text in that image."}), 422
 
     codes = sorted(_known_course_codes(current_user.id))
-    schema = {"rows": [{"course": "", "title": "", "kind": "exam", "date": "",
-                        "time": "", "location": "", "skip": False, "why": ""}]}
+    schema = {"understood": "",
+              "rows": [{"course": "", "title": "", "kind": "exam", "date": "",
+                        "year_printed": False, "time": "", "location": "",
+                        "skip": False, "why": ""}]}
     rules = [
         f"Today is {today.isoformat()}. Every date is ISO yyyy-mm-dd.",
-        "The text below was transcribed from a student's exam timetable. Turn "
-        "each row that states a SITTING into one entry.",
-        "Use the exam START date and START time. Ignore end times and durations.",
-        'Set skip true for any row with no exam -- a type of "None", a blank '
-        "date, a co-op or placeholder row -- and leave it out of the calendar.",
-        "course should match one of the student's own codes where the row names "
-        "the same course, even if the timetable writes it without the section "
-        "letter. Theirs are: " + (", ".join(codes) or "none imported yet") + ". "
-        "If none matches, use the code exactly as the timetable prints it.",
-        'title names the sitting for a calendar, such as "Final Exam" plus the '
-        "course's own name when the row gives one.",
-        'kind is "exam" for any sitting.',
+        "The text below was transcribed from a student's timetable or course "
+        "schedule. Turn each row that schedules something on a date into one "
+        "entry.",
+        "Use the START date and START time. Ignore end times and durations.",
+        'Set skip true for a row that schedules nothing -- "No sessions", a '
+        "break or holiday with no activity, a blank date, a placeholder.",
+        # The course is as often named in the INSTRUCTION as in the table -- a
+        # schedule printed by one course rarely repeats its own code on every
+        # row -- and it is named loosely there: "for elec" has to resolve to
+        # ELEC2501B, or the entries land under a code that joins to no outline,
+        # no grades and no study plan.
+        "course should match one of the student's own codes whenever the row or "
+        "the instruction names that course, however loosely it is written and "
+        "even without the section letter. Theirs are: "
+        + (", ".join(codes) or "none imported yet") + ". "
+        "If none matches, use the code exactly as it is printed.",
+        "title is what the entry should be called on a calendar. Default to "
+        "what the row itself calls the activity.",
+        'kind is "exam" for anything sat or graded, "event" otherwise.',
+        # The year is the one part of the date a course schedule usually never
+        # prints, so the server replaces it. Asking for this flag is cheaper
+        # and far more reliable than asking the model not to guess.
+        'year_printed is true only if the row itself shows a year. A row '
+        'reading "07-Sep" shows none, so it is false -- still give your best '
+        "date, and the server will fix the year.",
         'time is 24-hour HH:MM taken from the start time, or "" if blank.',
         "why is the row as printed, so the student can check it.",
-        "",
-        "TIMETABLE TEXT:",
-        str(text)[:12000],
     ]
+    if instruction:
+        rules += [
+            "",
+            "THE STUDENT'S INSTRUCTION outranks the defaults above. It may "
+            "rename rows, change their kind, name the course, and say which "
+            "rows to leave out. Apply it to every row it covers.",
+            'For example "treat every Tutorial as a Test" turns a row reading '
+            '"Tutorial (2)" into title "Test 2", kind "exam".',
+            "INSTRUCTION: " + instruction,
+            "",
+            "understood: one sentence to the student saying what you took the "
+            "instruction to mean, naming the rename and the course if they gave "
+            "one. Say so plainly if you could not follow part of it.",
+        ]
+    else:
+        rules += ["", 'understood: "".']
+    rules += ["", "TIMETABLE TEXT:", str(text)[:12000]]
     try:
         parsed = _gemini_json("You turn a transcribed exam timetable into JSON rows. "
                               "Output only JSON.",
@@ -5735,7 +5808,7 @@ def calendar_from_image():
     if not isinstance(rows, list):
         rows = []
 
-    changes, notes, skipped, undated, already = [], [], 0, 0, 0
+    changes, notes, skipped, undated, already, past = [], [], 0, 0, 0, 0
     for item in rows[:40]:
         if not isinstance(item, dict):
             continue
@@ -5746,36 +5819,66 @@ def calendar_from_image():
         if not day:
             undated += 1
             continue
+        # The year on a row that never printed one is the model's guess, and a
+        # guess here is a whole year out rather than a day out. See
+        # _anchor_undated_year: the server takes the nearest occurrence instead.
+        if not item.get("year_printed"):
+            anchored = _anchor_undated_year(day.month, day.day, today)
+            if anchored:
+                day = anchored
         course = _normalize_course_code(str(item.get("course") or "")) or "OTHER"
-        title = str(item.get("title") or "").strip()[:200] or "Exam"
+        title = str(item.get("title") or "").strip()[:200] or "Scheduled"
         if _already_on_the_calendar(current_user.id, course, day, title):
             already += 1
             continue
+        # Same mapping _recurrence_events uses -- EVENT_KINDS is due|exam|event
+        # and a test is an exam. `due` is deliberately unreachable from here: it
+        # means an LMS deadline, and this row came from a picture.
+        kind = str(item.get("kind") or "event").strip().lower()
+        if kind in {"test", "midterm", "final", "quiz", "exam"}:
+            kind = "exam"
+        else:
+            kind = "event"
         time_raw = str(item.get("time") or "").strip()
         if time_raw and not _TIME_RE.match(time_raw):
             time_raw = ""
+        gone = day < today
+        if gone:
+            past += 1
         changes.append({
             "op": "add", "title": title, "date": day.isoformat(), "time": time_raw,
-            "course": course, "kind": "exam",
+            "course": course, "kind": kind,
             "location": str(item.get("location") or "").strip()[:200],
-            "source_title": "Exam timetable",
+            "source_title": "Timetable",
             "why": str(item.get("why") or "").strip()[:240],
+            # A term schedule always carries weeks that have already happened.
+            # They are offered rather than dropped -- a row the student can see
+            # in their own picture must not vanish without a word -- but the
+            # sheet leaves them unticked, so nothing from last month is added by
+            # pressing one button.
+            "past": gone,
             "label": f"Add “{title}” on {day.isoformat()}"
                      + (f" at {time_raw}" if time_raw else "")
                      + f" · {course}",
         })
 
     if skipped:
-        notes.append(f"{skipped} row{'s' if skipped != 1 else ''} had no exam scheduled.")
+        notes.append(f"{skipped} row{'s' if skipped != 1 else ''} scheduled nothing.")
     if undated:
         notes.append(f"{undated} row{'s' if undated != 1 else ''} stated no date.")
     if already:
         notes.append(f"{already} {'is' if already == 1 else 'are'} already on your calendar.")
+    if past:
+        notes.append(f"{past} {'date has' if past == 1 else 'dates have'} already "
+                     "passed, so they start unticked.")
     if not changes and not notes:
-        notes.append("Nexora found no exam rows in that image.")
+        notes.append("Nexora found nothing dated in that image.")
+    understood = ""
+    if isinstance(parsed, dict):
+        understood = str(parsed.get("understood") or "").strip()[:400]
     return jsonify({"ok": True, "preview": True, "changes": changes,
                     "counts": {"add": len(changes)} if changes else {},
-                    "understood": "", "notes": notes})
+                    "understood": understood, "notes": notes})
 
 
 @app.route("/api/calendar/scan-announcements", methods=["POST"])
