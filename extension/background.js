@@ -455,7 +455,14 @@ function dateValue(value) {
   return clean(value.Date || value.date || value.StartDate || value.startDate || '');
 }
 
+// An empty href is not a link. `new URL('', base)` resolves to the BASE -- the
+// Brightspace front page here, and whatever page the scraper happened to be on
+// in the content script -- and that string is truthy, so a topic with no URL of
+// its own linked somewhere real and completely unrelated. Found by running this
+// against a topic that has no Url; a link that confidently opens the wrong
+// thing is the same class of failure as a wrong date.
 function absolute(origin, href) {
+  if (!String(href || '').trim()) return '';
   try { return new URL(href, origin).href; } catch (_) { return ''; }
 }
 
@@ -476,11 +483,30 @@ function fileInfoFromTopic(topic, course, version, origin) {
   // D2L's own viewer for this topic. The API `/file` endpoint below is for a
   // fetch carrying the student's session; opening it as a link answers
   // `{ Errors: [ {Message: "Forbidden"} ] }` on a blank page, which is what
-  // every lecture link in Nexora used to do. absoluteUrl still leads, because
-  // classifyContent reads the file extension off it.
+  // every lecture link in Nexora used to do.
   const viewUrl = topicId ? `${origin}/d2l/le/content/${course.source_uid}/viewContent/${topicId}/View` : '';
   const downloadUrl = topicId ? `${origin}/d2l/api/le/${version}/${course.source_uid}/content/topics/${topicId}/file` : '';
-  return { source_url: absoluteUrl || viewUrl, view_url: viewUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
+  // D2L's own download route, read out of the markup of D2L's own content page
+  // rather than invented, and the only one of the three that actually SAVES the
+  // file. Measured on a real Carleton lecture (ELEC2501, topic 4894237):
+  //   topics/files/download/<id>/DirectFileTopicDownload -> 200 application/pdf,
+  //                                        Content-Disposition: attachment  <- saves
+  //   topic.Url (/content/enforced/.../Lecture_3.pdf)    -> 200, no disposition,
+  //                                        so the browser opens its PDF viewer
+  //   api/le/<v>/<ou>/content/topics/<id>/file           -> fine as a fetch,
+  //                                        Forbidden as a top-level navigation
+  // Gated on D2L's OWN TypeIdentifier: a topic is just as often an HTML page, a
+  // link or a quiz, and this route means nothing for those -- the old code
+  // preferred the API endpoint for EVERY topic with an id, which is why a
+  // stored link says nothing about whether the item is a file.
+  const fileUrl = (topicId && /^file$/i.test(clean(topic.TypeIdentifier || '')))
+    ? `${origin}/d2l/le/content/${course.source_uid}/topics/files/download/${topicId}/DirectFileTopicDownload`
+    : '';
+  // classify_url keeps the extension-bearing URL. classifyContent reads the file
+  // extension off the link, and the download route carries no ".pdf" -- handing it
+  // the download URL would file every lecture as a `page`.
+  return { source_url: fileUrl || absoluteUrl || viewUrl, classify_url: absoluteUrl || viewUrl,
+           view_url: viewUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
 }
 
 function flattenToc(toc, course, version, origin) {
@@ -516,7 +542,7 @@ function flattenToc(toc, course, version, origin) {
         course: course.code,
         source_uid: uid,
         title,
-        content_type: classifyContent(title, file.source_url, activity, moduleContext),
+        content_type: classifyContent(title, file.classify_url, activity, moduleContext),
         source_url: file.source_url || file.view_url,
         download_url: file.download_url,
         file_name: file.file_name,

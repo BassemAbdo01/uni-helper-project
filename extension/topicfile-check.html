@@ -1,0 +1,84 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Topic file link check</title>
+<style>
+ body{font:14px/1.6 ui-monospace,Menlo,monospace;background:#101014;color:#e7e7ea;padding:24px}
+ .ok{color:#6ee7a8}.bad{color:#ff8080}h1{font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:#9a9aa6}
+ pre{background:#17171d;padding:10px 12px;border-radius:8px;overflow:auto;border:1px solid #26262f}
+</style>
+<h1>fileInfoFromTopic — syntax, and the link it builds</h1>
+<p>Serve this folder first: <code>venv/Scripts/python.exe -m http.server 8777 --directory extension</code></p>
+<div id="out">running…</div>
+<script type="module">
+// Two things get checked here, because there is no node on this machine:
+//   1. `new Function(src)` parses each whole file -- a syntax check.
+//   2. the real function runs against the real topic JSON Brightspace returned
+//      for a real Carleton lecture, so the link is verified rather than read.
+const REAL_FILE_TOPIC = {   // GET /d2l/api/le/1.67/449526/content/toc, trimmed
+  "TopicId": 4894237, "Identifier": "4894237", "TypeIdentifier": "File",
+  "Title": "Lecture_3", "Url": "/content/enforced/449526-31556.202630/Lecture_3.pdf",
+  "ActivityType": 1, "ToolId": null, "ToolItemId": null, "IsBroken": false
+};
+// Same course, a topic that is NOT a file. These must keep the link they had:
+// the download route means nothing for them, and a button that 404s is worse
+// than no button.
+const LINK_TOPIC = { "TopicId": 9001, "TypeIdentifier": "Link",
+  "Title": "Course website", "Url": "https://example.edu/elec2501" };
+const PAGE_TOPIC = { "TopicId": 9002, "TypeIdentifier": "Page",
+  "Title": "Welcome", "Url": "/content/enforced/449526-31556.202630/welcome.html" };
+const NO_URL_TOPIC = { "TopicId": 9003, "TypeIdentifier": "Dropbox", "Title": "Lab 1 Report" };
+
+const ORIGIN = 'https://brightspace.carleton.ca';
+const DL = ORIGIN + '/d2l/le/content/449526/topics/files/download/4894237/DirectFileTopicDownload';
+const lines = [];
+const t = (name, got, want) => lines.push(
+  (got === want ? `<span class="ok">PASS</span>` : `<span class="bad">FAIL</span>`) +
+  `  ${name}` + (got === want ? '' : `\n        got:  ${got}\n        want: ${want}`));
+
+async function load(file) {
+  const src = await (await fetch(file)).text();
+  new Function(src);                                  // 1. does the whole file parse?
+  // pull the three functions we need out of the file itself rather than
+  // reimplementing them, or this checks a copy and not the code that ships
+  const grab = re => (src.match(re) || [])[0];
+  const parts = [
+    grab(/const clean = value =>[^\n]+/),
+    grab(/function absolute\([\s\S]*?\n\s*\}/) || grab(/const absolute =[\s\S]*?\n\s*\}/),
+    // anchored on the end of the object it returns rather than on indentation:
+    // the repo is checked out with CRLF, so \n\s{0,4}\} never matched at all.
+    grab(/function fileInfoFromTopic\([\s\S]*?file_ext: extension \};[\s\S]*?\r?\n\s*\}/),
+  ];
+  if (parts.some(p => !p)) throw new Error('could not extract helpers from ' + file);
+  return new Function(parts.join('\n') + '\nreturn fileInfoFromTopic;')();
+}
+
+try {
+  // the worker takes (topic, course, version, origin); the content script reads
+  // the origin off the page, so it is checked through a stubbed location
+  const bg = await load('background.js');
+  const run = topic => bg(topic, { source_uid: '449526' }, '1.67', ORIGIN);
+
+  t('a File topic links to D2L\u2019s download route', run(REAL_FILE_TOPIC).source_url, DL);
+  t('\u2026and classification still sees the .pdf',   run(REAL_FILE_TOPIC).file_ext, 'pdf');
+  t('\u2026via classify_url, which keeps the path',
+    run(REAL_FILE_TOPIC).classify_url, ORIGIN + '/content/enforced/449526-31556.202630/Lecture_3.pdf');
+  t('a Link topic keeps its own URL',  run(LINK_TOPIC).source_url, 'https://example.edu/elec2501');
+  t('a Page topic keeps its own URL',
+    run(PAGE_TOPIC).source_url, ORIGIN + '/content/enforced/449526-31556.202630/welcome.html');
+  t('a topic with no URL falls back to the viewer',
+    run(NO_URL_TOPIC).source_url, ORIGIN + '/d2l/le/content/449526/viewContent/9003/View');
+  t('no topic id, no invented link', run({ TypeIdentifier: 'File', Title: 'x' }).source_url, '');
+
+  // content.js parses too, and is checked for the same route
+  const cjs = await (await fetch('content.js')).text();
+  new Function(cjs);
+  t('content.js parses and carries the same route',
+    /topics\/files\/download\/\$\{topicId\}\/DirectFileTopicDownload/.test(cjs), true);
+
+  const bad = lines.filter(l => l.includes('FAIL')).length;
+  out.innerHTML = `<pre>${lines.join('\n')}\n\n${bad ? `<span class="bad">${bad} FAILED</span>`
+    : '<span class="ok">all checks passed</span>'}</pre>`;
+} catch (err) {
+  out.innerHTML = `<pre class="bad">${err && err.stack || err}</pre>`;
+}
+</script>

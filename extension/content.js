@@ -3,7 +3,14 @@
   globalThis.__NEXORA_BRIGHTSPACE_CONTENT_V11__ = true;
   const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const absolute = href => { try { return new URL(href, location.href).href; } catch (_) { return ''; } };
+  // An empty href is not a link. `new URL('', location.href)` resolves to the
+  // page the scraper happened to be on, and that string is truthy, so a topic
+  // with no URL of its own linked somewhere real and completely unrelated.
+  // Found by running this against a topic that has no Url.
+  const absolute = href => {
+    if (!String(href || '').trim()) return '';
+    try { return new URL(href, location.href).href; } catch (_) { return ''; }
+  };
   const orgUnitIdFrom = value => {
     const text = String(value || '');
     for (const pattern of [/\/d2l\/home\/(\d+)/i, /[?&]ou=(\d+)/i, /\/lessons\/(\d+)/i, /\/content\/(\d+)/i]) {
@@ -358,11 +365,30 @@
     // D2L's own viewer for this topic. The API `/file` endpoint below is for a
     // fetch carrying the student's session; opening it as a link answers
     // `{ Errors: [ {Message: "Forbidden"} ] }` on a blank page, which is what
-    // every lecture link in Nexora used to do. absoluteUrl still leads, because
-    // classifyContent reads the file extension off it.
+    // every lecture link in Nexora used to do.
     const viewUrl = topicId ? `${location.origin}/d2l/le/content/${orgUnitId}/viewContent/${topicId}/View` : '';
     const downloadUrl = topicId ? `${location.origin}/d2l/api/le/${version}/${orgUnitId}/content/topics/${topicId}/file` : '';
-    return { source_url: absoluteUrl || viewUrl, view_url: viewUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
+    // D2L's own download route, read out of the markup of D2L's own content page
+    // rather than invented, and the only one of the three that actually SAVES the
+    // file. Measured on a real Carleton lecture (ELEC2501, topic 4894237):
+    //   topics/files/download/<id>/DirectFileTopicDownload -> 200 application/pdf,
+    //                                        Content-Disposition: attachment  <- saves
+    //   topic.Url (/content/enforced/.../Lecture_3.pdf)    -> 200, no disposition,
+    //                                        so the browser opens its PDF viewer
+    //   api/le/<v>/<ou>/content/topics/<id>/file           -> fine as a fetch,
+    //                                        Forbidden as a top-level navigation
+    // Gated on D2L's OWN TypeIdentifier: a topic is just as often an HTML page, a
+    // link or a quiz, and this route means nothing for those -- the old code
+    // preferred the API endpoint for EVERY topic with an id, which is why a
+    // stored link says nothing about whether the item is a file.
+    const fileUrl = (topicId && /^file$/i.test(clean(topic.TypeIdentifier || '')))
+      ? `${location.origin}/d2l/le/content/${orgUnitId}/topics/files/download/${topicId}/DirectFileTopicDownload`
+      : '';
+    // classify_url keeps the extension-bearing URL. classifyContent reads the file
+    // extension off the link, and the download route carries no ".pdf" -- handing it
+    // the download URL would file every lecture as a `page`.
+    return { source_url: fileUrl || absoluteUrl || viewUrl, classify_url: absoluteUrl || viewUrl,
+             view_url: viewUrl, download_url: downloadUrl, file_name: title, file_ext: extension };
   }
 
   // moduleContext is the module/folder breadcrumb the item lives under (e.g. "Week 5 › Lecture 12").
@@ -402,7 +428,7 @@
         const file = fileInfoFromTopic(node, orgUnitId, version);
         const activity = node.ActivityType || node.TypeIdentifier || node.Type || '';
         const moduleContext = parentPath.join(' › ');
-        const type = classifyContent(title, file.source_url, activity, moduleContext);
+        const type = classifyContent(title, file.classify_url, activity, moduleContext);
         const uid = itemUid(orgUnitId, 'content', id, file.source_url || title);
         if (seen.has(uid)) continue;                  // every child array is walked now
         seen.add(uid);
