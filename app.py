@@ -5260,6 +5260,37 @@ def _calendar_sample(user_id, today):
         f'{(t.kind or "event")}|{(t.title or "")[:60]}' for t in rows)
 
 
+_MATCH_VERB = {"delete": "delete", "move": "move", "retime": "retime",
+               "rename": "rename", "recourse": "change the course of"}
+
+
+def _match_description(op):
+    """What an operation said it was looking for, in the student's own terms.
+
+    Only used to explain a filter that found nothing, which is the one case
+    where the student needs to know what Nexora went looking for.
+    """
+    m = op.get("match") if isinstance(op.get("match"), dict) else {}
+    bits = []
+    title = str(m.get("title_contains") or "").strip()
+    course = str(m.get("course") or "").strip()
+    kind = str(m.get("kind") or "").strip().lower()
+    if title:
+        bits.append(f"named like “{title}”")
+    if kind in EVENT_KINDS:
+        bits.append({"exam": "exams", "due": "deadlines"}.get(kind, "events"))
+    if course:
+        bits.append(f"on {course}")
+    frm, to = str(m.get("from") or "").strip(), str(m.get("to") or "").strip()
+    if frm and to:
+        bits.append(f"between {frm} and {to}")
+    elif frm:
+        bits.append(f"from {frm}")
+    elif to:
+        bits.append(f"up to {to}")
+    return " ".join(bits)
+
+
 def _resolve_known_course(value, user_id):
     """The student's OWN code for what they just typed, where there is one.
 
@@ -5385,6 +5416,17 @@ def _calendar_plan(operations, user_id, today):
             notes.append(f"{missing} entr{'y' if missing == 1 else 'ies'} named in that "
                          "request no longer exist, so they were left out.")
         if not rows:
+            # A filter that finds nothing is the OTHER way a promise goes
+            # unkept in silence. Asked to recourse the labs and also "push every
+            # ELEC2501B test back by 7 days" when no test is on that course yet,
+            # the reply said it was doing both, did one, and explained nothing.
+            # Correct behaviour, invisible -- which is the half that reads as
+            # the AI not thinking.
+            desc = _match_description(op)
+            verb = _MATCH_VERB.get(kind, kind)
+            notes.append(f"Nothing matched the entries to {verb}"
+                         + (f" ({desc})" if desc else "")
+                         + ", so that part was not done.")
             continue
 
         # Dispatch on what the operation DESCRIBES, not only on what it is

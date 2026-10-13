@@ -269,3 +269,53 @@ def test_an_added_entry_shows_which_course_it_lands_on(client):
             uid, TODAY)
     assert changes
     assert "OTHER" in changes[0]["label"]
+
+
+# --------------------------------------------------------------------------
+# A filter that finds nothing is the other way a promise goes unkept in silence
+# --------------------------------------------------------------------------
+
+def test_a_filter_that_matches_nothing_says_so(client):
+    """Found by measuring, not by reading. Asked to recourse the labs AND "push
+    every ELEC2501B test back by 7 days" while no test was on that course yet,
+    the reply said it was doing both, did one, and left `notes` empty. The
+    behaviour was correct and completely invisible, which is the half that
+    reads as the AI not thinking."""
+    uid = _user()
+    _task(uid, title="Lab 6", course="OTHER", due="2026-11-16")
+    with nexora.app.app_context():
+        changes, notes = nexora._calendar_plan(
+            [{"op": "move", "by_days": 7,
+              "match": {"course": "ELEC2501B", "kind": "exam"}}], uid, TODAY)
+    assert changes == []
+    joined = " ".join(notes)
+    assert "Nothing matched" in joined and "move" in joined
+    assert "ELEC2501B" in joined, "it must say what it went looking for"
+
+
+def test_the_half_that_worked_still_works(client):
+    """The unmatched half must not take the matched half down with it."""
+    uid = _user()
+    _course(uid, "ELEC2501B")
+    _task(uid, title="Lab 6", course="OTHER", due="2026-11-16")
+    with nexora.app.app_context():
+        changes, notes = nexora._calendar_plan([
+            {"op": "recourse", "course_new": "ELEC2501",
+             "match": {"course": "OTHER", "title_contains": "Lab"}},
+            {"op": "move", "by_days": 7,
+             "match": {"course": "ELEC2501B", "kind": "exam"}},
+        ], uid, TODAY)
+    assert [c["op"] for c in changes] == ["recourse"]
+    assert any("Nothing matched" in n for n in notes)
+
+
+def test_the_note_names_each_kind_of_filter(client):
+    uid = _user()
+    with nexora.app.app_context():
+        _, by_title = nexora._calendar_plan(
+            [{"op": "delete", "match": {"title_contains": "Viva"}}], uid, TODAY)
+        _, by_dates = nexora._calendar_plan(
+            [{"op": "retime", "match": {"from": "2026-11-01", "to": "2026-11-30"}}],
+            uid, TODAY)
+    assert "Viva" in " ".join(by_title)
+    assert "2026-11-01" in " ".join(by_dates) and "2026-11-30" in " ".join(by_dates)

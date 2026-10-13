@@ -645,6 +645,53 @@ short-circuits an item whose hash has not changed, so a deadline attached to
 already-imported content would never be created retroactively -- which is every
 student who synced before this shipped.
 
+## The calendar's model tier was measured, not argued
+
+Asked why the calendar was "not using proper Gemini who can think". The honest
+answer, with numbers, is that **the model tier is not the bottleneck** -- and the
+measurement was run specifically because the opposite looked obvious.
+
+What the two routes actually use: the assistant `mode="quick"` (3.6-flash,
+thinkingLevel low), the image reader `mode="fast"` (flash-lite, no thinking).
+The image route being on `fast` genuinely was a mistake in the making: it was
+set when the route only TRANSCRIBED a table, which is mechanical, and the
+instruction-following added later ("treat every Tutorial as a Test for elec") is
+reasoning. Raising it looked obviously right.
+
+Measured **2026-10-12**, live key, three passes each. OCR runs once and the
+transcript is reused, so only the step that applies the instruction is timed:
+
+| mode | time | tutorials renamed | labs kept | kind | course |
+|---|---|---|---|---|---|
+| `fast` (flash-lite) | 3.1 / 3.4 / 3.4s | 5/5 | 5 | exam | ELEC2501B |
+| `quick` (3.6-flash, low) | 21.0 / 3.3 / 2.9s | 5/5 | 5 | exam | ELEC2501B |
+| reasoning chain | 58.2 / 36.3 / 17.8s | 5/5 | 5 | exam | ELEC2501B |
+
+Identical answers. Reasoning costs 5-18x the latency for nothing. The same held
+on the assistant: the reported request was right 3/3 at every tier, ~1s on fast
+and 22-45s on the reasoning chain.
+
+**So the tier stays where it is.** Raising it would have spent quota and made
+every calendar edit twenty seconds slower while changing no answer. A paid key,
+not a bigger model, is still the lever CLAUDE.md names.
+
+Two things the probe got wrong first, both worth knowing:
+
+- **It measured Nexora's own rate limits and read them as model failures.**
+  `AI_LIMIT` answered 429 for the slower tiers, and `/login`'s tighter limit
+  then answered 302 for everything after. Set `limiter.enabled = False` in any
+  probe that hammers a route.
+- **A scorer can fail a correct answer.** "Push every ELEC2501B test back by 7
+  days" was marked BAD at every tier, because the fixture had no test on that
+  course -- matching nothing was right. Check what the app was asked before
+  believing it got it wrong.
+
+That second one found the real defect. `_calendar_match` returning no rows hit a
+bare `continue`, so the reply promised both halves of a two-part request,
+delivered one, and left `notes` empty -- correct behaviour, completely
+invisible, and indistinguishable from the app ignoring you. `_match_description`
+now says what was looked for and not found.
+
 ## An entry on OTHER is invisible, and the assistant could not fix it
 
 Reported with a screenshot: tests read out of a schedule landed under **OTHER**,
