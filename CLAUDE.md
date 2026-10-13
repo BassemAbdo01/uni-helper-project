@@ -645,6 +645,53 @@ short-circuits an item whose hash has not changed, so a deadline attached to
 already-imported content would never be created retroactively -- which is every
 student who synced before this shipped.
 
+## An entry on OTHER is invisible, and the assistant could not fix it
+
+Reported with a screenshot: tests read out of a schedule landed under **OTHER**,
+and asking the assistant *"change the course names for Test 2,3,4 and 5 from
+OTHER to ELEC2501"* produced the sentence *"I will update the course for Test 2,
+Test 3, Test 4, and Test 5 from OTHER to ELEC2501"* directly above *"Nexora found
+nothing to change"*. A confident promise and a flat contradiction, on one screen.
+Read as the AI not thinking; the model had understood perfectly.
+
+`_calendar_plan` accepted add, move, delete, retime and rename. **There was no
+verb for it**, and an op the server did not recognise hit a bare `continue` -- no
+note, no error. The missing feature and the silence are two separate bugs and
+the silence is the worse one: an operation this server cannot carry out now
+produces a note naming it and listing what it can do.
+
+`recourse` is that verb. Three things it has to get right:
+
+- **The code is resolved against the student's own.** `_resolve_known_course`:
+  someone typing "ELEC2501" whose course is ELEC2501B gets ELEC2501B. Storing
+  the string as typed moves the entry off OTHER onto a code that still matches
+  no course they have -- so the outline, the grades and the planner go on
+  ignoring it, and the only thing that changed is the label. That reads as
+  fixed and is not. A code that uniquely extends, or is uniquely extended by,
+  one of theirs wins; two offerings that both match (ELEC2501A and ELEC2501B)
+  leave the literal alone rather than picking a section for them.
+- **The whole group moves.** `group_id` is derived from the course, so an
+  imported assignment's three rows would otherwise split across two courses and
+  the calendar would draw it twice.
+- **The destination is re-resolved on apply**, not trusted: the plan makes a
+  round trip through the browser and this writes the key every other feature
+  joins on.
+
+**"Not given" and "literally OTHER" were the same filter**, which is why the
+entries could not even be selected. `_normalize_course_code("")` returns
+`"OTHER"`, so the guard that stopped an unset field filtering everything also
+threw away a deliberate `course: "OTHER"` -- and OTHER is the one course a
+student ever asks about by name, because it is where every entry lands that
+nothing named a course for. `_calendar_match` now tests the raw string first.
+
+**The add label never said which course.** The image path named it; the
+assistant's own add path did not, so a series of tests was confirmed and only
+found to be on OTHER afterwards. The course is part of what is being agreed to.
+
+The image route resolves through `_resolve_known_course` too. Leaving the match
+to the prompt gave back "ELEC" from "for elec", which is the same dead end as
+OTHER wearing a better label.
+
 ## A picture and a sentence are one request
 
 `/api/calendar/from-image` takes an `instruction` beside the image, and the

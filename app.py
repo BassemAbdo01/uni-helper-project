@@ -5260,6 +5260,29 @@ def _calendar_sample(user_id, today):
         f'{(t.kind or "event")}|{(t.title or "")[:60]}' for t in rows)
 
 
+def _resolve_known_course(value, user_id):
+    """The student's OWN code for what they just typed, where there is one.
+
+    Someone looking at entries filed under OTHER asks for "ELEC2501", and their
+    course is ELEC2501B. Storing the string as typed moves the entries off OTHER
+    and onto a code that still matches no course they have -- so the outline, the
+    grades and the study planner go on ignoring them, and the only visible change
+    is the label. That reads as fixed and is not.
+
+    A code that uniquely extends, or is uniquely extended by, one of theirs wins.
+    Two offerings that both match (ELEC2501A and ELEC2501B) are ambiguous, so the
+    literal stands rather than Nexora picking a section for them.
+    """
+    code = _normalize_course_code(value or "")
+    if not code or code == "OTHER":
+        return ""
+    known = {c for c in _known_course_codes(user_id) if c and c != "OTHER"}
+    if code in known:
+        return code
+    near = [k for k in known if k.startswith(code) or code.startswith(k)]
+    return near[0] if len(near) == 1 else code
+
+
 def _calendar_match(op, user_id, pending=None):
     """The rows an operation applies to: explicit ids, or a filter resolved here.
 
@@ -5278,9 +5301,16 @@ def _calendar_match(op, user_id, pending=None):
     if not isinstance(m, dict):
         return [], 0
     used = False
-    course = _normalize_course_code(str(m.get("course") or ""))
-    if course and course != "OTHER":
-        q, used = q.filter(Task.course_full == course), True
+    # "not given" and "literally OTHER" are different filters, and they used to
+    # be the same one: _normalize_course_code("") returns "OTHER", so the guard
+    # against an unset field also threw away a deliberate OTHER -- which is the
+    # one course a student ever asks about by name, because it is where every
+    # entry lands that nothing named a course for.
+    raw_course = str(m.get("course") or "").strip()
+    if raw_course:
+        course = _normalize_course_code(raw_course)
+        if course:
+            q, used = q.filter(Task.course_full == course), True
     kind = str(m.get("kind") or "").strip().lower()
     if kind in EVENT_KINDS:
         q, used = q.filter(Task.kind == kind), True
@@ -5318,6 +5348,7 @@ def _calendar_plan(operations, user_id, today):
     """
     changes, notes = [], []
     pending = {}            # row id -> the title a rename earlier in this plan gives it
+    unknown_ops = []        # kinds the model asked for that this server cannot do
     if not isinstance(operations, list):
         return [], ["Nexora could not read that as calendar changes."]
 
@@ -5331,11 +5362,22 @@ def _calendar_plan(operations, user_id, today):
             notes.extend(sub)
             for payload in _recurrence_events(op, dates):
                 changes.append({"op": "add", **payload,
+                                # The course is part of what is being agreed to.
+                                # Without it on the label a student confirmed a
+                                # series of tests and only found out afterwards
+                                # that every one had been filed under OTHER.
                                 "label": f"Add “{payload['title']}” on {payload['date']}"
-                                         + (f" at {payload['time']}" if payload["time"] else "")})
+                                         + (f" at {payload['time']}" if payload["time"] else "")
+                                         + f" · {payload.get('course_full') or 'OTHER'}"})
             continue
 
-        if kind not in {"delete", "move", "retime", "rename"}:
+        # An operation this server cannot carry out must SAY so. Dropping it
+        # silently is how "change the course for Test 2,3,4,5 from OTHER to
+        # ELEC2501" produced the sentence "I will update the course for Test 2,
+        # Test 3, Test 4 and Test 5" directly above "Nexora found nothing to
+        # change" -- a confident promise and a flat contradiction, on one screen.
+        if kind not in {"delete", "move", "retime", "rename", "recourse"}:
+            unknown_ops.append(kind or "(unnamed)")
             continue
 
         rows, missing = _calendar_match(op, user_id, pending)
@@ -5435,6 +5477,30 @@ def _calendar_plan(operations, user_id, today):
                                 "from_title": current,
                                 "label": f"Rename “{current}” to “{new}”"})
 
+        # Which course an entry belongs to. Everything downstream joins on the
+        # code -- the outline's weights, _course_standing, which block the study
+        # plan says is for what -- so an entry stranded on OTHER is not a label
+        # problem, it is invisible to every feature that matters.
+        if kind == "recourse":
+            wanted = _resolve_known_course(
+                str(op.get("course_new") or op.get("course") or ""), user_id)
+            if not wanted:
+                notes.append("That did not name a course to move them to.")
+            else:
+                for row in rows:
+                    was = row.course_full or "OTHER"
+                    if was == wanted:
+                        continue
+                    shown = pending.get(row.id, row.title)
+                    changes.append({"op": "recourse", "id": row.id, "title": shown,
+                                    "course": wanted, "from_course": was,
+                                    "label": f"Move “{shown}” from {was} to {wanted}"})
+
+    if unknown_ops:
+        names = ", ".join(sorted(set(unknown_ops)))
+        notes.append(f"Nexora cannot do this to a calendar entry: {names}. "
+                     "It can add, move, retime, rename, change the course, and delete.")
+
     if len(changes) > CALENDAR_CHANGE_CAP:
         notes.append(f"That came to {len(changes)} changes; showing the first "
                      f"{CALENDAR_CHANGE_CAP}. Ask for the rest separately.")
@@ -5446,7 +5512,8 @@ def _calendar_apply(changes, user_id):
     """Apply a plan the student has confirmed. Ownership is re-checked here --
     the plan makes a round trip through the browser, so it is not trusted."""
     owned = {t.id: t for t in Task.query.filter_by(user_id=user_id).all()}
-    done = {"added": 0, "deleted": 0, "moved": 0, "retimed": 0, "renamed": 0}
+    done = {"added": 0, "deleted": 0, "moved": 0, "retimed": 0, "renamed": 0,
+            "recoursed": 0}
 
     for change in (changes or [])[:CALENDAR_CHANGE_CAP]:
         if not isinstance(change, dict):
@@ -5501,6 +5568,20 @@ def _calendar_apply(changes, user_id):
                     row.base_title = title
                 row.group_id = make_group_id(row.course_full or "OTHER", row.base_title or title)
                 done["renamed"] += 1
+        elif op == "recourse":
+            # Re-resolved here rather than trusted: the plan went through the
+            # browser, and this writes the key every other feature joins on.
+            course = _resolve_known_course(str(change.get("course") or ""), user_id)
+            if course:
+                # group_id is derived from the course, so the whole group moves
+                # together or an imported assignment's three rows split across
+                # two courses and the calendar shows it twice.
+                for sib in Task.query.filter_by(user_id=user_id,
+                                                group_id=row.group_id).all():
+                    sib.course_full = course
+                    sib.course_prefix = course
+                    sib.group_id = make_group_id(course, sib.base_title or sib.title or "")
+                done["recoursed"] += 1
 
     db.session.commit()
     return done
@@ -5826,7 +5907,12 @@ def calendar_from_image():
             anchored = _anchor_undated_year(day.month, day.day, today)
             if anchored:
                 day = anchored
-        course = _normalize_course_code(str(item.get("course") or "")) or "OTHER"
+        # Resolved on the server, not left to the prompt. "for elec" came back
+        # as ELEC, and a row filed under ELEC when the student's course is
+        # ELEC2501B joins to no outline, no grades and no study plan -- the same
+        # dead end as OTHER, wearing a better label.
+        course = _resolve_known_course(str(item.get("course") or ""),
+                                       current_user.id) or "OTHER"
         title = str(item.get("title") or "").strip()[:200] or "Scheduled"
         if _already_on_the_calendar(current_user.id, course, day, title):
             already += 1
@@ -6108,11 +6194,13 @@ def calendar_ai_events():
                         "match": {"course": "", "kind": "", "title_contains": "",
                                   "from": "", "to": ""},
                         "ids": [], "to": "", "by_days": 0,
-                        "replace": {"from": "", "to": ""}, "title_new": ""}],
+                        "replace": {"from": "", "to": ""}, "title_new": "",
+                        "course_new": ""}],
     }
     rules = [
         f"Today is {today.isoformat()}. Every date is ISO yyyy-mm-dd.",
-        'Each operation has an "op" of: add, move, delete, retime, rename.',
+        'Each operation has an "op" of: add, move, delete, retime, rename, '
+        "recourse.",
         "ADD: set title, course, kind, time, start. For something repeating also "
         'set repeat ("weekly", "biweekly", "monthly"), and count or until. '
         "skip_ranges [[from,to],...] and skip_dates are holidays they excluded. "
@@ -6120,8 +6208,8 @@ def calendar_ai_events():
         'and the rest carry on ("no class that week", "we continue after"), and '
         '"drop" only when that one is cancelled outright. Default "shift".',
         "",
-        "MOVE, DELETE, RETIME and RENAME choose their entries in ONE of two ways, "
-        "and you do not need to list anything to use them:",
+        "MOVE, DELETE, RETIME, RENAME and RECOURSE choose their entries in ONE of "
+        "two ways, and you do not need to list anything to use them:",
         '  (a) "match": a filter the server runs over ALL their entries. Set any '
         'of course, kind, title_contains, from, to. This is how you do "all the '
         'exams of ELEC2501" or "every Module quiz" -- you do NOT need ids, and '
@@ -6135,6 +6223,14 @@ def calendar_ai_events():
         'each title, so "Elec Lab 4" becomes "Elec Test 4" and the numbering '
         'survives. Use "title_new" ONLY when exactly one entry is meant; giving '
         "many entries one name would make them identical.",
+        # Entries land on OTHER whenever nothing named a course, and a student
+        # looking at them wants exactly this and nothing else. Without the verb
+        # the model promised the change in `understood` and emitted an op that
+        # was silently dropped.
+        'RECOURSE changes which course entries belong to. Put the new code in '
+        '"course_new", and use "match" to choose them -- match.course is which '
+        'course they are on NOW ("OTHER" is allowed there), course_new is where '
+        "they are going. This is the op for \"these are ELEC2501, not OTHER\".",
         "",
         'kind is "exam" for tests, midterms, finals and quizzes, "due" for work to '
         'hand in, otherwise "event".',
