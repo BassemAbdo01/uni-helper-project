@@ -18,6 +18,7 @@ term around a number nobody checked.
 """
 
 import os
+import re
 import sys
 
 import pytest
@@ -135,9 +136,20 @@ def test_the_route_is_rate_limited_like_every_other_gemini_route(rate_limited_cl
     resource, so the limit has to bite before the view runs at all."""
     rate_limited_client.post("/signup", data={"name": "B", "email": "rl@carleton.ca",
                                               "password": PASSWORD})
-    codes = [rate_limited_client.post("/api/course/SYSC2004/ask",
-                                      json={"question": "how much do I need to pass"}).status_code
-             for _ in range(15)]
+    # The count comes from AI_LIMIT rather than a number written here. It was
+    # 15, which only ever worked because the hourly limit happened to be 12 --
+    # so raising the limit broke a test about whether the route is covered at
+    # all. AI_LIMIT is an environment variable now; pin the invariant.
+    import app as nexora
+    per_hour = int(re.search(r"(\d+)\s+per\s+hour", nexora.AI_LIMIT).group(1))
+    codes = []
+    for _ in range(per_hour + 2):
+        code = rate_limited_client.post(
+            "/api/course/SYSC2004/ask",
+            json={"question": "how much do I need to pass"}).status_code
+        codes.append(code)
+        if code == 429:
+            break
     assert 429 in codes, "Ask ran unlimited times against the shared Gemini quota"
 
 

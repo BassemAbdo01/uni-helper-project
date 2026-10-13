@@ -645,6 +645,82 @@ short-circuits an item whose hash has not changed, so a deadline attached to
 already-imported content would never be created retroactively -- which is every
 student who synced before this shipped.
 
+## A filter must never swallow what was just added
+
+Reported as **"i cant even add manually now"**. It added perfectly, every time.
+The exams-only filter survives a reload in `sessionStorage`, saving an event
+reloads the month, and anything that is not an exam came back `display:none` --
+on the server, in the DOM, and invisible. From where the student is sitting that
+is the Save button doing nothing.
+
+It hits the AI paths harder: a schedule import adds Labs as `event`, so half of
+what the preview had just promised would vanish on apply.
+
+`unhideForKinds(kinds)` runs before both reloads and clears the filter **only**
+when the new work would actually be hidden by it -- the filter is a deliberate
+choice, and overriding it for a row it would have shown anyway is Nexora
+deciding for the student. It is cleared with a sentence, never silently.
+
+**The sentence was lost the first time, to a temporal dead zone.** `showToast`
+is a hoisted function declaration, so it is callable early in the script -- but
+its body touches `undo` and `undoTimer`, which are `let` several hundred lines
+below. Calling it from the top threw "Cannot access 'undo' before
+initialization", the `catch` swallowed it, and the note had already been removed
+from storage: the filter cleared correctly and the explanation never appeared.
+The block is deferred with `setTimeout(..., 0)` and removes the note only after
+the toast has actually been shown.
+
+## A week is not a day, and which day it is is arithmetic
+
+A great many course schedules are printed by WEEK -- "Week of 19 October" --
+because the lab or tutorial falls on whichever day that student is enrolled for.
+The instruction then says which: *"my day in the week is Tuesday so if it says
+week 19th october then my test is tuesday of that week"*.
+
+Measured: asked exactly that, the model answered **2026-10-21 (a Wednesday)**
+from a table and **2026-10-20 (correct)** from the same facts written as prose.
+Two answers to one question, one of them a day out, on the screen a student
+checks to decide what to do.
+
+So the model reports and the server counts, the same split as the year.
+`names_a_week` says the row gives a week rather than a day, `weekday` carries
+the day the instruction asked for, and `_day_in_stated_week` does the
+arithmetic -- anchored on the week's **Monday**, so "week of Sunday 18 October"
+and "week of Monday 19 October" mean the same week, which is what they mean to
+the student reading the schedule. It runs after `_anchor_undated_year`, because
+a week is usually printed without a year. Three runs after the change: every
+date a Tuesday, all three identical.
+
+## The AI allowance, and what it is allowed to count
+
+`AI_LIMIT` was `"40 per day; 12 per hour"` -- plenty for a student using a
+feature that works, and nowhere near enough for one troubleshooting a feature
+that does not. Twelve attempts is about fifteen minutes of trying different
+wordings, and the reward for persevering was being locked out. It is
+`"150 per day; 40 per hour"` now and reads from the environment, so the ceiling
+moves without a deploy. Every route goes through `ai_limit` rather than fifteen
+hand-written decorators.
+
+**Not charging for failed calls was tried and backed out.** It is an appealing
+idea -- a call that gave the student nothing should not spend their allowance --
+and it is wrong here: a vision call that reads an image and then answers 422
+"nothing dated in that picture" has ALREADY spent the Gemini quota the limit
+exists to protect. Exempting it puts a hole in the guarantee rather than a
+kindness in the budget. Two existing tests caught it by hammering a route with
+failing requests and never being stopped. The reported lock-out was the ceiling
+being too low, not what it counted.
+
+**The 429 said "12 per 1 hour This limit protects the shared AI quota every
+student's outline analysis depends on."** Flask-Limiter's `description` is the
+raw rule, glued straight onto the sentence after it, and it reads like a stack
+trace. `handle_rate_limited` parses it into "That is the limit of 12 per hour
+for this feature."
+
+Raising the limit also broke a test that sent **15** requests and expected a
+429 -- it only ever worked because the hourly limit happened to be 12. It
+derives the count from `AI_LIMIT` now. Pin invariants, never measurements;
+this is the same lesson the model table taught.
+
 ## The calendar's model tier was measured, not argued
 
 Asked why the calendar was "not using proper Gemini who can think". The honest

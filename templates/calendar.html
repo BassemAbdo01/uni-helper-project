@@ -691,6 +691,53 @@ dialog.sheet::backdrop{background:#0B0908cc}
     };
   }
 
+  /* ---- a filter must never swallow what you just added ----
+     Reported as "i cant even add manually now". It saved perfectly every time:
+     the exams-only filter survives a reload in sessionStorage, the save reloads
+     the month, and anything that is not an exam came back `display:none`. The
+     row was on the server and in the DOM and the student could not see it,
+     which is indistinguishable from the Save button doing nothing.
+
+     The same thing hits the AI paths harder, because a schedule import adds
+     Labs as `event` -- so half of what it just promised would vanish.
+
+     The filter is a deliberate choice, so it is cleared with a sentence saying
+     why rather than silently, and only when the new work would actually be
+     hidden by it. */
+  const KEEP_FILTER_NOTE = 'nexora-filter-cleared';
+
+  const unhideForKinds = kinds => {
+    const list = (kinds || []).map(k => String(k || '').toLowerCase());
+    if (!list.length || list.every(k => k === 'exam')) return;
+    let on = false;
+    try { on = sessionStorage.getItem('nexora-exams-only') === '1'; } catch (_) {}
+    if (!on) return;
+    try {
+      sessionStorage.setItem('nexora-exams-only', '0');
+      sessionStorage.setItem(KEEP_FILTER_NOTE, list.length > 1
+        ? 'Some of that is not an exam, so “exams only” has been switched off to show it.'
+        : 'That is not an exam, so “exams only” has been switched off to show it.');
+    } catch (_) {}
+  };
+
+  /* Shown once, after the reload that the save or the apply triggered.
+
+     Deferred to a task of its own on purpose. `showToast` is a hoisted function
+     declaration, so it is callable from here -- but its body touches `undo` and
+     `undoTimer`, which are `let` further down and therefore in the temporal
+     dead zone this early. Calling it from here threw
+     "Cannot access 'undo' before initialization", which the catch swallowed, so
+     the filter was cleared correctly and the sentence explaining why never
+     appeared. And the note is removed only once it has actually been shown, or
+     a throw loses the explanation for good. */
+  setTimeout(() => {
+    let note = null;
+    try { note = sessionStorage.getItem(KEEP_FILTER_NOTE); } catch (_) {}
+    if (!note) return;
+    showToast(note);
+    try { sessionStorage.removeItem(KEEP_FILTER_NOTE); } catch (_) {}
+  }, 0);
+
   /* ---- the calendar assistant ----
      The model chooses WHAT to do and to WHICH entries, picking from ids the
      server gave it; the server works out every date and re-checks every id on
@@ -1029,6 +1076,9 @@ dialog.sheet::backdrop{background:#0B0908cc}
       return;
     }
     aiSheet.close();
+    // A schedule import adds Labs as `event`, so with "exams only" on, half of
+    // what the preview just promised would come back invisible.
+    unhideForKinds(chosen.map(c => c.kind).filter(Boolean));
     location.reload();          // the month is rendered by the server
   };
   $('evCancel').onclick = () => sheet.close();
@@ -1059,6 +1109,8 @@ dialog.sheet::backdrop{background:#0B0908cc}
       });
       const data = await res.json();
       if (!res.ok) { $('evError').textContent = data.error || 'That could not be saved.'; return; }
+      // Saving something the current filter hides reads as the save failing.
+      unhideForKinds([body.kind]);
       // A save can move an event into another month, so the month has to be
       // re-read rather than patched in place.
       location.reload();

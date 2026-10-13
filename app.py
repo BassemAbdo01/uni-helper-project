@@ -204,7 +204,29 @@ limiter = Limiter(
 
 # Gemini work is the scarce resource: an outline analysis is a three-stage
 # pipeline, so a handful of these is worth many ordinary requests.
-AI_LIMIT = "40 per day; 12 per hour"
+#
+# It was "40 per day; 12 per hour", which is plenty for a student using a
+# feature that works and nowhere near enough for one troubleshooting a feature
+# that does not. Reported from the calendar after a schedule import kept coming
+# back empty: twelve attempts is about fifteen minutes of trying different
+# wordings, and the reward for persevering was being locked out of the feature.
+# Environment-tunable so the ceiling can move without a deploy.
+AI_LIMIT = os.environ.get("AI_LIMIT", "150 per day; 40 per hour")
+
+
+def ai_limit(view):
+    """The AI allowance.
+
+    Every call counts, including the ones that end in an error. Not charging
+    for failures was tried and backed out: a vision call that reads an image and
+    then answers 422 "nothing dated in that picture" has ALREADY spent the
+    Gemini quota this limit exists to protect, so exempting it puts a hole in
+    the guarantee rather than a kindness in the budget. Two existing tests
+    caught it by hammering a route with failing requests and never being
+    stopped. The reported lock-out was the ceiling being too low, which is
+    fixed above, and not what it counted.
+    """
+    return limiter.limit(AI_LIMIT)(view)
 
 # ============================
 # Access: a free month, then paid
@@ -3602,7 +3624,7 @@ def _copilot_amend_outline(user_id, prompt, history, images):
 
 
 @app.route("/api/copilot", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 def copilot():
     """Conversational, semester-aware Nexora AI powered by Gemini."""
@@ -4220,7 +4242,7 @@ def grading_scale_api():
 
 
 @app.route("/api/grading-scale/analyze", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def analyze_grading_scale_upload():
@@ -5789,6 +5811,34 @@ def _anchor_undated_year(month, day, today):
     return best[1] if best else None
 
 
+_WEEKDAY_INDEX = {"monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1,
+                  "wednesday": 2, "wed": 2, "thursday": 3, "thu": 3, "thurs": 3,
+                  "friday": 4, "fri": 4, "saturday": 5, "sat": 5,
+                  "sunday": 6, "sun": 6}
+
+
+def _day_in_stated_week(stated, weekday_name):
+    """The actual date of a weekday inside a week a schedule named.
+
+    A great many course schedules are printed by WEEK -- "Week of 19 October" --
+    because the lab or tutorial falls on whichever day that student is enrolled
+    for. Turning that into a date is arithmetic, and the model proved it cannot
+    be trusted with it: asked for the Tuesday of the week of 19 October it
+    answered 2026-10-21 (a Wednesday) from a table and 2026-10-20 (correct) from
+    the same information written as prose. Two answers to one question, one of
+    them a day out, on exactly the screen a student checks to decide what to do.
+
+    The week is anchored on its Monday rather than on the printed date itself,
+    so "week of Sunday 18 October" and "week of Monday 19 October" mean the same
+    week -- which is what they mean to the student reading the schedule.
+    """
+    index = _WEEKDAY_INDEX.get(str(weekday_name or "").strip().lower())
+    if stated is None or index is None:
+        return None
+    monday = stated - timedelta(days=stated.weekday())
+    return monday + timedelta(days=index)
+
+
 _TIMETABLE_VISION_MODELS = (["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
                             + _gemini_model_candidates(vision=True))
 
@@ -5807,7 +5857,7 @@ _SCHEDULE_OCR_PROMPT = (
 
 
 @app.route("/api/calendar/from-image", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def calendar_from_image():
@@ -5863,8 +5913,8 @@ def calendar_from_image():
     codes = sorted(_known_course_codes(current_user.id))
     schema = {"understood": "",
               "rows": [{"course": "", "title": "", "kind": "exam", "date": "",
-                        "year_printed": False, "time": "", "location": "",
-                        "skip": False, "why": ""}]}
+                        "year_printed": False, "names_a_week": False, "weekday": "",
+                        "time": "", "location": "", "skip": False, "why": ""}]}
     rules = [
         f"Today is {today.isoformat()}. Every date is ISO yyyy-mm-dd.",
         "The text below was transcribed from a student's timetable or course "
@@ -5892,6 +5942,16 @@ def calendar_from_image():
         'year_printed is true only if the row itself shows a year. A row '
         'reading "07-Sep" shows none, so it is false -- still give your best '
         "date, and the server will fix the year.",
+        # Measured: asked for the Tuesday of "Week of 19 October" the model
+        # answered 2026-10-21 (a Wednesday) from a table and 2026-10-20
+        # (correct) from the same facts written as prose. It must report the
+        # week and let the server count the days.
+        'names_a_week is true when the row gives a WEEK rather than a day -- '
+        '"Week of 19 October", "w/c 19 Oct". Put that week\'s own date in date '
+        "and do NOT work out the weekday yourself.",
+        'weekday is the day the student\'s instruction asks for inside that '
+        'week ("Monday".."Sunday"), or "" if they did not say. The server turns '
+        "the week and the weekday into the date.",
         'time is 24-hour HH:MM taken from the start time, or "" if blank.',
         "why is the row as printed, so the student can check it.",
     ]
@@ -5949,6 +6009,14 @@ def calendar_from_image():
             anchored = _anchor_undated_year(day.month, day.day, today)
             if anchored:
                 day = anchored
+        # A row that names a week, and an instruction that names the day inside
+        # it, are two facts; the date between them is arithmetic and belongs
+        # here. Done after the year is settled, because the week's own date is
+        # usually printed without one.
+        if item.get("names_a_week"):
+            in_week = _day_in_stated_week(day, item.get("weekday"))
+            if in_week:
+                day = in_week
         # Resolved on the server, not left to the prompt. "for elec" came back
         # as ELEC, and a row filed under ELEC when the student's course is
         # ELEC2501B joins to no outline, no grades and no study plan -- the same
@@ -6010,7 +6078,7 @@ def calendar_from_image():
 
 
 @app.route("/api/calendar/scan-announcements", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def scan_announcements():
@@ -6179,7 +6247,7 @@ def scan_announcements():
 
 
 @app.route("/api/calendar/ai-events", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def calendar_ai_events():
@@ -7897,7 +7965,7 @@ def timetable_block(block_id):
 
 
 @app.route("/api/timetable/analyze", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def timetable_analyze():
@@ -8055,7 +8123,7 @@ def study_plan_api():
 
 
 @app.route("/api/study-plan/brief", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def study_plan_brief():
@@ -8087,7 +8155,7 @@ def study_plan_brief():
 
 
 @app.route("/api/study-plan/ask", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def study_plan_ask():
@@ -9453,7 +9521,7 @@ def _verify_quote_in_source(quote, source_text):
 
 
 @app.route('/api/course/<course_code>/ask', methods=['POST'])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def ask_course_ai(course_code):
@@ -9601,7 +9669,7 @@ def ask_course_ai(course_code):
 
 
 @app.route('/api/course/<course_code>/outline/upload', methods=['POST'])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def upload_course_outline(course_code):
@@ -10203,7 +10271,7 @@ OUTLINE:
 
 
 @app.route("/api/course/<course_code>/outline/analyze", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def analyze_course_outline(course_code):
@@ -10748,7 +10816,7 @@ def _apply_outline_edits(user_id, course, profile, analysis, data):
 
 
 @app.route("/api/course/<course_code>/outline/correct", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 def correct_course_outline_policy(course_code):
     """Let a student fix a specific detected value, or a wrongly-extracted
@@ -10922,7 +10990,7 @@ def _amend_course_outline(user_id, course, text, label="Added by the student"):
 
 
 @app.route("/api/course/<course_code>/outline/amend", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def amend_course_outline(course_code):
@@ -11015,7 +11083,7 @@ def _study_tool_prompt(artifact_type, schema, course, title):
 
 
 @app.route("/api/course/<course_code>/study-tools/generate", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def generate_study_tool(course_code):
@@ -12262,7 +12330,7 @@ def grade_calculator():
 
 
 @app.route("/api/analyze-outline", methods=["POST"])
-@limiter.limit(AI_LIMIT)
+@ai_limit
 @login_required
 @requires_active
 def analyze_outline_generic():
@@ -12503,10 +12571,24 @@ def handle_too_large(_exc):
 
 @app.errorhandler(429)
 def handle_rate_limited(exc):
-    detail = getattr(exc, "description", "") or "Too many requests."
+    """Say what ran out, in a sentence.
+
+    Flask-Limiter's `description` is the raw rule -- "12 per 1 hour" -- and it
+    was glued straight onto the sentence after it, so the calendar showed
+    "12 per 1 hour This limit protects the shared AI quota every student's
+    outline analysis depends on." Reported as part of a feature looking broken,
+    which is fair: it reads like a stack trace.
+    """
+    detail = str(getattr(exc, "description", "") or "").strip()
+    rule = re.match(r"^(\d+)\s+per\s+(?:1\s+)?(\w+)", detail)
+    if rule:
+        said = f"That is the limit of {rule.group(1)} per {rule.group(2)} for this feature. "
+    else:
+        said = "That is more requests than Nexora allows in a short time. "
     return _error_response(
         429, "Slow down for a moment",
-        f"{detail} This limit protects the shared AI quota every student's outline analysis depends on.",
+        said + "It protects the Gemini quota every student's outline analysis "
+               "shares. Nothing is lost, and the allowance refills on its own.",
     )
 
 
