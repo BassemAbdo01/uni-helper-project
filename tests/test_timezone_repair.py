@@ -14,6 +14,7 @@
 
 import os
 import sys
+from datetime import date, timedelta
 from uuid import uuid4
 
 import pytest
@@ -163,28 +164,49 @@ def test_canvas_states_its_own_zone_and_that_is_used():
 
 # --------------------------- the feed's own timestamp shapes
 
-D2L_FEED = """BEGIN:VCALENDAR
+# Every date below is anchored to the day the suite RUNS, not to the autumn it
+# was written in. The calendar drops anything more than a week past
+# (`dleft < -7`), so a fixture dated 6 October quietly stopped being rendered on
+# 14 October 2026 and this file failed for a reason with nothing to do with
+# timezones. What these tests pin is the RELATIONSHIP between the four DTSTART
+# shapes and the day each one lands on; where they sit in the year is incidental,
+# and hard-coding it made them expire.
+_ANCHOR = date(2026, 10, 13)
+_SHIFT = (date.today() - _ANCHOR).days
+
+
+def _d(iso):
+    """A fixture date, kept the same distance from today as when it was written."""
+    return (date.fromisoformat(iso) + timedelta(days=_SHIFT)).isoformat()
+
+
+def _stamp(iso):
+    """The same date in the feed's own yyyymmdd."""
+    return _d(iso).replace("-", "")
+
+
+D2L_FEED = f"""BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//D2L//Brightspace//EN
 BEGIN:VEVENT
 UID:utc-late
 SUMMARY:Lab 04 - Inheritance is due - SYSC2004A
-DTSTART:20261007T020000Z
+DTSTART:{_stamp('2026-10-07')}T020000Z
 END:VEVENT
 BEGIN:VEVENT
 UID:tzid-late
 SUMMARY:Lab 05 - JUnit is due - SYSC2004A
-DTSTART;TZID=America/Toronto:20261013T220000
+DTSTART;TZID=America/Toronto:{_stamp('2026-10-13')}T220000
 END:VEVENT
 BEGIN:VEVENT
 UID:floating-early
 SUMMARY:Week 5 Quiz is due - SYSC2004A
-DTSTART:20261015T003000
+DTSTART:{_stamp('2026-10-15')}T003000
 END:VEVENT
 BEGIN:VEVENT
 UID:allday
 SUMMARY:Reading week starts - SYSC2004A
-DTSTART;VALUE=DATE:20261026
+DTSTART;VALUE=DATE:{_stamp('2026-10-26')}
 END:VEVENT
 END:VCALENDAR
 """
@@ -213,7 +235,7 @@ def test_a_ten_pm_deadline_is_not_pushed_to_the_next_day(client):
     import_feed(client)
     found = days_by_title()
     lab04 = next(v for k, v in found.items() if "Inheritance" in k)
-    assert lab04 == ("2026-10-06", "22:00")
+    assert lab04 == (_d("2026-10-06"), "22:00")
 
 
 def test_a_tzid_time_is_honoured(client):
@@ -222,7 +244,7 @@ def test_a_tzid_time_is_honoured(client):
     client.post("/api/timezone", json={"timezone": "America/Toronto"})
     import_feed(client)
     lab05 = next(v for k, v in days_by_title().items() if "JUnit" in k)
-    assert lab05 == ("2026-10-13", "22:00")
+    assert lab05 == (_d("2026-10-13"), "22:00")
 
 
 def test_a_floating_time_is_wall_clock_not_utc(client):
@@ -234,7 +256,7 @@ def test_a_floating_time_is_wall_clock_not_utc(client):
     client.post("/api/timezone", json={"timezone": "America/Toronto"})
     import_feed(client)
     quiz = next(v for k, v in days_by_title().items() if "Week 5 Quiz" in k)
-    assert quiz == ("2026-10-15", "00:30")
+    assert quiz == (_d("2026-10-15"), "00:30")
 
 
 def test_an_all_day_entry_is_never_shifted(client):
@@ -243,7 +265,7 @@ def test_an_all_day_entry_is_never_shifted(client):
     client.post("/api/timezone", json={"timezone": "Asia/Tokyo"})
     import_feed(client)
     reading = next(v for k, v in days_by_title().items() if "Reading week" in k)
-    assert reading[0] == "2026-10-26"
+    assert reading[0] == _d("2026-10-26")
 
 
 def test_the_calendar_shows_the_time_so_it_can_be_checked(client):
@@ -252,9 +274,9 @@ def test_the_calendar_shows_the_time_so_it_can_be_checked(client):
                                  "password": PASSWORD})
     client.post("/api/timezone", json={"timezone": "America/Toronto"})
     import_feed(client)
-    body = client.get("/calendar?month=2026-10").get_data(as_text=True)
+    body = client.get("/calendar?month=" + _d("2026-10-06")[:7]).get_data(as_text=True)
     assert "22:00" in body
-    assert 'data-date="2026-10-06"' in body
+    assert 'data-date="%s"' % _d("2026-10-06") in body
 
 
 def test_settings_lets_a_student_see_and_change_it(client):

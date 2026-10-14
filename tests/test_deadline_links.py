@@ -157,23 +157,36 @@ def test_the_calendar_carries_the_link_on_the_entry(synced, client):
 
 # -------------------------------------------------------------- the ICS feed
 
+# The feed's dates are anchored to the day the suite RUNS. Written against a
+# fixed 7 October, this stopped importing at all once that was far enough in the
+# past, and the file failed for a reason with nothing to do with links. What is
+# pinned here is that a URL: property survives the import and an event without
+# one gets no link -- not which week it happened in.
+_ANCHOR = date(2026, 10, 13)
+_SHIFT = (date.today() - _ANCHOR).days
+
+
+def _stamp(iso):
+    return (date.fromisoformat(iso) + timedelta(days=_SHIFT)).isoformat().replace("-", "")
+
+
 FEED = """BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//Nexora//Test//EN
 BEGIN:VEVENT
 UID:ics-1
 DTSTAMP:20260901T000000Z
-DTSTART:20261007T020000Z
+DTSTART:{lab}T020000Z
 SUMMARY:Lab 3 - SYSC 2004
 URL:{origin}/d2l/le/content/42/viewContent/99/View
 END:VEVENT
 BEGIN:VEVENT
 UID:ics-2
 DTSTAMP:20260901T000000Z
-DTSTART:20261009T020000Z
+DTSTART:{tut}T020000Z
 SUMMARY:Tutorial 3 - SYSC 2004
 END:VEVENT
-END:VCALENDAR""".format(origin=ORIGIN)
+END:VCALENDAR""".format(origin=ORIGIN, lab=_stamp("2026-10-07"), tut=_stamp("2026-10-09"))
 
 
 def test_a_feed_event_that_states_a_url_keeps_it(synced, client):

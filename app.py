@@ -11756,6 +11756,28 @@ def course_ai_context(course_code):
     })
 
 
+# A day cell is read top to bottom, so it has to run earliest first. The month
+# grid appended in `sort_cards` order, which is the right order for the task
+# QUEUE -- by urgency -- and inside a single day it put a 19:00 test above a
+# 14:00 midterm. Reported from the calendar with both times on screen.
+_NO_TIME_OF_DAY = 24 * 60 + 1          # sorts after every real time
+
+
+def _time_of_day_key(item):
+    """Minutes from midnight, or past the end of the day when none is known.
+
+    An entry with no time is not an all-day event -- it is one whose time Nexora
+    was never told -- so it cannot claim a place in the chronology and follows
+    the entries that can. Python's sort is stable, so among equal times, and
+    among the untimed, `sort_cards`' own ordering survives untouched.
+    """
+    raw = str(item.get("time") or "").strip()
+    match = _TIME_RE.match(raw)
+    if not match:
+        return _NO_TIME_OF_DAY
+    return int(match.group(1)) * 60 + int(match.group(2))
+
+
 @app.route("/calendar")
 @login_required
 def calendar_page():
@@ -11837,6 +11859,10 @@ def calendar_page():
                 "imported": (c.get("source") or "manual") != "manual",
                 "link": c.get("source_link") or "",
             })
+
+    # Chronological within each day, once every entry for it is collected.
+    for day_items in tasks_by_date.values():
+        day_items.sort(key=_time_of_day_key)
 
     weeks = []
     week = []
