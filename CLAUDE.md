@@ -645,6 +645,61 @@ short-circuits an item whose hash has not changed, so a deadline attached to
 already-imported content would never be created retroactively -- which is every
 student who synced before this shipped.
 
+## A final is not a test with a different word on it
+
+A term has two or three, they are worth more than everything else put together,
+and in December the month is nothing but finals -- so inside the set already
+marked `major` they have to be the ones that read loudest. `data-major` is on
+the card now (the badge text was always rendered; the CSS had nothing to hook
+on), `.ev[data-major="FINAL"]` carries a heavier border, fill and title, and the
+day cell gets `hasfinal` on top of `hasmajor` so a December grid reads as "these
+four squares" before anything is opened.
+
+Everything that changes is WEIGHT, never hue. The course colour is the one thing
+the legend promises, and a final that stopped being its course's colour would
+break that promise to make a different point.
+
+**A university's exam schedule names no activity.** Carleton Central prints the
+course, the date, the start time and the room -- so the prompt's default
+("title it what the row calls the activity") titled every row with a course
+code, and `_major_assessment_label` saw no word meaning an exam. The FINAL
+badge, the outlined day and the planner's revision ladder all hang off that word
+being present, so the image prompt now recognises the shape and titles those
+rows "Final Exam". Measured on the live key against a schedule in that layout:
+five of five rows FINAL, right dates, right start times, rooms into `location`,
+and every course code resolved to the student's own.
+
+## The student picks the colours
+
+`CourseColour` holds an INDEX into the existing ramp, never a hex value, so no
+course can be made illegible against the dark theme -- and it is per ACCOUNT,
+because the colour map is how a month is read at a glance and it has to be the
+same on a phone.
+
+**The override is applied inside `_student_course_colours`**, not at any call
+site. That function exists because the calendar and the study plan once built
+their own maps and disagreed about what colour SYSC2004 was; an override
+honoured on one screen and not the other would be that same bug, reintroduced
+by the feature meant to fix it. Verified by reading the study plan after
+recolouring from the calendar.
+
+The dot in the legend is its own control and the name beside it keeps hiding the
+course, because they answer different questions: the colour is a setting kept on
+the account, hiding is a glance forgotten on reload. They are siblings in a
+`.lgwrap` rather than nested, since a button inside a button is not valid.
+
+Two things found by running it:
+
+- **`--c0..--c7` live on `.cal`, not on `:root`.** The palette popover is
+  appended to the body so it can escape the grid's overflow, so
+  `background: var(--c3)` resolved to nothing and it opened as eight
+  transparent circles. It reads the values off `.cal` with
+  `getPropertyValue` -- resolving from the one definition rather than repeating
+  the ramp, which is the drift this codebase keeps paying for.
+- **An empty course string is not nothing.** `_normalize_course_code("")`
+  returns `"OTHER"`, which is a real bucket in the legend, so the route checks
+  the raw string before normalising or an empty field quietly recolours it.
+
 ## A filter must never swallow what was just added
 
 Reported as **"i cant even add manually now"**. It added perfectly, every time.

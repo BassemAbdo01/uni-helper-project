@@ -87,9 +87,26 @@
   transition:opacity .18s var(--ease)}
 .lg.lgc:hover{opacity:.78}
 .lg.lgc[aria-pressed="true"]{opacity:.34;text-decoration:line-through}
-.lg.lgc[aria-pressed="true"] .sw{background:transparent;
-  box-shadow:inset 0 0 0 1px var(--line-2)}
 .lg.lgc:focus-visible{outline:2px solid var(--amber);outline-offset:3px;border-radius:4px}
+/* The dot is its own control now, so the hidden state has to reach it as a
+   SIBLING rather than as a child. */
+.lgwrap{display:inline-flex;align-items:center;gap:6px}
+.lgwrap:has(.lgc[aria-pressed="true"]) .swbtn{background:transparent;
+  box-shadow:inset 0 0 0 1px var(--line-2)}
+.swbtn{width:9px;height:9px;flex:none;padding:0;border:0;border-radius:50%;
+  background:var(--ev,var(--amber));cursor:pointer;transition:transform .14s var(--ease)}
+.swbtn:hover{transform:scale(1.5)}
+.swbtn:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+/* The palette, opened from a dot. */
+.swatches{position:absolute;z-index:40;display:flex;gap:7px;padding:9px 10px;
+  background:var(--surface-2);border:1px solid var(--line-2);border-radius:9px;
+  box-shadow:0 12px 30px rgba(0,0,0,.45)}
+.swatches button{width:17px;height:17px;padding:0;border:0;border-radius:50%;cursor:pointer;
+  box-shadow:0 0 0 1px rgba(255,255,255,.12)}
+.swatches button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--fg)}
+.swatches .reset{width:auto;height:auto;border-radius:5px;background:none;
+  font:inherit;font-size:11.5px;color:var(--fg-3);padding:2px 6px;box-shadow:none}
+.swatches .reset:hover{color:var(--fg)}
 
 @media (max-width:700px){.lgfilter{margin-left:0;width:100%}}
 
@@ -167,6 +184,28 @@
   color:#17140F;background:var(--ev,var(--amber))}
 /* Inside a week it stops being a date and becomes a countdown. */
 .ev .soon{color:var(--ev,var(--amber));font-weight:700}
+
+/* A FINAL is not a test with a different word on it. A term has two or three,
+   they are worth more than everything else on the page put together, and in
+   December the month is nothing but finals -- so inside the set of things
+   already marked `major` they have to be the ones that read loudest.
+
+   Everything here is weight, not hue: the course colour still says WHICH
+   course, which is the one thing the legend promises. */
+.ev[data-major="FINAL"]{border-width:1px 1px 1px 4px;
+  border-color:color-mix(in srgb,var(--ev,var(--amber)) 78%,transparent);
+  background:color-mix(in srgb,var(--ev,var(--amber)) 20%,var(--surface-2));
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ev,var(--amber)) 22%,transparent)}
+.ev[data-major="FINAL"]:hover{background:color-mix(in srgb,var(--ev,var(--amber)) 30%,var(--surface-2))}
+.day.today .ev[data-major="FINAL"]{background:color-mix(in srgb,var(--ev,var(--amber)) 26%,var(--surface-3))}
+.ev[data-major="FINAL"] strong{font-weight:750;font-size:13px;-webkit-line-clamp:4}
+.ev[data-major="FINAL"] .tag{font-size:9px;letter-spacing:.14em;padding:2px 6px}
+/* The countdown earns more room on the one entry a whole month is aimed at. */
+.ev[data-major="FINAL"] .soon{font-size:11px;letter-spacing:.04em}
+/* ...and the day it falls on is marked harder than an ordinary major day, so a
+   December grid reads as "these four squares" at a glance. */
+.day.hasfinal{background:var(--surface-3)}
+.day.hasfinal .n{color:var(--fg);font-weight:750}
 
 /* A day holding a major assessment is marked at the cell, so it is findable
    while scanning a month rather than only once you are reading the entry. */
@@ -313,9 +352,19 @@ dialog.sheet::backdrop{background:#0B0908cc}
     {% if course_legend %}
       <span class="k">Courses</span>
       {% for c in course_legend %}
-        <button type="button" class="lg lgc" data-course="{{ c.course }}"
-                aria-pressed="false" title="Hide {{ c.course }} for now"><span class="sw"
-                style="--ev:var(--c{{ c.color_index }})"></span>{{ c.course }}</button>
+        {# Two controls, because they answer two different questions. The dot
+           changes what colour the course is drawn in -- a setting, kept on the
+           account. The name hides it for a glance and is forgotten on reload.
+           Nesting them would be an invalid button inside a button, so they are
+           siblings sharing one chip. #}
+        <span class="lgwrap">
+          <button type="button" class="swbtn" data-course="{{ c.course }}"
+                  data-index="{{ c.color_index }}" style="--ev:var(--c{{ c.color_index }})"
+                  title="Change the colour for {{ c.course }}"
+                  aria-label="Change the colour for {{ c.course }}"></button>
+          <button type="button" class="lg lgc" data-course="{{ c.course }}"
+                  aria-pressed="false" title="Hide {{ c.course }} for now">{{ c.course }}</button>
+        </span>
       {% endfor %}
       <span class="lg ex"><span class="sw"></span>Exams &amp; midterms are outlined</span>
     {% endif %}
@@ -332,13 +381,16 @@ dialog.sheet::backdrop{background:#0B0908cc}
     {% for week in weeks %}
       {% for day in week %}
         {% if day %}
-          <div class="day{% if day.is_today %} today{% endif %}{% if day.tasks|selectattr('major')|first %} hasmajor{% endif %}" data-date="{{ day.iso }}">
+          <div class="day{% if day.is_today %} today{% endif %}{%
+            if day.tasks|selectattr('major')|first %} hasmajor{% endif %}{%
+            if day.tasks|selectattr('major', 'equalto', 'FINAL')|first %} hasfinal{% endif %}" data-date="{{ day.iso }}">
             <span class="n">{{ day.day }}</span>
             <button type="button" class="dayadd" data-date="{{ day.iso }}"
                     aria-label="Add an event on {{ day.iso }}">+</button>
             <div class="evs">
               {% for task in day.tasks %}
                 <button type="button" class="ev{% if task.major %} major{% endif %}" style="--ev:var(--c{{ task.color_index }})"
+                        {% if task.major %}data-major="{{ task.major }}"{% endif %}
                         data-id="{{ task.id }}" data-title="{{ task.title }}"
                         data-course="{{ task.course }}" data-date="{{ day.iso }}"
                         data-time="{{ task.time }}" data-kind="{{ task.kind }}"
@@ -671,6 +723,94 @@ dialog.sheet::backdrop{background:#0B0908cc}
       chip.setAttribute('aria-pressed', off ? 'true' : 'false');
       chip.title = (off ? 'Show ' : 'Hide ') + course + (off ? ' again' : ' for now');
       applyCourseFilter();
+    };
+  });
+
+  /* ---- what colour a course is drawn in ----
+     The automatic map is alphabetical over the courses with dated work: stable,
+     but arbitrary, and it reshuffles the day a course gains its first deadline
+     -- which is exactly when someone has started thinking of BIOL as the amber
+     one. A choice here is kept on the ACCOUNT, so the month reads the same on a
+     phone, and it is an index into the same palette rather than a free colour,
+     so nothing can be made illegible against the dark theme. */
+  const COLOURS = {{ range(course_colour_count) | list | tojson }};
+  let palette = null;
+
+  const closePalette = () => { if (palette) { palette.remove(); palette = null; } };
+  document.addEventListener('click', e => {
+    if (palette && !palette.contains(e.target) && !e.target.closest('.swbtn')) closePalette();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePalette(); });
+
+  const paintCourse = (course, index) => {
+    // Every entry for that course, and its own dot, without a reload.
+    document.querySelectorAll('.ev').forEach(ev => {
+      if ((ev.dataset.course || '') === course) ev.style.setProperty('--ev', `var(--c${index})`);
+    });
+    document.querySelectorAll('.swbtn').forEach(sw => {
+      if ((sw.dataset.course || '') === course) {
+        sw.dataset.index = String(index);
+        sw.style.setProperty('--ev', `var(--c${index})`);
+      }
+    });
+  };
+
+  const sendColour = async (course, index) => {
+    const res = index === null
+      ? await fetch('/api/course-colour/' + encodeURIComponent(course), { method: 'DELETE' })
+      : await fetch('/api/course-colour', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ course, index }),
+        });
+    let data = {};
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok) { showToast(data.error || 'That colour could not be saved.'); return; }
+    // Repaint from what the SERVER returned, not from what was clicked: a reset
+    // lands on whatever the automatic map says, which the page cannot work out.
+    Object.entries(data.colours || {}).forEach(([code, i]) => paintCourse(code, i));
+  };
+
+  document.querySelectorAll('.swbtn').forEach(dot => {
+    dot.onclick = e => {
+      e.stopPropagation();
+      const open = palette;
+      closePalette();
+      if (open && open.dataset.course === dot.dataset.course) return;  // click again to close
+
+      const course = dot.dataset.course || '';
+      const box = document.createElement('div');
+      box.className = 'swatches';
+      box.dataset.course = course;
+      // --c0..--c7 are defined on `.cal`, and this is appended to the body so it
+      // can escape the grid's overflow -- so the variables are RESOLVED here
+      // rather than referenced. Referencing them gave eight transparent circles.
+      // Read from the one definition instead of repeating the ramp.
+      const ramp = getComputedStyle(document.querySelector('.cal'));
+      COLOURS.forEach(i => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.style.background = ramp.getPropertyValue(`--c${i}`).trim() || 'var(--line-2)';
+        b.setAttribute('aria-label', `Colour ${i + 1} for ${course}`);
+        b.setAttribute('aria-pressed', String(i === Number(dot.dataset.index)));
+        b.onclick = () => { closePalette(); sendColour(course, i); };
+        box.append(b);
+      });
+      const reset = document.createElement('button');
+      reset.type = 'button';
+      reset.className = 'reset';
+      reset.textContent = 'Auto';
+      reset.title = 'Back to the colour Nexora picked';
+      reset.onclick = () => { closePalette(); sendColour(course, null); };
+      box.append(reset);
+
+      document.body.append(box);
+      const r = dot.getBoundingClientRect();
+      // Placed after appending, so the real width is known and the palette can
+      // be kept on screen at a phone width.
+      const w = box.getBoundingClientRect().width;
+      box.style.top = `${window.scrollY + r.bottom + 8}px`;
+      box.style.left = `${Math.max(8, Math.min(r.left - 10, window.innerWidth - w - 8))}px`;
+      palette = box;
     };
   });
 

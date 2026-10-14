@@ -881,6 +881,30 @@ class DayNote(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+class CourseColour(db.Model):
+    """A colour the student chose for a course, overriding the automatic one.
+
+    The automatic map is alphabetical over the courses with dated work, so it
+    is stable but arbitrary -- and it reshuffles the moment a course gains its
+    first deadline, which is exactly when a student has started thinking of
+    BIOL as "the amber one". A choice made here outranks it for good.
+
+    Stored per account rather than per browser: the mapping is how a student
+    reads a month at a glance, and it must be the same on their phone. It keeps
+    the INDEX, not a hex value, so every choice stays inside the palette the
+    dark theme was built around and no course can be made illegible.
+    """
+    __tablename__ = "course_colour"
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    # 40 to match COURSE_CODE_MAX, which is defined below the models -- the same
+    # literal every other course column here uses.
+    course_full = db.Column(db.String(40), nullable=False, index=True)
+    colour_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class AcademicUpdate(db.Model):
     id = db.Column(db.String(64), primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
@@ -5935,6 +5959,15 @@ def calendar_from_image():
         "If none matches, use the code exactly as it is printed.",
         "title is what the entry should be called on a calendar. Default to "
         "what the row itself calls the activity.",
+        # A university's exam schedule names the COURSE, the date, the time and
+        # the room, and never the activity -- so the default above would title
+        # every row with a course code, and `_major_assessment_label` would see
+        # no word that means an exam. The FINAL badge, the outlined day and the
+        # planner's revision ladder all hang off that word being there.
+        'A FINAL EXAM SCHEDULE is a table of courses each with a date, a start '
+        'time and a room, naming no other activity. Title every row of one '
+        '"Final Exam", set kind "exam", and put the building and room in '
+        "location.",
         'kind is "exam" for anything sat or graded, "event" otherwise.',
         # The year is the one part of the date a course schedule usually never
         # prints, so the server replaces it. Asking for this flag is cheaper
@@ -6604,6 +6637,15 @@ def _student_course_colours(user_id, extra=()):
     out = {code: i % COURSE_COLOUR_COUNT for i, code in enumerate(primary)}
     for code in sorted({str(c or "").strip() for c in extra if str(c or "").strip()} - set(out)):
         out[code] = len(out) % COURSE_COLOUR_COUNT
+    # A choice the student made outranks the automatic map, and is applied HERE
+    # rather than at any one call site -- this function exists because the
+    # calendar and the study plan once built their own maps and disagreed about
+    # what colour SYSC2004 was. An override honoured on one screen and not the
+    # other would be that same bug, reintroduced by the feature meant to fix it.
+    for row in CourseColour.query.filter_by(user_id=user_id).all():
+        code = str(row.course_full or "").strip()
+        if code:
+            out[code] = int(row.colour_index or 0) % COURSE_COLOUR_COUNT
     return out
 
 
@@ -8353,6 +8395,58 @@ def _day_notes_for(user_id, today):
         # something the student wrote this morning and forgot.
         "carried": bool(r.day and r.day < today.isoformat() and not r.done),
     } for r in rows]
+
+
+@app.route("/api/course-colour", methods=["POST"])
+@login_required
+def set_course_colour():
+    """Pick the colour a course is drawn in, everywhere.
+
+    The index is validated against the palette rather than taken on trust: it
+    reaches `style="--ev:var(--c{{ index }})"` in three templates, and a value
+    outside the ramp would render the course with no colour at all -- an entry
+    that looks broken rather than one that looks wrong.
+
+    Going back to the automatic colour is the DELETE below rather than a value
+    here, so a student is never pinned to a choice they did not make.
+    """
+    data = request.get_json(silent=True) or {}
+    # The raw string is checked BEFORE normalising: _normalize_course_code("")
+    # returns "OTHER", which is a real bucket in the legend -- so an empty
+    # field would quietly recolour it instead of being refused.
+    raw = str(data.get("course") or "").strip()
+    course = _normalize_course_code(raw) if raw else ""
+    if not course:
+        return jsonify({"error": "That is not a course."}), 400
+    try:
+        index = int(data.get("index"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "That is not a colour."}), 400
+    if not 0 <= index < COURSE_COLOUR_COUNT:
+        return jsonify({"error": "That is not one of the colours."}), 400
+
+    row = CourseColour.query.filter_by(user_id=current_user.id, course_full=course).first()
+    if row is None:
+        row = CourseColour(id=uuid4().hex, user_id=current_user.id,
+                           course_full=course, colour_index=index)
+        db.session.add(row)
+    else:
+        row.colour_index = index
+    db.session.commit()
+    return jsonify({"ok": True, "course": course, "index": index,
+                    "colours": _student_course_colours(current_user.id)})
+
+
+@app.route("/api/course-colour/<path:course>", methods=["DELETE"])
+@login_required
+def clear_course_colour(course):
+    """Back to the automatic colour for this course."""
+    code = _normalize_course_code(str(course or ""))
+    row = CourseColour.query.filter_by(user_id=current_user.id, course_full=code).first()
+    if row is not None:
+        db.session.delete(row)
+        db.session.commit()
+    return jsonify({"ok": True, "colours": _student_course_colours(current_user.id)})
 
 
 @app.route("/api/day-notes", methods=["POST"])
@@ -11938,6 +12032,9 @@ def calendar_page():
         course_legend=[{"course": code, "color_index": colours.get(code, 0)}
                        for code in sorted({t["course"] for day in tasks_by_date.values() for t in day
                                            if t.get("course") and t["course"] != "OTHER"})],
+        # The palette the recolour control offers, so the page cannot drift from
+        # the ramp the templates actually define.
+        course_colour_count=COURSE_COLOUR_COUNT,
         user=current_user,
     )
 
