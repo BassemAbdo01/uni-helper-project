@@ -616,6 +616,14 @@ class CourseContent(db.Model):
     content_text = db.Column(db.Text, default="")
     module_name = db.Column(db.Text, default="")
     published_at = db.Column(db.String(80), default="")
+    # The extension has sent this on every item for a long time and the server
+    # dropped it, which is why a stale row cannot say whether it is a PDF or a
+    # web page -- and therefore why a lecture link could never be turned into a
+    # download. It is the ONLY thing that separates the two, measured against
+    # D2L's own TypeIdentifier across ten real courses: 0 wrong out of 100
+    # non-files. "A scraped value is worthless until something consumes it",
+    # the same shape as `due_at` before `_import_deadlines` existed.
+    file_ext = db.Column(db.String(12), default="")
     content_hash = db.Column(db.String(64), default="")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -1240,7 +1248,52 @@ def _browsable_d2l(text):
     return "%s/d2l/le/content/%s/viewContent/%s/View" % (m.group(1), m.group(2), m.group(3))
 
 
-def content_href(url):
+# D2L's own viewer route, which is what a stale row renders as. Both ids are
+# read back out of it; neither is guessed.
+_D2L_VIEW_TOPIC = re.compile(
+    r"^(https?://[^/]+)/d2l/le/content/(\d+)/viewContent/(\d+)/View/?$", re.I)
+
+# What may become a download. Deliberately documents only.
+#
+# Measured against D2L's own `TypeIdentifier` across ten of one student's real
+# courses, 210 topics: this set turned 83 File topics into downloads and
+# **never once** turned a non-File into one -- 0 wrong out of 100 Links and
+# ContentService topics, which is the property that matters, because
+# DirectFileTopicDownload answers **403** for those and a link that 403s is
+# worse than one that opens.
+#
+# `html` is excluded on purpose and is most of what it passes over (100 of the
+# 127 File topics it declines): those are course pages -- an EHS training
+# module, a welcome note -- and a student clicking one wants to read it, not
+# save it. Video is excluded for the same reason: a recording is for watching.
+_DOWNLOADABLE_EXT = {"pdf", "ppt", "pptx", "doc", "docx", "xls", "xlsx",
+                     "zip", "txt", "csv", "rtf", "odt", "ods", "odp"}
+
+
+def _d2l_download_href(url, file_ext):
+    """A lecture link that saves the lecture, where the row proves it is a file.
+
+    `_browsable_d2l` already turns D2L's content API endpoint into its viewer,
+    which opens -- so the Forbidden page went away and the lecture still did not
+    download. The download route exists (`DirectFileTopicDownload`, 200 with
+    `Content-Disposition: attachment`) but is only valid for a FILE topic, and
+    nothing on a stale row said which ones those were.
+
+    `file_ext` is what says it. The extension has always sent it; the server
+    dropped it until now. Anything without a document extension is left exactly
+    as it was, so this can only ever add downloads and never break a link.
+    """
+    ext = str(file_ext or "").strip().lower().lstrip(".")
+    if ext not in _DOWNLOADABLE_EXT:
+        return url
+    match = _D2L_VIEW_TOPIC.match(str(url or "").strip())
+    if not match:
+        return url
+    return "%s/d2l/le/content/%s/topics/files/download/%s/DirectFileTopicDownload" % (
+        match.group(1), match.group(2), match.group(3))
+
+
+def content_href(url, file_ext=""):
     """The href for a CourseContent row: the LMS gate, plus our own uploads.
 
     The course workspace rendered `row.source_url` straight into an `href` --
@@ -1258,7 +1311,10 @@ def content_href(url):
     text = str(url or "").strip()
     if text.startswith("/static/nexora_uploads/"):
         return text
-    return _lms_link(text)
+    # The gate runs FIRST and the download rewrite second, over what the gate
+    # allowed -- so a scraped `javascript:` URL can never reach the rewrite, and
+    # the rewrite can only ever move a link that was already safe to render.
+    return _d2l_download_href(_lms_link(text), file_ext)
 
 
 app.jinja_env.filters["content_href"] = content_href
@@ -11748,6 +11804,9 @@ def _import_content(user, payload):
             "content_text": _cap_content_text(item.get("content_text"), kind),
             "module_name": str(item.get("module_name") or "")[:1000],
             "published_at": str(item.get("published_at") or "")[:80],
+            # Sent by every extension version in the wild, including the one on
+            # the Web Store, and dropped here until now.
+            "file_ext": str(item.get("file_ext") or "").strip().lower()[:12],
         }
         fingerprint = _content_payload_hash(item_data)
         existing = CourseContent.query.filter_by(user_id=user.id, source_uid=source_uid).first()
@@ -11762,6 +11821,7 @@ def _import_content(user, payload):
             existing.content_text = item_data["content_text"]
             existing.module_name = item_data["module_name"]
             existing.published_at = item_data["published_at"]
+            existing.file_ext = item_data["file_ext"]
             existing.content_hash = fingerprint
             existing.updated_at = datetime.utcnow()
             counts["updated"] += 1
@@ -11774,7 +11834,8 @@ def _import_content(user, payload):
                 title=title, content_type=item_data["content_type"],
                 source_url=source_url, source_uid=source_uid,
                 content_text=item_data["content_text"], module_name=item_data["module_name"],
-                published_at=item_data["published_at"], content_hash=fingerprint,
+                published_at=item_data["published_at"], file_ext=item_data["file_ext"],
+                content_hash=fingerprint,
             ))
             counts["added"] += 1
             announce(course, "new_content", f"New {item_data['content_type']}: {title}",

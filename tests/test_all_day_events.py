@@ -2,7 +2,7 @@
 
 Reported from the dashboard: a career fair on **October 7** showed as
 **October 6, at 20:00**. Both halves are the same bug. The feed stated
-`DTSTART;VALUE=DATE:20261007` -- a calendar day, no clock time at all -- and the
+`DTSTART;VALUE=DATE:{_stamp('2026-10-07')}` -- a calendar day, no clock time at all -- and the
 `ics` library hands that back as midnight UTC. Midnight UTC on the 7th is 20:00
 Eastern on the 6th, so converting it produced a day that was wrong AND a start
 time that was never in the feed.
@@ -15,24 +15,47 @@ This is the same class as the original day-late bug, in the opposite direction:
 confidently wrong, on the screen a student checks to decide what to do today.
 """
 import io
+from datetime import date, timedelta
 
 import app as nexora
 
 
-ALL_DAY_FEED = """BEGIN:VCALENDAR
+# Anchored to the day the suite RUNS. Written against a fixed 7 October 2026,
+# this file passed until the 16th and then failed for a reason with nothing to
+# do with all-day events: the importer and the calendar both stop carrying work
+# that is far enough past. The third file in a week to go off this way, after
+# test_timezone_repair and test_deadline_links.
+#
+# What these tests pin is that `VALUE=DATE` is NEVER shifted while a real
+# timestamp IS -- a relationship between two events in one feed. Which week
+# they fall in was never part of it, and hard-coding it made them expire.
+_ANCHOR = date(2026, 10, 7)
+_SHIFT = (date.today() - _ANCHOR).days
+
+
+def _d(iso):
+    """A fixture date, kept the same distance from today as when it was written."""
+    return (date.fromisoformat(iso) + timedelta(days=_SHIFT)).isoformat()
+
+
+def _stamp(iso):
+    return _d(iso).replace("-", "")
+
+
+ALL_DAY_FEED = f"""BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//Nexora//Test//EN
 BEGIN:VEVENT
 UID:fair-1
 DTSTAMP:20260901T000000Z
-DTSTART;VALUE=DATE:20261007
-DTEND;VALUE=DATE:20261008
+DTSTART;VALUE=DATE:{_stamp('2026-10-07')}
+DTEND;VALUE=DATE:{_stamp('2026-10-08')}
 SUMMARY:Fall Career Fair 2026 10:00 am- 3:00 pm
 END:VEVENT
 BEGIN:VEVENT
 UID:timed-1
 DTSTAMP:20260901T000000Z
-DTSTART:20261008T020000Z
+DTSTART:{_stamp('2026-10-08')}T020000Z
 SUMMARY:Lab 4 - SYSC 2004
 END:VEVENT
 END:VCALENDAR"""
@@ -92,7 +115,7 @@ def test_an_all_day_event_keeps_the_day_the_feed_wrote(client):
     _import(client)
     rows = _rows(client)
     fair = next(v for k, v in rows.items() if "Career Fair" in k)
-    assert fair[0] == "2026-10-07", "the day the feed stated, unshifted"
+    assert fair[0] == _d("2026-10-07"), "the day the feed stated, unshifted"
 
 
 def test_an_all_day_event_is_given_no_start_time(client):
@@ -112,7 +135,7 @@ def test_a_real_timestamp_is_still_converted_to_the_students_day(client):
     _import(client)
     rows = _rows(client)
     lab = next(v for k, v in rows.items() if "Lab 4" in k)
-    assert lab[0] == "2026-10-07", "02:00Z on the 8th is the 7th in Toronto"
+    assert lab[0] == _d("2026-10-07"), "02:00Z on the 8th is the 7th in Toronto"
     assert lab[1] == "22:00"
 
 
@@ -122,7 +145,7 @@ def test_the_same_feed_in_utc_is_unchanged_for_the_all_day_event(client):
     _import(client)
     rows = _rows(client)
     fair = next(v for k, v in rows.items() if "Career Fair" in k)
-    assert fair == ("2026-10-07", "")
+    assert fair == (_d("2026-10-07"), "")
 
 
 def test_a_far_western_zone_still_cannot_move_an_all_day_event(client):
@@ -132,4 +155,4 @@ def test_a_far_western_zone_still_cannot_move_an_all_day_event(client):
     _import(client)
     rows = _rows(client)
     fair = next(v for k, v in rows.items() if "Career Fair" in k)
-    assert fair[0] == "2026-10-07"
+    assert fair[0] == _d("2026-10-07")

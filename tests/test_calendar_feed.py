@@ -13,6 +13,19 @@ import sys
 from datetime import date, timedelta
 from uuid import uuid4
 
+# A fixture date that is always a few weeks AHEAD of the day the suite runs.
+# Written as a fixed 15 October 2026, this file was one day from failing the
+# way test_all_day_events, test_timezone_repair and test_deadline_links already
+# did: Nexora stops carrying work far enough in the past, so the event simply
+# stops appearing in the feed and the assertion fails for a reason that has
+# nothing to do with iCalendar. What is pinned here is the SHAPE of what gets
+# written -- VALUE=DATE for an all-day entry, an exclusive DTEND, a time that
+# rolls into the next day -- never which week it falls in.
+_SOON = date.today() + timedelta(days=21)
+_SOON_ISO = _SOON.isoformat()
+_SOON_STAMP = _SOON.strftime("%Y%m%d")
+_NEXT_STAMP = (_SOON + timedelta(days=1)).strftime("%Y%m%d")
+
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -120,27 +133,27 @@ def test_it_is_served_as_a_calendar_not_a_download(student):
 def test_an_all_day_deadline_has_an_exclusive_end_date(student):
     """DTEND is exclusive in iCalendar. Setting it to the same day makes the
     event zero-length and Google hides it."""
-    add(student, date="2026-10-15", time="")
+    add(student, date=_SOON_ISO, time="")
     body = student.get(path_of(feed_url(student))).get_data(as_text=True)
     event = events_in(body)[0]
-    assert "DTSTART;VALUE=DATE:20261015" in event
-    assert "DTEND;VALUE=DATE:20261016" in event
+    assert "DTSTART;VALUE=DATE:" + _SOON_STAMP in event
+    assert "DTEND;VALUE=DATE:" + _NEXT_STAMP in event
 
 
 def test_an_exam_with_a_time_becomes_a_timed_event(student):
-    add(student, date="2026-10-15", time="18:00", kind="exam", location="Southam Hall")
+    add(student, date=_SOON_ISO, time="18:00", kind="exam", location="Southam Hall")
     event = events_in(student.get(path_of(feed_url(student))).get_data(as_text=True))[0]
-    assert "DTSTART:20261015T180000" in event
-    assert "DTEND:20261015T190000" in event
+    assert "DTSTART:" + _SOON_STAMP + "T180000" in event
+    assert "DTEND:" + _SOON_STAMP + "T190000" in event
     assert "LOCATION:Southam Hall" in event
 
 
 def test_a_late_exam_does_not_end_before_it_starts(student):
     """23:00 plus an hour is midnight the next day, not hour 24."""
-    add(student, date="2026-10-15", time="23:00")
+    add(student, date=_SOON_ISO, time="23:00")
     event = events_in(student.get(path_of(feed_url(student))).get_data(as_text=True))[0]
-    assert "DTSTART:20261015T230000" in event
-    assert "DTEND:20261016T000000" in event
+    assert "DTSTART:" + _SOON_STAMP + "T230000" in event
+    assert "DTEND:" + _NEXT_STAMP + "T000000" in event
 
 
 def test_commas_and_semicolons_are_escaped(student):

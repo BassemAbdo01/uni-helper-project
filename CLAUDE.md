@@ -573,6 +573,82 @@ This needs an extension release: the link is built during the scrape, so
 rewrites them.** Same shape as the deadline-date fix -- a sync repairs them, a
 migration cannot.
 
+## The server CAN turn a lecture link into a download, and here is what it took
+
+Reported a fourth time: *"same issue when i click it doesnt download, it just
+redirects"*. Measured on the live site before touching anything -- all 36 links
+on one course workspace were D2L `viewContent` URLs, which is exactly what
+`_browsable_d2l` renders a stale row as. It opens, which is why the Forbidden
+page went away and the lecture still did not download.
+
+The section above concluded the server could never repair a stale row, because
+`CourseContent` could not tell a PDF from a web page. **That was true and the
+fix was to make it able to.**
+
+Probed against the student's own Brightspace, with their session:
+
+| D2L `TypeIdentifier` | `DirectFileTopicDownload` answers |
+|---|---|
+| `File` | 200, `application/pdf`, `attachment` |
+| `Link` | **403** |
+| `ContentService` | **403** |
+
+So it can never be applied blindly -- on that one course it would have broken 10
+of 36 links. `content_type` is no help either: measured against D2L's truth,
+`lecture` covered 18 Files, 11 Links and 3 ContentService topics.
+
+**`file_ext` is what separates them, and the extension has always sent it.**
+`_import_content` dropped it, exactly as it once dropped `due_at`. Replicating
+the published build's own `file_ext` logic and scoring it against D2L's
+`TypeIdentifier` across **ten** of that student's real courses, 210 topics:
+
+- **83** File topics correctly turned into downloads
+- **0** non-File topics wrongly turned into downloads
+- 127 File topics left alone, **100 of them `.html`** -- course pages, which a
+  student clicking wants to read
+
+Zero false positives is the property that matters, because the failure mode is
+a 403 and a link that 403s is worse than one that opens. `_DOWNLOADABLE_EXT` is
+documents only; `html` and video are excluded deliberately.
+
+`content_href(url, file_ext)` runs the security gate FIRST and the rewrite over
+what the gate allowed, so a scraped `javascript:` URL can never reach it. A row
+with no extension, an unknown one, or a URL that is not a topic view is returned
+untouched -- this can only ever ADD a download.
+
+**The point of all this: it needs no extension release.** `file_ext` is on the
+payload of the build already published on the Web Store, so one ordinary
+re-import fixes every lecture. The 3.5.3 extension change is still right and
+still worth shipping, but it is no longer what the fix depends on.
+
+## A fixture dated in the past is a test with a timer on it
+
+Four files in one week failed for reasons that had nothing to do with what they
+tested, each one on a different day:
+
+| File | Dated | Went off |
+|---|---|---|
+| `test_timezone_repair` | 7 Oct | 14 Oct |
+| `test_deadline_links` | 7 Oct | 14 Oct |
+| `test_all_day_events` | 7 Oct | 16 Oct |
+| `test_calendar_feed` | 15 Oct | one day away when caught |
+
+Nexora deliberately stops carrying work far enough in the past -- the calendar
+drops `dleft < -7`, the importer declines old events, the feed leaves them out.
+So a fixture written "today" quietly stops being rendered, created or exported
+once the real date moves, and the assertion fails somewhere unrelated to the
+feature.
+
+Every one of them is now anchored to `date.today()`: a `_SHIFT` from the day the
+fixture was written, or `_SOON` for something that must be ahead. **What those
+tests pin is a relationship** -- that `VALUE=DATE` is never shifted while a real
+timestamp is, that a `URL:` property survives an import, that an all-day entry
+gets an exclusive `DTEND`. Which week it falls in was never part of it.
+
+Same lesson as the model table and the `15 requests` rate-limit test: pin
+invariants, never measurements -- and a date written into a fixture is a
+measurement of when it was written.
+
 ## A stored timestamp is UTC; a displayed one is the student's clock
 
 `local_stamp(value, fmt, user)`, registered as the Jinja filter
