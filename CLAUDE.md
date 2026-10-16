@@ -621,6 +621,37 @@ payload of the build already published on the Web Store, so one ordinary
 re-import fixes every lecture. The 3.5.3 extension change is still right and
 still worth shipping, but it is no longer what the fix depends on.
 
+## A new column needs a line in ensure_schema_columns, or the deploy 500s
+
+`db.create_all()` creates missing TABLES and **never adds a column to a table
+that already exists**. `ensure_schema_columns()` is the migration: an explicit
+`{table: {column: definition}}` map, run at startup, that `ALTER TABLE ... ADD
+COLUMN`s anything missing.
+
+`CourseContent.file_ext` was added to the model and not to that map. Caught
+while checking the deploy rather than after it, and the consequence would have
+been immediate and total: the model would reference a column Postgres does not
+have, so **every** query against `CourseContent` raises `UndefinedColumn` -- the
+course workspace, the dashboard's Recent updates, the study tools -- on a push
+that otherwise looked like a safe read-only change. SQLite would have carried
+on locally, which is exactly how it reaches production unnoticed.
+
+The check that proves it is a simulation, not a reading: build an OLD-shaped
+table in a throwaway SQLite file, point `DATABASE_URL` at it by **absolute**
+path, import `app`, and look at the columns afterwards.
+
+    file_ext added to the EXISTING table: True
+    the row that was already there survives: True | file_ext = ''
+    course_colour created alongside: True
+
+An absolute path matters. A first attempt used `sqlite:///uni_helper.db`, which
+Flask resolves against the **instance folder** -- so the app opened the repo's
+own dev database instead of the fixture, found the column already there from
+earlier local runs, and reported success while testing nothing.
+
+A new TABLE (`CourseColour`) needs no entry: `create_all()` handles those. It is
+only new columns on existing tables.
+
 ## A fixture dated in the past is a test with a timer on it
 
 Four files in one week failed for reasons that had nothing to do with what they

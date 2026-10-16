@@ -980,6 +980,16 @@ def ensure_schema_columns():
             # timezone repair works. There is nothing to back-fill from.
             "source_link": "TEXT DEFAULT ''",
         },
+        "course_content": {
+            # Without this line the model has a column Postgres does not, and
+            # EVERY query against CourseContent raises UndefinedColumn -- the
+            # course workspace, the dashboard's Recent updates, the study
+            # tools. `db.create_all()` creates missing TABLES and never adds a
+            # column to one that already exists, which is the whole reason this
+            # function exists. Existing rows default to "" and gain a real
+            # extension on the next sync, the same as every other backfill here.
+            "file_ext": "VARCHAR(12) DEFAULT ''",
+        },
         "grade_entry": {
             "notes": "VARCHAR(255) DEFAULT ''",
         },
