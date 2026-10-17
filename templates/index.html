@@ -790,9 +790,13 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
   const toast = $('#toast');
   let undoAction = null, undoTimer = null;
 
-  function showUndo(text, action) {
+  function showUndo(text, action, label) {
     undoAction = action;
     $('#toastText').textContent = text;
+    // The label is a parameter because the sync note reuses this bar and its
+    // button reloads the page -- a button marked Undo that refreshes instead
+    // is worse than no button.
+    $('#toastUndo').textContent = label || 'Undo';
     $('#toastUndo').hidden = !action;
     toast.classList.add('on');
     clearTimeout(undoTimer);
@@ -1005,6 +1009,36 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
 
   $$('dialog [data-close]').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
   $$('dialog').forEach(d => d.addEventListener('click', e => { if (e.target === d) d.close(); }));
+
+  /* ---- the Brightspace feed sync, off the render path ----
+     This used to run inside the dashboard's own render: the page waited for
+     the university to answer, for the .ics to parse and for every event to
+     import before sending a byte. Measured at 11.6-12.1s, against 0.4s for
+     everything else on the page -- so one load in every half hour took twelve
+     seconds and the rest were instant, which is what "it takes SO LONG to
+     load and open" was. The page is now painted first and the sync asked for
+     afterwards; the server still decides whether one is actually due.
+
+     A sync that changes nothing says nothing. One that does offers a reload
+     rather than taking one: a page that reorders itself under the hands of
+     someone already reading it is its own bug. */
+  {% if sync_due %}
+  addEventListener('load', () => setTimeout(async () => {
+    try {
+      const res = await fetch('/api/sync/auto', { method: 'POST' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.ran || !data.changed) return;
+      const c = data.counts || {};
+      const parts = [];
+      if (c.added) parts.push(`${c.added} new`);
+      if (c.updated) parts.push(`${c.updated} updated`);
+      if (c.removed) parts.push(`${c.removed} removed`);
+      showUndo(`Brightspace sync: ${parts.join(', ')}.`,
+               () => location.reload(), 'Refresh');
+    } catch { /* an offline student keeps the page they have */ }
+  }, 300));
+  {% endif %}
 })();
 </script>
 {% endblock %}

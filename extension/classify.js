@@ -48,6 +48,19 @@
    * "Lectures" and finds a Discord link. */
   var NOT_THE_MATERIAL = /\b(schedule|timetable|calendar|office\s*hours|discussion|forum|ask\s+them|q\s*&\s*a|sign[\s-]*up|attendance|evaluation)\b/i;
 
+  /* A module that names the MATERIAL, as opposed to one that names a WEEK.
+   *
+   * This distinction is the bug. `LECTURE_NUMBERED` was tested against the
+   * item's text PLUS its module name, and "Week 1" matches `week\s*\d+` -- so
+   * every item a course filed under a week-numbered module became a lecture.
+   * Run against this very file, with a module of "Week 1" or "Week 2":
+   * "Piazza", "Welcome!", "Grades FAQ", "Academic Integrity Policy", "Java
+   * Install Guide" and a Zoom link all came back `lecture`. Reported as
+   * "theres SO much useless stuff" in the Lectures list, and it was.
+   *
+   * A week is when a course happened. "Lectures" is what the thing IS. */
+  var MATERIAL_MODULE = /\b(lectures?|slides|notes|lessons?|course\s*material|courseware)\b/i;
+
   function classifyContent(title, url, activityType, moduleContext) {
     title = title || '';
     url = url || '';
@@ -81,7 +94,13 @@
     // evidence -- "Lecture Material" is a folder that also holds the schedule
     // -- so it only counts alongside a number, as it always did.
     if (LECTURE_WORDS.test(title) && !NOT_THE_MATERIAL.test(ownText)) return 'lecture';
-    if (LECTURE_NUMBERED.test(fullText) && !NOT_THE_MATERIAL.test(ownText)) return 'lecture';
+    // The number must be in the item's OWN text. Reading it out of the module
+    // name made a lecture of everything inside "Week 1" -- see MATERIAL_MODULE.
+    if (LECTURE_NUMBERED.test(ownText) && !NOT_THE_MATERIAL.test(ownText)) return 'lecture';
+    // A module may still vouch for an item, but only one that names the
+    // material rather than the week it fell in.
+    if (MATERIAL_MODULE.test(moduleContext || '') && !NOT_THE_MATERIAL.test(ownText)
+        && LECTURE_NUMBERED.test(fullText)) return 'lecture';
     if (['mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav'].indexOf(ext) >= 0
         && /lecture|lec|recording|class|week|module/.test(fullText)) return 'lecture';
     // A slide deck in a course is lecture material whatever it is called.

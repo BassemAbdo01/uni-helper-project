@@ -485,6 +485,46 @@ written with `utcnow`, and comparing it against local time is harmless only on
 a server that is already UTC -- which is why it survived. The same mistake was
 found and fixed in the writer (`save_sync_result`) and left in the reader.
 
+## The dashboard never waits for the university
+
+`home()` called `auto_sync_if_needed()` before rendering, so once every
+`AUTO_SYNC_MINUTES` (30) the page fetched the `.ics` from Carleton, parsed it
+and imported every event **before sending a single byte**. Measured here:
+
+| | |
+|---|---|
+| `/dashboard`, no sync due | 0.39 / 0.48 / 0.40s |
+| the sync it ran inline | **12.13 / 11.61s** |
+
+So twenty-nine minutes of loads were instant and one took twelve seconds.
+Reported as *"when i click open dashboard it takes SO LONG to load and open"* --
+and the intermittency is the tell, not a detail. This is the shape of fix
+CLAUDE.md already prescribes for outline analysis: run it outside the request.
+
+`home()` now computes `sync_due` and the page asks for `POST /api/sync/auto`
+once it has painted. **The flag decides whether to ASK; the endpoint decides
+whether to DO.** They are separate because the page may be an hour old by the
+time the fetch lands, and three open tabs each render with the flag set --
+`auto_sync_if_needed` re-checks `should_auto_sync` and stamps
+`last_sync_attempt` before the attempt, so the first request claims the slot
+and the rest return `ran: false` without touching the university. A stale page
+cannot force a sync.
+
+POST, not GET, for the reason `/api/tour` is: a prefetch must not spend it.
+
+**`ran` and `ok` are separate.** It returned a bare `None` for both "nothing
+was due" and "it tried and failed", which is the `_evaluate_pass_rules`
+mistake -- an answer that could not be given and a bad answer are not the same
+fact. Found while measuring in the browser: a feed pointed at an unreachable
+address answered `ran: false` in 0.32 seconds, which reads as "not due" and was
+really the connection failing. A student whose Brightspace token has expired
+has to be distinguishable from one who synced ten minutes ago, and this is the
+only place that knows.
+
+A sync that changed nothing says nothing; one that did offers a reload rather
+than taking one, because a page that reorders itself under someone already
+reading it is its own bug.
+
 ## A deadline links to the work, and only ever to a link it was given
 
 `Task.source_link`, filled by all three importers and rendered on the
@@ -663,6 +703,7 @@ tested, each one on a different day:
 | `test_deadline_links` | 7 Oct | 14 Oct |
 | `test_all_day_events` | 7 Oct | 16 Oct |
 | `test_calendar_feed` | 15 Oct | one day away when caught |
+| `test_calendar_events` | 9 Oct | 17 Oct, mid-way through unrelated work |
 
 Nexora deliberately stops carrying work far enough in the past -- the calendar
 drops `dleft < -7`, the importer declines old events, the feed leaves them out.
@@ -1136,7 +1177,7 @@ actually has a letter rule. The course workspace carried a client-side copy of
 the gate; both are gone.
 
 **A signed letter never matched.** The fallback's letter-rule regex was
-`([ABCDF][+-]?)`, and a word boundary cannot sit between "-" and a space,
+`\b([ABCDF][+-]?)\b`, and a word boundary cannot sit between "-" and a space,
 so "C- or better" was read as no rule at all -- the sign being the whole
 difference between C- and C. `LETTER` uses lookarounds, and reads both word
 orders ("required ... C- or better" and "C- or better is required").
@@ -1156,7 +1197,7 @@ is read as a percentage by `_parse_mark_entry` -- correct for the single-field
 entry it was built for, wrong for the two boxes here, where 4 out of 20 was
 stored as 4%.
 
-**"Final Lab Exam" is not the final exam.** `final` matches it, and BIOL 1103
+**"Final Lab Exam" is not the final exam.** `\bfinal\b` matches it, and BIOL 1103
 has both. Every matching row was excluded from the term-work total and the last
 one won the `final_row` slot, so the required-final solver worked against the
 12% lab exam while treating the 20% final as unmarked and assuming 100% on it.
@@ -1423,6 +1464,92 @@ dashboard first. Reported as "the sidebar doesn't show everything". The include
 carries no container, brand or CSS -- each page keeps its own `<nav>` and its
 own styling, and only the list is shared. `rail_extra` is the trailing item the
 workspace uses for the course it is on. Add a rail item in one place.
+
+**A week is when a course happened; it does not say what a thing IS.** The
+Lectures tab was reported as *"so many types recordings, then labs, then
+lectures again which arent lectures like theres SO much useless stuff"*.
+
+Run against the published `classify.js` itself, with a module of "Week 1":
+
+| Title | Filed as |
+|---|---|
+| Piazza | **lecture** |
+| Welcome! | **lecture** |
+| Grades FAQ | **lecture** |
+| Academic Integrity Policy | **lecture** |
+| Java Install Guide | **lecture** |
+| Zoom link for help sessions | **lecture** |
+
+`LECTURE_NUMBERED` was tested against the item's text **plus its module name**,
+and `"Week 1"` matches `week\s*\d+` -- so every item a course filed under a
+week-numbered module became a lecture. The existing 32-case corpus never caught
+it because every one of its junk titles happened to carry a `NOT_THE_MATERIAL`
+word; "Piazza" and "Welcome!" carry nothing at all. Labs were the other half:
+there is no lab rule, so "Lab 3" and "Tutorial 7" fell through to `page`.
+
+Both halves are fixed, and **the server half is the one that matters today**:
+`_material_section` re-sections the tab from the title, so the rows already in
+the database are fixed without an extension release. Same reasoning as
+`file_ext` and the deadline dates -- a classifier change only helps what is
+scraped after it ships, and the store is still on 3.5.1.
+
+**The section is decided on a POSITIVE signal, and the default is `other`.**
+Never a blacklist of junk words: a list of things to exclude is endless and
+wrong the first time a course invents a new kind of link, while a list of
+things that mean "this is a lecture" is short. Anything unrecognised lands
+under "Other course material", still on the page and still one click away --
+this can only ever MOVE a row, never hide one.
+
+A module may still vouch for an item, but only one that names the MATERIAL
+("Lectures", "Course material") **and** only for an item that is itself
+numbered or a real file. Left to vouch alone it has the same fault as the week
+module, just rarer: a course keeping everything in one "Course material" folder
+would empty that folder straight back into the Lectures list. A bare link with
+neither a number nor a file behind it is the one shape that is never a lecture.
+
+The stat beside the tab counts what the tab SHOWS. Left as the raw bucket it
+read 21 above a list of four -- the "37 courses in the extension, 11 on the
+dashboard" bug, one screen down.
+
+**`_flatten_thin_groups` drops a sub-heading that is not organising anything.**
+A week holds one lecture, so four lectures rendered as "Week 1 (1)", "Week 2
+(1)", "Week 3 (1)", "Week 4 (1)" -- more heading than content, with the week
+already in every title. The test is whether the grouping pays for itself: more
+groups than half the items means the average group holds fewer than two. The
+heading then moves onto the row, where it still says which week without
+claiming to be structure. Same complaint `_organise_course_items` exists to
+answer, arriving by a different road.
+
+**`classify-check.html` cache-busts its own script tag.** A plain
+`src="classify.js"` is served from the browser's HTTP cache, so after editing
+the classifier the page re-ran the OLD file and reported six failures that were
+already fixed on disk -- which reads exactly like the fix not working.
+
+**A recording is not a lecture with a different word on it.** Reported from a
+real ELEC2501B workspace: "Lecture_3" sat directly above "Lecture 3 Recording",
+as did Lecture 4, Lecture 05 and both parts of Lecture 06 -- eighteen rows
+alternating between the thing you read and the thing you watch. The extension
+classifies both as `lecture` and they carry the same breadcrumb, so nothing
+downstream could tell them apart. `_split_recordings` divides them and the page
+renders "Lecture recordings" as its own heading **below** the slides, which are
+what a student opens first.
+
+It is a server-side split on purpose. A new `content_type` from the extension
+would need a Web Store release and would leave every row already imported mixed
+up for ever -- the same trap as the deadline dates and the lecture links.
+
+`_is_lecture_recording` is deliberately narrow. A video or audio **file
+extension** is the half that cannot be wrong: a video sitting in the lecture
+list is the recording whatever it is called. The word **"video" is not
+matched**, because it is a topic as often as it is a format -- "Lecture 5:
+Video Transmission" is a slide deck -- and misfiling a deck buys nothing, since
+a real video lecture carries a video file. The stat beside the tab still counts
+both: splitting the LIST must not quietly halve the NUMBER next to it.
+
+**One group under a heading that names the section repeats itself.** The first
+version rendered "Lecture recordings (5)" directly above the breadcrumb group
+"Lectures (5)" -- the same noise the breadcrumb grouping below exists to
+remove. The inner heading is shown only when there is more than one group.
 
 **Material is grouped on the TOP of the breadcrumb, not all of it.**
 `_organise_course_items` -- Brightspace nests "Lectures › Topic 04 › ..." and

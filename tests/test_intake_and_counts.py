@@ -326,8 +326,13 @@ def test_a_failing_feed_backs_off_instead_of_retrying_every_page_load(client, mo
         raise RuntimeError("HTTP Error 403: Not authenticated.")
 
     monkeypatch.setattr(nexora, "fetch_feed_ics", always_403)
+    # The sync no longer runs inside the render -- the dashboard asks for it
+    # after it has painted -- so a page load is a load AND the request that
+    # follows it. Six of each, which is also the stronger property: asking six
+    # times must not hit the university six times.
     for _ in range(6):
         assert client.get("/dashboard").status_code == 200
+        assert client.post("/api/sync/auto").status_code == 200
     assert len(tries) == 1, f"tried {len(tries)} times across six page loads"
 
     with nexora.app.app_context():
@@ -352,6 +357,7 @@ def test_the_backoff_expires_so_a_fixed_feed_recovers(client, monkeypatch):
     monkeypatch.setattr(nexora, "fetch_feed_ics",
                         lambda url, *a, **kw: tries.append(url) or "BEGIN:VCALENDAR\nEND:VCALENDAR")
     client.get("/dashboard")
+    client.post("/api/sync/auto")
     assert len(tries) == 1, "once the window has passed it tries again"
 
 

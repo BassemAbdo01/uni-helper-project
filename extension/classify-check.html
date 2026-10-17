@@ -16,7 +16,11 @@
    <code>venv/Scripts/python.exe -m http.server 8777 --directory extension</code><br>
    then <code>http://localhost:8777/classify-check.html</code></p>
 <div id="out"></div>
-<script src="classify.js"></script>
+<!-- Cache-busted deliberately. A plain `src="classify.js"` is served from the
+     browser's HTTP cache, so after editing the classifier this page re-ran the
+     OLD file and reported six failures that had already been fixed on disk --
+     which reads exactly like the fix not working. -->
+<script>document.write('<script src="classify.js?v=' + Date.now() + '"><\/script>');</script>
 <script>
 /* Every title here is REAL, taken from one student's own Brightspace account
    on 2026-09-29. The old rule required a digit AFTER the keyword, and these
@@ -71,6 +75,31 @@ const CASES = [
   ['lab2_starter.zip', 'Lab Material', 'resource', 'code archive'],
   ['data.csv', 'Lab Material', 'resource', ''],
   ['Course Handbook.pdf', 'General Information', 'resource', 'a pdf with no lecture word'],
+
+  // A WEEK-numbered module must not make a lecture of everything inside it.
+  // `LECTURE_NUMBERED` was tested against the item's text plus its module
+  // name, and "Week 1" matches `week\s*\d+` -- so all six of these came back
+  // `lecture` and filled the Lectures list with links and admin pages.
+  // Reported as "theres SO much useless stuff". None of the cases above
+  // caught it, because every one of their junk titles happened to carry a
+  // NOT_THE_MATERIAL word; "Piazza" and "Welcome!" carry nothing at all.
+  ['Piazza', 'Week 2', 'page', 'a week module must not promote a link'],
+  ['Welcome!', 'Week 1', 'page', 'nor a welcome note'],
+  ['Grades FAQ', 'Week 2', 'page', 'nor an FAQ'],
+  ['Academic Integrity Policy', 'Week 1', 'page', 'nor a policy'],
+  ['Java Install Guide', 'Week 1', 'page', 'nor a setup guide'],
+  ['Zoom link for help sessions', 'Week 3', 'page', 'nor a meeting link'],
+
+  // ...while a real lecture in that same module is still a lecture, on the
+  // strength of its OWN title. Dropping these to fix the six above would be
+  // the opposite failure and a worse one.
+  ['Lecture 5 - Inheritance', 'Week 5', 'lecture', 'its own title says lecture'],
+  ['05 Notes', 'Week 5', 'lecture', 'its own title says notes'],
+  ['Topic 4 slides', 'Week 4', 'lecture', 'its own title is numbered material'],
+  ['Inheritance.pptx', 'Week 5', 'lecture', 'a deck is lecture material'],
+
+  // A module that names the MATERIAL still vouches for a bare number.
+  ['04', 'Lecture Slides', 'lecture', 'the module names the material, not a week'],
 ];
 
 const rows = [];

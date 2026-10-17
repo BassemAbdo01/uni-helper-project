@@ -9,11 +9,29 @@ worse than no delete button.
 import os
 import re
 import sys
+from datetime import date, timedelta
 from uuid import uuid4
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Every date in this file is anchored to the day the test RUNS, not the day it
+# was written. The calendar deliberately stops drawing work more than a week
+# past (`dleft < -7`), so "2026-10-09" -- which was today when this file was
+# written -- quietly stopped being rendered on 2026-10-17, and
+# `test_a_deleted_import_can_be_restored` failed on an assertion about restore
+# for a reason that had nothing to do with restoring. "2026-10-15" was four
+# days from going the same way. Fifth file in this suite to expire like this:
+# a date written into a fixture is a measurement of when it was written, and
+# what these tests pin is that a restored event is drawn again.
+_SOON = date.today() + timedelta(days=6)        # ahead of today
+_LATER = _SOON + timedelta(days=7)              # where an edit moves it to
+_RECENT = date.today() - timedelta(days=2)      # past, and still rendered
+
+
+def _iso(day):
+    return day.isoformat()
 
 
 def signup(client, email="events@carleton.ca"):
@@ -28,7 +46,7 @@ def student(client):
     return client
 
 
-def event_titles(client, month="2026-10"):
+def event_titles(client, day=None):
     """The titles actually rendered into the month grid.
 
     Searching the whole page is not good enough: the add-event form carries
@@ -40,12 +58,13 @@ def event_titles(client, month="2026-10"):
     post, and matching only `class="ev"` quietly stopped seeing exactly the
     entries these tests are mostly about.
     """
+    month = (day or _SOON).strftime("%Y-%m")
     body = client.get(f"/calendar?month={month}").get_data(as_text=True)
     return re.findall(r'class="ev[ "].*?<strong>(.*?)</strong>', body, re.S)
 
 
 def add(client, **payload):
-    body = {"title": "Midterm 1", "date": "2026-10-15", "course": "BIOL1103"}
+    body = {"title": "Midterm 1", "date": _iso(_SOON), "course": "BIOL1103"}
     body.update(payload)
     return client.post("/api/events", json=body)
 
@@ -57,7 +76,7 @@ def test_an_event_can_be_added(student):
     assert res.status_code == 201
     event = res.get_json()["event"]
     assert event["title"] == "Midterm 1"
-    assert event["date"] == "2026-10-15"
+    assert event["date"] == _iso(_SOON)
     assert event["time"] == "14:30"
     assert event["kind"] == "exam"
     assert event["location"] == "Southam Hall"
@@ -65,8 +84,8 @@ def test_an_event_can_be_added(student):
 
 
 def test_a_new_event_shows_up_on_the_calendar(student):
-    add(student, date="2026-10-15")
-    assert "Midterm 1" in event_titles(student)
+    add(student, date=_iso(_SOON))
+    assert "Midterm 1" in event_titles(student, _SOON)
 
 
 def test_a_new_event_shows_up_on_the_dashboard(student):
@@ -102,12 +121,12 @@ def test_an_unknown_kind_falls_back_rather_than_failing(student):
 def test_an_event_can_be_edited(student):
     event_id = add(student).get_json()["event"]["id"]
     res = student.post(f"/api/events/{event_id}",
-                       json={"title": "Midterm 1 (rescheduled)", "date": "2026-10-22",
+                       json={"title": "Midterm 1 (rescheduled)", "date": _iso(_LATER),
                              "time": "09:00", "location": "Minto 2000"})
     assert res.status_code == 200
     event = res.get_json()["event"]
     assert event["title"] == "Midterm 1 (rescheduled)"
-    assert event["date"] == "2026-10-22"
+    assert event["date"] == _iso(_LATER)
     assert event["time"] == "09:00"
     assert event["location"] == "Minto 2000"
 
@@ -154,7 +173,7 @@ def test_an_imported_deadline_stays_deleted_after_a_sync(student):
         nexora.db.session.add(nexora.Task(
             id=uuid4().hex, user_id=user.id, group_id="g1", title="Lab report 2",
             base_title="Lab report 2", course_full="BIOL1103", course_prefix="BIOL",
-            due_raw="2026-10-20", kind="due", source="canvas",
+            due_raw=_iso(_SOON), kind="due", source="canvas",
             source_uid="canvas:99", sync_state="active"))
         nexora.db.session.commit()
         task_id = nexora.Task.query.filter_by(user_id=user.id, source_uid="canvas:99").first().id
@@ -171,7 +190,7 @@ def test_an_imported_deadline_stays_deleted_after_a_sync(student):
         # and a re-import leaves it alone
         nexora._import_canvas_tasks(user, [{
             "course": "BIOL1103", "title": "Lab report 2",
-            "due": "2026-10-20", "uid": "canvas:99"}])
+            "due": _iso(_SOON), "uid": "canvas:99"}])
         nexora.db.session.commit()
         assert nexora.Task.query.filter_by(user_id=user.id, source_uid="canvas:99").first().sync_state == "dismissed"
 
@@ -185,14 +204,14 @@ def test_a_deleted_import_can_be_restored(student):
         nexora.db.session.add(nexora.Task(
             id=uuid4().hex, user_id=user.id, group_id="g2", title="Quiz 4",
             base_title="Quiz 4", course_full="SYSC2004", course_prefix="SYSC",
-            due_raw="2026-10-09", kind="due", source="ics",
+            due_raw=_iso(_RECENT), kind="due", source="ics",
             source_uid="ics:44", sync_state="active"))
         nexora.db.session.commit()
         task_id = nexora.Task.query.filter_by(user_id=user.id, source_uid="ics:44").first().id
 
     student.delete(f"/api/events/{task_id}")
     assert student.post(f"/api/events/{task_id}/restore").status_code == 200
-    assert "Quiz 4" in event_titles(student)
+    assert "Quiz 4" in event_titles(student, _RECENT)
 
 
 def test_the_endpoints_refuse_an_anonymous_caller(client):

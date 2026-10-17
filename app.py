@@ -471,6 +471,162 @@ def _organise_course_items(items, code=""):
     return out
 
 
+_RECORDING_WORD = re.compile(
+    r"\b(recording|recordings|recorded|webinar)\b|\blecture\s+capture\b", re.I)
+# A video or audio file sitting in the lecture list IS the recording, whatever
+# the lecturer called it.
+_RECORDING_EXT = {"mp4", "m4v", "mov", "webm", "avi", "mkv", "wmv", "m4a", "mp3", "wav"}
+
+# Labs, tutorials and the rest of the timetabled small-group work. A student
+# reads these on a different day from the slides, which is the whole reason
+# they want them apart. `\blab\b` deliberately does not match "lab2_starter",
+# which is a code archive and belongs with the resources.
+_LAB_WORD = re.compile(
+    r"\b(lab|labs|laboratory|tutorial|tutorials|workshop|workshops"
+    r"|seminar|seminars|practical|practicals|recitation)\b", re.I)
+
+# Words that name teaching material in the item's OWN title.
+_LECTURE_WORD = re.compile(
+    r"\b(lecture|lectures|slides|slide\s*deck|lesson|lessons|notes|handout)\b", re.I)
+_LECTURE_NUMBERED = re.compile(
+    r"\b(?:lecture|lec|slides?|week|wk|module|chapter|ch|lesson|unit|topic)"
+    r"\s*[-_#:.]?\s*\d+"
+    r"|\d+\s*[-_#:.]?\s*(?:lecture|lec|slides?|week|module|chapter|lesson|unit|topic)\b", re.I)
+_LECTURE_EXT = {"ppt", "pptx", "key"}
+
+# A module that names the MATERIAL, as opposed to one that names a WEEK.
+# This distinction is the whole bug: "Week 1" is a time bucket and everything
+# a course puts in it -- the Piazza link, the welcome note, the integrity
+# policy -- is not thereby a lecture.
+_LECTURE_MODULE = re.compile(
+    r"\b(lecture|lectures|slides|notes|lesson|lessons|course\s*material"
+    r"|courseware|readings?)\b", re.I)
+
+
+def _is_lecture_recording(row):
+    """Is this item the recording rather than the slides?
+
+    Reported from a real ELEC2501B workspace: "Lecture_3" and "Lecture 3
+    Recording" sat next to each other, as did Lecture 4, Lecture 05 and both
+    parts of Lecture 06 -- eighteen rows alternating between the thing you read
+    and the thing you watch. They classify identically (both `lecture`) and
+    carry the same breadcrumb, so nothing downstream could tell them apart.
+
+    Deliberately narrow. The cost of a wrong answer here is only a row under
+    the wrong heading, but "video" on its own is a topic as often as it is a
+    format -- "Lecture 5: Video Transmission" is a slide deck -- so the word
+    is not matched. A genuine video lecture with a video file on it is caught
+    by its extension instead, which is the half that cannot be wrong.
+    """
+    ext = str(getattr(row, "file_ext", "") or "").strip().lower().lstrip(".")
+    if ext in _RECORDING_EXT:
+        return True
+    text = "%s %s" % (getattr(row, "title", "") or "",
+                      getattr(row, "module_name", "") or "")
+    return bool(_RECORDING_WORD.search(text))
+
+
+def _material_section(row):
+    """Which heading of the Lectures tab this row belongs under.
+
+    `lecture` | `recording` | `lab` | `other`.
+
+    Reported as *"theres like so many types recordings, then labs, then
+    lectures again which arent lectures like theres SO much useless stuff"*.
+    Measured against the published `classify.js`, with its own corpus shapes:
+    "Piazza", "Welcome!", "Grades FAQ", "Academic Integrity Policy", "Java
+    Install Guide" and a Zoom link were ALL classified `lecture`, because
+    `LECTURE_NUMBERED` is tested against the item's text *plus its module name*
+    and `"Week 1"` matches `week\s*\d+`. Every item in a week-numbered module
+    became a lecture.
+
+    So the section is decided on a POSITIVE signal in the item's own title and
+    the default is `other` -- never on a blacklist of junk words. A list of
+    things to exclude is endless and wrong the first time a course invents a
+    new kind of link; a list of things that mean "this is a lecture" is short,
+    and anything unrecognised lands under "Other course material", where it is
+    still on the page and still one click from the student.
+
+    A module only counts when it names the MATERIAL ("Lectures", "Course
+    material"), never when it names a week.
+    """
+    if _is_lecture_recording(row):
+        return "recording"
+    title = str(getattr(row, "title", "") or "")
+    module = str(getattr(row, "module_name", "") or "")
+    if _LAB_WORD.search(title) or _LAB_WORD.search(module):
+        return "lab"
+    ext = str(getattr(row, "file_ext", "") or "").strip().lower().lstrip(".")
+    if ext in _LECTURE_EXT:
+        return "lecture"
+    if _LECTURE_WORD.search(title) or _LECTURE_NUMBERED.search(title):
+        return "lecture"
+    # A material module vouches for an item, but only one that is itself a
+    # numbered item or a real file. Left to vouch on its own it has the same
+    # fault as the week module, just rarer: a course that files everything
+    # under one "Course material" folder would empty the whole folder back
+    # into the Lectures list, Piazza link and all. A bare link with neither a
+    # number nor a file behind it is the one shape that is never a lecture.
+    # The number may be split across the two ("04" inside "Lecture Slides"),
+    # which is the one place reading the module is safe -- the branch is
+    # already gated on a module that names the material.
+    if _LECTURE_MODULE.search(module) and (
+            ext or _LECTURE_NUMBERED.search("%s %s" % (title, module))):
+        return "lecture"
+    return "other"
+
+
+def _flatten_thin_groups(groups):
+    """Drop the sub-headings when they are not organising anything.
+
+    Brightspace courses are as often filed by WEEK as by topic, and a week
+    holds one lecture. So a four-lecture section rendered as four headings
+    reading "Week 1 (1)", "Week 2 (1)", "Week 3 (1)", "Week 4 (1)" -- more
+    heading than content, and the week is already in every title. Same
+    complaint `_organise_course_items` exists to answer ("thirteen headings
+    over twenty-two lectures"), arriving by a different road.
+
+    The test is whether the grouping pays for itself: more groups than half
+    the items means the average group holds fewer than two, so it is costing
+    a heading per row. The heading is then moved ONTO the row, where it still
+    says which week without claiming to be structure.
+    """
+    groups = list(groups or [])
+    items = sum(len(g["items"]) for g in groups)
+    if len(groups) <= 1 or len(groups) * 2 <= items:
+        return groups
+    merged = []
+    for group in groups:
+        for entry in group["items"]:
+            entry = dict(entry)
+            crumbs = [c for c in (group["heading"], entry.get("label") or "") if c]
+            entry["label"] = " › ".join(crumbs)
+            merged.append(entry)
+    return [{"heading": "", "items": merged}]
+
+
+def _section_course_material(lectures, resources):
+    """{'lecture': [...], 'recording': [...], 'lab': [...], 'other': [...]}.
+
+    Both buckets are re-sectioned together on purpose. A lab can be sitting in
+    either -- promoted into `lecture` by the module bug, or dropped to `page`
+    because the extension has no lab rule at all -- and a student looking for
+    Lab 3 does not care which. Nothing is dropped: whatever is not teaching
+    material joins the resources under "Other course material", so this can
+    only ever MOVE a row, never hide one.
+    """
+    out = {"lecture": [], "recording": [], "lab": [], "other": []}
+    for row in list(lectures or []):
+        out[_material_section(row)].append(row)
+    for row in list(resources or []):
+        section = _material_section(row)
+        # A resource is only promoted when it is clearly lab or recording
+        # material. Pulling every pdf that says "notes" out of the resource
+        # list would be the same over-reach in the other direction.
+        out[section if section in ("lab", "recording") else "other"].append(row)
+    return out
+
+
 def _display_code(code):
     """The code to print on a card, or "" when the code is a placeholder."""
     text = str(code or "").strip()
@@ -2350,19 +2506,28 @@ def perform_feed_sync():
 
 
 def auto_sync_if_needed():
+    """Run the feed sync if one is due, and say which of the three happened.
+
+    `ran` and `ok` are separate on purpose. This returned a bare `None` for
+    both "nothing was due" and "it tried and failed", which is the mistake
+    `_evaluate_pass_rules` is a whole section of CLAUDE.md about: an answer
+    that cannot be given and a bad answer are not the same fact. Here it means
+    a student whose Brightspace token has expired cannot be told apart from one
+    who simply synced ten minutes ago -- and the first of those needs telling.
+    """
     if not load_feed_url() or not should_auto_sync():
-        return None
+        return {"ran": False, "ok": True, "counts": {}}
     # Stamped BEFORE the attempt and committed now, so a feed that times out
     # still backs off -- the except below may never be reached.
     current_user.last_sync_attempt = datetime.utcnow()
     db.session.commit()
     try:
         counts, _ = perform_feed_sync()
-        return counts
+        return {"ran": True, "ok": True, "counts": counts}
     except Exception as exc:
         app.logger.warning("Automatic Brightspace sync failed: %s", exc)
         save_sync_result("error", f"Automatic sync failed: {exc}", successful=False)
-        return None
+        return {"ran": True, "ok": False, "counts": {}}
 
 
 # ============================
@@ -4551,7 +4716,17 @@ def home():
     course_filter = request.args.get("course", "all")
     deadlines_only = request.args.get("deadlines", "yes")
 
-    auto_sync_if_needed()
+    # The feed sync is deliberately NOT run here. It fetched the .ics from the
+    # university, parsed it and imported every event before a single byte of
+    # this page was sent: measured at 11.6s and 12.1s against 0.4s for the rest
+    # of the render, so one dashboard load in every AUTO_SYNC_MINUTES cost
+    # twelve seconds and the other 29 minutes of loads were fast. Reported as
+    # "when i click open dashboard it takes SO LONG to load and open", which is
+    # exactly what an intermittent twelve seconds looks like from the outside.
+    # The page asks for it after it has painted. The back-off still lives in
+    # `auto_sync_if_needed`, which also re-checks `should_auto_sync`, so a feed
+    # answering 403 cannot retry per load and three open tabs run one sync.
+    sync_due = bool(load_feed_url()) and should_auto_sync()
     raw_tasks = load_tasks()
 
     if request.method == "POST":
@@ -4839,6 +5014,7 @@ def home():
         academic_updates=academic_updates,
         updates_this_week=len(updates_this_week),
         show_all_courses=show_all_courses,
+        sync_due=sync_due,
     )
 
 
@@ -8728,6 +8904,8 @@ def course_workspace(course_code):
 
     lectures = [c for c in contents if c.content_type == "lecture"]
     lectures = sorted(lectures, key=_lecture_sequence_key)
+    # `lectures` is still the raw bucket -- the study-tool picker and the
+    # summariser read it. What the PAGE shows is re-sectioned below.
     resources = [c for c in contents if c.content_type in ("file", "resource", "link", "practice", "page")]
     quizzes = [c for c in contents if c.content_type == "quiz"]
     announcements = [c for c in contents if c.content_type == "announcement"]
@@ -8744,6 +8922,12 @@ def course_workspace(course_code):
 
     next_assignment = assignments[0] if assignments else None
     grading_scale_profile = _get_user_grading_scale(current_user.id)
+    # Re-sectioned from the title here rather than trusted from
+    # `content_type`, because the published extension promotes everything in a
+    # week-numbered module to `lecture` -- the Piazza link, the welcome note,
+    # the integrity policy. Doing it on the server fixes the rows already in
+    # the database; the extension fix only helps what is scraped after it.
+    _sections = _section_course_material(lectures, resources)
     return render_template(
         "course_workspace.html",
         user=current_user,
@@ -8756,8 +8940,26 @@ def course_workspace(course_code):
         resources=resources,
         # Grouped by the TOP of the breadcrumb rather than the whole of it --
         # twenty headings over twenty-two lectures was the complaint.
-        lecture_groups=_organise_course_items(lectures, course),
-        resource_groups=_organise_course_items(resources, course),
+        # Four headings in the order a student reaches for them: the slides,
+        # the recording of the same lecture, the lab or tutorial, and then
+        # everything that is not teaching material at all.
+        lecture_groups=_flatten_thin_groups(
+            _organise_course_items(_sections["lecture"], course)),
+        recording_groups=_flatten_thin_groups(
+            _organise_course_items(_sections["recording"], course)),
+        recording_count=len(_sections["recording"]),
+        lab_groups=_flatten_thin_groups(
+            _organise_course_items(_sections["lab"], course)),
+        lab_count=len(_sections["lab"]),
+        # The stat counts what the tab actually SHOWS as teaching material.
+        # Left as the raw bucket it would read 18 above a list of seven --
+        # the same "37 courses in the extension, 11 on the dashboard" bug,
+        # one screen down.
+        lecture_count=len(_sections["lecture"]) + len(_sections["recording"]),
+        resource_groups=_flatten_thin_groups(
+            _organise_course_items(_sections["other"], course)),
+        other_count=len(_sections["other"]),
+        slide_count=len(_sections["lecture"]),
         quizzes=quizzes,
         announcements=announcements,
         course_outlines=course_outlines,
@@ -12455,6 +12657,29 @@ def sync_now():
         app.logger.warning("Manual Brightspace sync failed: %s", exc)
         save_sync_result("error", f"Synchronization failed: {exc}")
     return redirect(url_for("connect_brightspace"))
+
+
+# The automatic feed sync, asked for by the dashboard once it has painted
+# rather than run inside its render. POST, not GET, for the same reason
+# `/api/tour` is: a prefetch or a crawler must not be able to spend it.
+@app.post("/api/sync/auto")
+@login_required
+def sync_auto():
+    """Run the due feed sync, if one really is due.
+
+    `home()` decides whether to ASK for this, from a flag computed at render
+    time; this decides whether to DO it. The two are deliberately separate,
+    because the page may be a minute old by the time the fetch lands and a
+    student with three tabs open fires three of these. `auto_sync_if_needed`
+    re-checks `should_auto_sync` and stamps `last_sync_attempt` before the
+    attempt, so the first request through here claims the slot and the rest
+    return `ran: false` without touching the university.
+    """
+    result = auto_sync_if_needed()
+    counts = result["counts"]
+    changed = sum(int(counts.get(k) or 0) for k in ("added", "updated", "removed"))
+    return jsonify({"ok": result["ok"], "ran": result["ran"],
+                    "changed": changed, "counts": counts})
 
 
 @app.route("/grade-calculator")
