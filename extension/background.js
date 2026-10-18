@@ -572,7 +572,14 @@ function assignmentItems(data, course, origin) {
       source_uid: itemUid(course.source_uid, 'assignment', id, title),
       title,
       content_type: 'assignment',
-      source_url: `${origin}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=${encodeURIComponent(id)}&grpid=0&isprv=0&bp=0&ou=${course.source_uid}`,
+      // The assignment itself, not its upload form. `folder_submit_files.d2l`
+      // is where a file is uploaded, so a folder that takes no file -- on
+      // paper, or observed in person -- has no such page and D2L answers
+      // "Internal Error". Measured against Carleton: folder_user_view.d2l,
+      // folder_history.d2l and folder.d2l do not exist; this route does.
+      // The server rewrites the old shape too, so rows already imported are
+      // repaired without waiting for this to ship.
+      source_url: `${origin}/d2l/le/dropbox/${course.source_uid}/${encodeURIComponent(id)}/View`,
       module_name: clean(row.Category?.Name || row.CategoryName || 'Assignments'),
       content_text: htmlToText(row.Instructions || row.Description || ''),
       published_at: dateValue(row.DueDate || row.EndDate || row.StartDate),

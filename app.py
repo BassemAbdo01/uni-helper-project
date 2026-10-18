@@ -1472,6 +1472,55 @@ def _d2l_download_href(url, file_ext):
         match.group(1), match.group(2), match.group(3))
 
 
+# D2L's file-UPLOAD form for an assignment folder. This is what the extension
+# has always built, and it answers "Internal Error" for any folder that has
+# nothing to upload to -- an on-paper or observed submission. Reported against
+# a real CCDP2100C assignment due that day, titled "... (Homework)".
+_D2L_SUBMIT_FOLDER = re.compile(
+    r"^(https?://[^/]+)/d2l/lms/dropbox/user/folder_submit_files\.d2l\?(.+)$", re.I)
+
+
+def _d2l_assignment_href(url):
+    """Rewrite an assignment's upload form into the assignment itself.
+
+    Same shape as the lecture links, one layer over: we were linking to the
+    ACTION endpoint instead of the VIEW endpoint. `folder_submit_files.d2l` is
+    where you upload a file, so a folder that takes no file -- on paper, or
+    observed in person -- has no such page and D2L 500s.
+
+    The target was measured, not guessed, which matters because the first guess
+    was wrong. Probed against Carleton unauthenticated, where a route that
+    exists redirects to login and one that does not returns the same 303 to
+    /d2l/error/404 as a deliberately invented control:
+
+        folder_submit_files.d2l   302 -> login      exists (and 500s signed in)
+        folder_user_view.d2l      303 -> 404        does not exist
+        folder_history.d2l        303 -> 404        does not exist
+        folder.d2l                303 -> 404        does not exist
+        /d2l/le/dropbox/<ou>/<db>/View              exists
+
+    `folder_user_view.d2l` was the first proposal and would have replaced a 500
+    with a 404. The surviving candidate was then confirmed by the owner against
+    his own session: it opens the assignment.
+
+    Both ids are already in the stored URL, so this repairs every row already
+    in the database and needs no extension release -- the same property that
+    made the `file_ext` download fix work. The extension is corrected too, for
+    rows scraped after it ships.
+    """
+    match = _D2L_SUBMIT_FOLDER.match(str(url or "").strip())
+    if not match:
+        return url
+    params = urllib.parse.parse_qs(match.group(2))
+    folder = (params.get("db") or [""])[0].strip()
+    org = (params.get("ou") or [""])[0].strip()
+    # Read, never invented. Without both ids there is no link to build, and a
+    # half-built one is worse than the upload form we already have.
+    if not (folder.isdigit() and org.isdigit()):
+        return url
+    return "%s/d2l/le/dropbox/%s/%s/View" % (match.group(1), org, folder)
+
+
 def content_href(url, file_ext=""):
     """The href for a CourseContent row: the LMS gate, plus our own uploads.
 
@@ -1490,10 +1539,11 @@ def content_href(url, file_ext=""):
     text = str(url or "").strip()
     if text.startswith("/static/nexora_uploads/"):
         return text
-    # The gate runs FIRST and the download rewrite second, over what the gate
-    # allowed -- so a scraped `javascript:` URL can never reach the rewrite, and
-    # the rewrite can only ever move a link that was already safe to render.
-    return _d2l_download_href(_lms_link(text), file_ext)
+    # The gate runs FIRST and every rewrite second, over what the gate allowed
+    # -- so a scraped `javascript:` URL can never reach a rewrite, and a rewrite
+    # can only ever move a link that was already safe to render.
+    safe = _d2l_assignment_href(_lms_link(text))
+    return _d2l_download_href(safe, file_ext)
 
 
 app.jinja_env.filters["content_href"] = content_href

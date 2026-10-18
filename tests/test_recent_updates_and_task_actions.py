@@ -96,14 +96,22 @@ def _user(client):
 # ------------------------------------------------- what to do first: two actions
 
 def test_a_queued_task_ticks_from_the_box_and_opens_from_the_title(client, synced):
-    url = f"{ORIGIN}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=5&ou=2"
+    # The stored URL is the upload form, which is what every row imported
+    # before the fix carries. What the page renders is the assignment -- see
+    # tests/test_assignment_link.py: `folder_submit_files.d2l` is where a file
+    # is uploaded, so a folder that takes no file answers Internal Error, which
+    # is what this test used to pin as correct.
+    stored = f"{ORIGIN}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=5&ou=2"
+    rendered = f"{ORIGIN}/d2l/le/dropbox/2/5/View"
     push(client, synced, "SYSC2310", [{"content_type": "assignment", "title": "Lab 1 Report Submission",
                                        "source_uid": "a1", "due_at": f"{(date.today() + timedelta(days=3)).isoformat()}T03:59:00Z",
-                                       "source_url": url}])
+                                       "source_url": stored}])
     body = client.get("/dashboard").get_data(as_text=True)
     card = body.split('<div class="task"', 1)[1].split("</div>", 1)[0]
     assert 'class="box"' in card and 'aria-label="Mark done: Lab 1 Report Submission"' in card
-    assert f'href="{url.replace("&", "&amp;")}"' in card and 'target="_blank"' in card
+    # What this test is for: the title is an anchor into the LMS and the box
+    # ticks. Both still hold; only the destination was wrong.
+    assert f'href="{rendered}"' in card and 'target="_blank"' in card
 
 
 def test_a_task_with_no_link_has_no_link(client, synced):

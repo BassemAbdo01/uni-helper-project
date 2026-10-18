@@ -467,7 +467,9 @@
         source_uid: itemUid(course.source_uid, 'assignment', id, title),
         title,
         content_type: 'assignment',
-        source_url: `${location.origin}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=${encodeURIComponent(id)}&grpid=0&isprv=0&bp=0&ou=${course.source_uid}`,
+        // See background.js: the upload form 500s for a folder that takes
+        // no file upload. This is the assignment itself.
+        source_url: `${location.origin}/d2l/le/dropbox/${course.source_uid}/${encodeURIComponent(id)}/View`,
         module_name: clean(row.Category?.Name || row.CategoryName || 'Assignments'),
         content_text: htmlToText(row.Instructions || row.Description || ''),
         published_at: dateValue(row.DueDate || row.EndDate || row.StartDate),

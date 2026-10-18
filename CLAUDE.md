@@ -661,6 +661,59 @@ payload of the build already published on the Web Store, so one ordinary
 re-import fixes every lecture. The 3.5.3 extension change is still right and
 still worth shipping, but it is no longer what the fix depends on.
 
+## An assignment deadline must link to the assignment, not to its upload form
+
+Reported with a screenshot: clicking a deadline due that day -- "Assignment 8c
+Innovation Proposal Assignment Guidelines - Final Submission **(Homework)**" --
+opened Carleton's **Internal Error** page.
+
+`extension/background.js` and `content.js` both built
+`/d2l/lms/dropbox/user/folder_submit_files.d2l?db=<db>&grpid=0&...&ou=<ou>`.
+That is D2L's file-UPLOAD form. A folder that takes no file -- submitted on
+paper, or observed in person, which "(Homework)" was -- has no such page, and
+D2L answers 500. Same shape as the lecture links one layer over: the ACTION
+endpoint linked instead of the VIEW endpoint, which is what `_browsable_d2l`
+already fixes for content.
+
+**The first proposed target was wrong, and the probe that caught it was free.**
+Carleton answers an unauthenticated request for a route that exists with a 302
+to login, and one that does not with a 303 to `/d2l/error/404` -- identical to a
+deliberately invented control, which is how to tell them apart:
+
+| Route | Unauthenticated | Verdict |
+|---|---|---|
+| `folder_submit_files.d2l?db=&ou=` | 302 login | exists, and 500s signed in |
+| `folder_user_view.d2l` | 303 -> 404 | **does not exist** |
+| `folder_history.d2l` | 303 -> 404 | does not exist |
+| `folder.d2l` | 303 -> 404 | does not exist |
+| `folders_list.d2l?ou=` | 302 login | exists (the Assignments list) |
+| `/d2l/le/dropbox/<ou>/<db>/View` | 200 + JS redirect to login | exists |
+
+`folder_user_view.d2l` was the proposed fix and would have swapped a 500 for a
+404. Three rounds were burned guessing at the lecture links before anyone asked
+D2L what it offered; this is the same lesson, and the probe costs one curl.
+
+A 200 there is not proof on its own -- a nonsense `ou` AND a nonsense `db` both
+answer 200, because that route defers auth to JavaScript. Only the owner
+clicking it, signed in, settled it.
+
+**`_d2l_assignment_href` rewrites the stored URL**, and both ids are already in
+it, so **every row already in the database is repaired with no extension
+release** -- the same property that made the `file_ext` download fix work. The
+extension is corrected too, for rows scraped after it ships.
+
+It runs inside `content_href`, after `_lms_link` and beside
+`_d2l_download_href`: the security gate first, every rewrite over what the gate
+allowed. A URL missing either id is returned untouched -- a half-built link is
+worse than the upload form, which at least names the right assignment.
+
+Quizzes use `quiz_summary.d2l`, a different route that the same probe found
+alive. There is no evidence it is broken and it is deliberately not moved.
+
+An existing test pinned the upload-form URL as the correct `href`. It was
+updated, not weakened: what it exists to check is that the title is an anchor
+and the box ticks, and both still hold -- only the destination was wrong.
+
 ## A new column needs a line in ensure_schema_columns, or the deploy 500s
 
 `db.create_all()` creates missing TABLES and **never adds a column to a table
