@@ -148,6 +148,14 @@ DASHBOARD_COURSE_LIMIT = int(os.environ.get("DASHBOARD_COURSE_LIMIT", "400"))
 # have. Anything past it is REPORTED rather than dropped quietly -- see the
 # `truncated` key on the import result.
 COURSE_IMPORT_MAX = int(os.environ.get("COURSE_IMPORT_MAX", "400"))
+# Items per content payload. It was a bare `[:1200]` in three places with
+# nothing counting what fell off; the import result now says `truncated`.
+CONTENT_IMPORT_MAX = int(os.environ.get("CONTENT_IMPORT_MAX", "1200"))
+# A payload carrying less than this share of what a course already holds is
+# refused its `replace_courses` delete. See the S1 comment in _import_content:
+# the extension's "complete" is its own opinion, and a scrape that returns 3 of
+# 40 topics with a 200 looks exactly like a complete one.
+REPLACE_FLOOR = float(os.environ.get("SYNC_REPLACE_FLOOR", "0.5"))
 ACADEMIC_UPDATE_KEEP_DAYS = int(os.environ.get("ACADEMIC_UPDATE_KEEP_DAYS", "45"))
 
 # Render sets RENDER_GIT_COMMIT on every deploy. Reported by /healthz so "did it
@@ -537,7 +545,7 @@ def _material_section(row):
     "Piazza", "Welcome!", "Grades FAQ", "Academic Integrity Policy", "Java
     Install Guide" and a Zoom link were ALL classified `lecture`, because
     `LECTURE_NUMBERED` is tested against the item's text *plus its module name*
-    and `"Week 1"` matches `week\s*\d+`. Every item in a week-numbered module
+    and `"Week 1"` matches a week-plus-number pattern. Every item in such a module
     became a lecture.
 
     So the section is decided on a POSITIVE signal in the item's own title and
@@ -866,6 +874,10 @@ class SyncedCourse(db.Model):
     last_sync_error = db.Column(db.Text, default="")
     last_sync_items = db.Column(db.Integer, default=0)
     last_sync_at = db.Column(db.DateTime, nullable=True)
+    # ok | partial | error | never. `last_sync_ok` is a boolean and cannot say
+    # "this sync arrived short and was refused its replace", which is neither
+    # a success nor a failure and is the one state a student can act on.
+    last_sync_state = db.Column(db.String(20), default="never")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1118,6 +1130,7 @@ def ensure_schema_columns():
             "last_sync_error": "TEXT DEFAULT ''",
             "last_sync_items": "INTEGER DEFAULT 0",
             "last_sync_at": "TIMESTAMP NULL",
+            "last_sync_state": "VARCHAR(20) DEFAULT 'never'",
         },
         "task": {
             "due_time": "VARCHAR(5) DEFAULT ''",
@@ -11768,7 +11781,20 @@ def sync_course_content():
     if not isinstance(payload.get("items") or [], list):
         return jsonify({"error": "items must be a list."}), 400
 
-    return jsonify({"ok": True, **_import_content(user, payload)})
+    try:
+        return jsonify({"ok": True, **_import_content(user, payload)})
+    except Exception as exc:                                   # noqa: BLE001
+        # S6: the failure has to be recorded OUTSIDE the transaction that
+        # failed. `_import_content` commits once at the end, so an exception on
+        # item 900 of 1,200 rolled back all 900 -- including the rows that
+        # would have said the sync failed. The course simply stopped updating,
+        # with no explanation anywhere. Same split `last_sync_attempt` already
+        # uses for the calendar feed, and for the same reason.
+        db.session.rollback()
+        app.logger.exception("Content sync failed for user %s", user.id)
+        _record_sync_failure(user, payload, exc)
+        return jsonify({"error": "Nexora could not store this sync. It has been "
+                                 "recorded; try again from the extension."}), 500
 
 
 def _adopt_reported_timezone(user, name):
@@ -11813,7 +11839,7 @@ def _import_deadlines(user, items, default_course=""):
     zone = _user_zone(user)
     counts = {"added": 0, "updated": 0, "unchanged": 0}
     now_text = datetime.utcnow().isoformat()
-    for item in items[:1200]:
+    for item in items[:CONTENT_IMPORT_MAX]:
         kind_name = str(item.get("content_type") or "").strip().lower()
         if kind_name not in {"assignment", "quiz"}:
             continue
@@ -11833,7 +11859,10 @@ def _import_deadlines(user, items, default_course=""):
         gid = make_group_id(course_full, base)
         # Stable across re-syncs and distinct from the feed's uids, so the two
         # sources update their own row instead of fighting over one.
-        source_uid = f"ext:{str(item.get('source_uid') or f'{course_full}|{title}')}"[:255]
+        # The same definition the content path uses, minus the URL step --
+        # see _source_uid: adding it here would re-key existing rows, which is
+        # S4's job and needs a backup.
+        source_uid = f"ext:{_source_uid(item, course_full, title, use_url=False)}"[:255]
         source_hash = hashlib.sha256(f"{title}|{due_iso}|{course_full}".encode("utf-8")).hexdigest()
 
         task = Task.query.filter_by(user_id=user.id, source_uid=source_uid).first()
@@ -11913,17 +11942,64 @@ def _cap_content_text(text, kind):
     return text[:cap - len(_TRUNCATED_NOTE)] + _TRUNCATED_NOTE
 
 
-def _content_source_uid(item, course, title):
-    """The stable id for one scraped item.
+def _source_uid(item, course, title, use_url=True):
+    """The stable id for one scraped item. ONE definition, both importers.
 
-    One definition, because the pre-pass that loads what has already been
-    announced has to derive exactly the id the loop will then look up -- two
-    copies of this rule would silently stop matching and every item would be
-    announced again, which is the bug it exists to prevent.
+    The pre-pass that loads what has already been announced has to derive
+    exactly the id the loop will then look up, so two copies of this rule would
+    silently stop matching and every item would be announced again -- the bug
+    it exists to prevent. The deadline importer had its own copy anyway, with a
+    shorter fallback chain, which is the drift this codebase keeps paying for:
+    two sibling paths reading the same payload differently.
+
+    `use_url` is not a style choice and is deliberately not removed yet. The
+    content path has always fallen back to the URL and the deadline path never
+    has, so unifying the CHAIN would re-key every existing row that used the
+    short one -- the item would arrive as new, beside itself. That is finding
+    S4 in SYNC_AUDIT_V1.md, it rewrites stored identities, and it needs a
+    backfill and a database backup. This unifies the definition now and leaves
+    the identity change to that pass, where it can be migrated honestly.
     """
-    return str(item.get("source_uid")
-               or str(item.get("source_url") or "")[:4000]
-               or f"{course}|{title}")[:255]
+    parts = [item.get("source_uid")]
+    if use_url:
+        parts.append(str(item.get("source_url") or "")[:4000])
+    parts.append(f"{course}|{title}")
+    return str(next((p for p in parts if p), ""))[:255]
+
+
+def _content_source_uid(item, course, title):
+    return _source_uid(item, course, title, use_url=True)
+
+
+def _record_sync_failure(user, payload, exc):
+    """Mark every course in a failed payload, in a transaction of its own.
+
+    The import commits once at the end, so anything it wrote about its own
+    failure is rolled back with the failure. This runs afterwards, on a clean
+    session, and must never raise -- a logger that takes down the error path is
+    worse than the error.
+    """
+    try:
+        scan_course = _normalize_course_code(str(payload.get("course") or "").strip() or "OTHER")
+        codes = {scan_course} if scan_course and scan_course != "OTHER" else set()
+        for item in (payload.get("items") or [])[:CONTENT_IMPORT_MAX]:
+            if isinstance(item, dict):
+                codes.add(_normalize_course_code(
+                    item.get("course") or item.get("course_full") or scan_course or "OTHER"))
+        stamped = datetime.utcnow()
+        for code in codes:
+            row = SyncedCourse.query.filter_by(user_id=user.id, course_code=code).first()
+            if not row:
+                continue
+            row.last_sync_at = stamped
+            row.last_sync_ok = False
+            row.last_sync_state = "error"
+            row.last_sync_error = ("Nexora could not store the last sync for this "
+                                   "course: %s" % exc)[:2000]
+        db.session.commit()
+    except Exception:                                          # noqa: BLE001
+        db.session.rollback()
+        app.logger.exception("Could not record the sync failure")
 
 
 def _import_content(user, payload):
@@ -11932,18 +12008,56 @@ def _import_content(user, payload):
     `payload` keeps the extension's shape -- items, replace_courses, scan_meta --
     so the Canvas sync builds the same dict rather than a second format.
     """
-    items = payload.get("items") or []
+    received = len(payload.get("items") or [])
+    # S3: the cap was silent. `items[:1200]` appeared three times and nothing
+    # counted what fell off the end, which is the rule this codebase already
+    # states -- a limit a student cannot see is indistinguishable from a bug --
+    # and which `COURSE_IMPORT_MAX` already honours by returning `truncated`.
+    items = (payload.get("items") or [])[:CONTENT_IMPORT_MAX]
+    dropped = received - len(items)
     hidden_codes = {h.course_code for h in HiddenCourse.query.filter_by(user_id=user.id).all()}
     replace_courses = [_normalize_course_code(c) for c in (payload.get("replace_courses") or [])]
     replace_courses = [c for c in replace_courses if c not in hidden_codes]
-    if replace_courses:
-        CourseContent.query.filter(CourseContent.user_id == user.id, CourseContent.course_full.in_(replace_courses)).delete(synchronize_session=False)
-        # Smart Sync refreshes metadata only; preserve any user-requested cached files.
-        db.session.flush()
     scan_meta = payload.get("scan_meta") if isinstance(payload.get("scan_meta"), dict) else {}
     scan_course = str(payload.get("course") or (replace_courses[0] if replace_courses else "") or "").strip()
     if scan_course:
         scan_course = _normalize_course_code(scan_course)
+
+    # How many items this payload actually carries for each course, which is
+    # the number the replace floor is judged against.
+    incoming_by_course = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        code = _normalize_course_code(item.get("course") or item.get("course_full")
+                                      or scan_course or "OTHER")
+        incoming_by_course[code] = incoming_by_course.get(code, 0) + 1
+
+    # S1: a partial scrape must not replace a whole course.
+    #
+    # The extension only asks for a replace when its scan says ok, complete,
+    # authenticated and non-empty, which is the right shape and stops the empty
+    # case. But `complete` is the extension's OWN opinion: if D2L returns 3 of
+    # 40 topics and still answers 200, the scan looks complete, 37 items are
+    # deleted and never come back, and the course page says the sync was fine.
+    #
+    # The server has a second opinion and was not using it -- it knows how many
+    # rows that course had a moment ago. A payload carrying less than
+    # REPLACE_FLOOR of what is on file is refused the delete. The items it did
+    # bring are still upserted by the loop below, so this can only ever keep
+    # rows, never lose them; what it costs is a stale row surviving, which is
+    # recoverable, against a silent deletion, which is not.
+    partial_courses = {}
+    for code in list(replace_courses):
+        have = CourseContent.query.filter_by(user_id=user.id, course_full=code).count()
+        arriving = incoming_by_course.get(code, 0)
+        if have and arriving < have * REPLACE_FLOOR:
+            replace_courses.remove(code)
+            partial_courses[code] = (have, arriving)
+    if replace_courses:
+        CourseContent.query.filter(CourseContent.user_id == user.id, CourseContent.course_full.in_(replace_courses)).delete(synchronize_session=False)
+        # Smart Sync refreshes metadata only; preserve any user-requested cached files.
+        db.session.flush()
     counts = {"added": 0, "updated": 0, "unchanged": 0}
     # Before any date is derived: the extension reports the browser's zone, and
     # this is usually the request that creates the student's first deadlines.
@@ -11970,7 +12084,7 @@ def _import_content(user, payload):
     # on a worker that has less than that. A fix for a table that grew too big
     # must not itself need the table to be small.
     wanted = set()
-    for item in items[:1200]:
+    for item in items[:CONTENT_IMPORT_MAX]:
         item_title = str(item.get("title") or "").strip()
         if not item_title:
             continue
@@ -11996,7 +12110,7 @@ def _import_content(user, payload):
             update_type=update_type, title=title, detail=detail, related_uid=uid,
         ))
 
-    for item in items[:1200]:
+    for item in items[:CONTENT_IMPORT_MAX]:
         title = str(item.get("title") or "").strip()
         if not title:
             continue
@@ -12075,27 +12189,54 @@ def _import_content(user, payload):
         if course_row:
             course_row.content_count = CourseContent.query.filter_by(user_id=user.id, course_full=code).count()
             course_row.updated_at = datetime.utcnow()
-    # Record the outcome of this specific sync attempt so a totally failed
-    # scan (e.g. every Brightspace API call 404ing for one course while
-    # others work fine) is visible on the course page itself, instead of
-    # silently leaving the course empty with no explanation anywhere.
-    if scan_course:
-        course_row = SyncedCourse.query.filter_by(user_id=user.id, course_code=scan_course).first()
-        if course_row:
-            errors = scan_meta.get("diagnostics", {}).get("errors") if isinstance(scan_meta.get("diagnostics"), dict) else {}
-            scan_ok = bool(items) or (scan_meta.get("complete") is True)
-            course_row.last_sync_ok = scan_ok
-            course_row.last_sync_items = len(items)
-            course_row.last_sync_at = datetime.utcnow()
-            if not scan_ok and isinstance(errors, dict) and errors:
-                parts = [f"{section}: {msg}" for section, msg in list(errors.items())[:4]]
-                course_row.last_sync_error = ("Brightspace didn't return any content for this course. " + "; ".join(parts))[:2000]
-            elif not scan_ok:
-                course_row.last_sync_error = "Brightspace didn't return any content for this course on the last sync attempt."[:2000]
-            else:
-                course_row.last_sync_error = ""
+    # S2: stamp EVERY course this payload touched, not just the one named on
+    # the envelope. `last_sync_at` was written inside `if scan_course:`, so a
+    # payload carrying several courses updated `content_count` for all of them
+    # and the timestamp for one -- and a payload whose envelope named no course
+    # stamped nothing at all. The column existed, was populated, and was
+    # rendered in no template.
+    errors = scan_meta.get("diagnostics", {}).get("errors") if isinstance(scan_meta.get("diagnostics"), dict) else {}
+    stamped = datetime.utcnow()
+    for code in sorted(touched_courses | ({scan_course} if scan_course else set())):
+        course_row = SyncedCourse.query.filter_by(user_id=user.id, course_code=code).first()
+        if not course_row:
+            continue
+        arriving = incoming_by_course.get(code, 0)
+        course_row.last_sync_at = stamped
+        course_row.last_sync_items = arriving
+        if code in partial_courses:
+            have, got = partial_courses[code]
+            course_row.last_sync_state = "partial"
+            course_row.last_sync_ok = False
+            course_row.last_sync_error = (
+                "This sync carried %d item%s for a course that already has %d, so "
+                "Nexora kept what it had rather than replacing it. Run the sync "
+                "again from the extension; if it keeps happening the course may "
+                "need reconnecting." % (got, "" if got == 1 else "s", have))[:2000]
+            continue
+        # A totally failed scan (every Brightspace call 404ing for one course
+        # while the others work) has to be visible on the course page itself.
+        scan_ok = bool(arriving) or (scan_meta.get("complete") is True)
+        course_row.last_sync_ok = scan_ok
+        course_row.last_sync_state = "ok" if scan_ok else "error"
+        if not scan_ok and isinstance(errors, dict) and errors:
+            parts = [f"{section}: {msg}" for section, msg in list(errors.items())[:4]]
+            course_row.last_sync_error = ("Brightspace didn't return any content for this course. " + "; ".join(parts))[:2000]
+        elif not scan_ok:
+            course_row.last_sync_error = "Brightspace didn't return any content for this course on the last sync attempt."[:2000]
+        else:
+            course_row.last_sync_error = ""
     db.session.commit()
-    return {**counts, "received": len(items), "replaced_courses": replace_courses}
+    result = {**counts, "received": received, "stored": len(items),
+              "replaced_courses": replace_courses}
+    if dropped:
+        # Loud, the way COURSE_IMPORT_MAX already is.
+        result["truncated"] = True
+        result["dropped"] = dropped
+    if partial_courses:
+        result["partial_courses"] = {c: {"had": h, "received": g}
+                                     for c, (h, g) in partial_courses.items()}
+    return result
 
 
 @app.route("/api/updates")

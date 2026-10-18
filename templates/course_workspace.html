@@ -143,8 +143,21 @@ a.update:hover{border-color:var(--amber,#E8A94A)}
       <span class="badge">AI course intelligence ready</span>
     </div>
 
-    {% if synced_course and not synced_course.last_sync_ok and synced_course.last_sync_items == 0 %}
+    {# A sync that arrived short is neither a success nor a failure, and it is
+       the one state a student can actually act on -- so it says so, rather
+       than being rendered as a clean sync with fewer items in it. #}
+    {% if synced_course and synced_course.last_sync_state == 'partial' %}
+    <section class="outline-required" style="margin:14px 0"><div class="outline-required-icon">!</div><div><strong>The last sync for this course arrived incomplete</strong><p>{{ synced_course.last_sync_error }}</p></div></section>
+    {% elif synced_course and not synced_course.last_sync_ok and synced_course.last_sync_items == 0 %}
     <section class="outline-required" style="margin:14px 0"><div class="outline-required-icon">!</div><div><strong>Nexora couldn't import anything for this course on the last sync</strong><p>{{ synced_course.last_sync_error or "Brightspace didn't return any lectures, assignments, quizzes, or announcements for this course." }} Try running sync again from the extension — if this keeps happening, the course may need to be reconnected in the extension's course list.</p></div></section>
+    {% endif %}
+
+    {# The column existed, was written on every sync, and was rendered
+       nowhere. A student comparing Nexora against Brightspace has no way to
+       judge what they are looking at without it -- the same reason `due_time`
+       is shown on the calendar. #}
+    {% if synced_course and synced_course.last_sync_at %}
+    <p class="meta" style="margin:10px 0 0">Last synced {{ synced_course.last_sync_at|local_stamp('%b %d, %Y at %I:%M %p', user) }}{% if synced_course.last_sync_items %} &middot; {{ synced_course.last_sync_items }} item{{ '' if synced_course.last_sync_items == 1 else 's' }} in that sync{% endif %}</p>
     {% endif %}
 
     <section class="hero">
