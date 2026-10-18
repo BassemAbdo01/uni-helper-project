@@ -38,3 +38,15 @@ python-docx==1.2.0
 # feature instead of taking the app down.
 Pillow==12.3.0
 pytesseract==0.3.13
+
+# Outlook feasibility test only (OUTLOOK_TEST_ENABLED, off by default). app.py
+# imports msal in a try/except for the same reason Pillow does: a wheel that is
+# missing for a Python version must degrade one throwaway route, never take
+# every worker down at import. msal pulls requests, PyJWT and idna, which is
+# three packages this app did not previously have -- pinned here deliberately
+# rather than discovered on a rebuild, which is what the note at the top of
+# this file is about. Remove all four if the test is abandoned.
+msal==1.39.0
+requests==2.34.2
+PyJWT==2.15.1
+idna==3.20

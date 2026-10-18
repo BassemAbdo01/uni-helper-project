@@ -14241,6 +14241,217 @@ def healthz():
         return jsonify({"status": "degraded", "database": "unreachable"}), 503
 
 
+
+# ============================
+# OUTLOOK FEASIBILITY TEST
+# ============================
+# Built to answer ONE question before any of Phase 4 is designed: can a
+# Carleton student grant Nexora read access to their own mail, or does the
+# tenant answer "Need admin approval"? Nothing here is a feature. It reads
+# five subject lines and throws them away.
+#
+# Three rules it keeps, and the reasons are not decoration:
+#
+# - NO TOKEN IS STORED ANYWHERE, not even in the session. Flask's session is a
+#   signed COOKIE and browsers drop one over ~4 KB; a Graph access token is
+#   1-2 KB and a refresh token more, so stashing them there would silently
+#   break the session rather than fail loudly. The callback exchanges the
+#   code, calls Graph, renders, and lets the token fall out of scope. That is
+#   stricter than "session only" and avoids the bug entirely.
+# - NO EMAIL CONTENT TOUCHES THE DATABASE. Subjects and senders are rendered
+#   into one response and never written.
+# - The client id and secret come from the environment and are never rendered,
+#   logged, or included in an error message.
+OUTLOOK_TEST_ENABLED = os.environ.get("OUTLOOK_TEST_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+MS_CLIENT_ID = os.environ.get("MS_CLIENT_ID", "").strip()
+MS_CLIENT_SECRET = os.environ.get("MS_CLIENT_SECRET", "").strip()
+# "Accounts in any organizational directory" is /organizations. /common would
+# also admit personal Microsoft accounts, which is not what a university is.
+MS_AUTHORITY = os.environ.get(
+    "MS_AUTHORITY", "https://login.microsoftonline.com/organizations").strip()
+MS_REDIRECT_URI = os.environ.get("MS_REDIRECT_URI", "").strip()
+# RESOURCE scopes only. MSAL *rejects* offline_access, openid and profile as
+# reserved -- `ValueError: You cannot use any scope value that is reserved` --
+# and adds all three itself. Verified before this was written, because passing
+# them raises before any network call and reads as the sign-in being broken.
+MS_SCOPES = ["User.Read", "Mail.Read"]
+
+try:                                    # pragma: no cover - import shape
+    import msal
+except Exception:                       # pragma: no cover
+    # Same posture as Pillow/pytesseract in requirements.txt: a missing wheel
+    # degrades this one route instead of taking every worker down at import.
+    msal = None
+
+
+def _outlook_test_unavailable():
+    """Why this test cannot run, in words, or "" when it can."""
+    if not OUTLOOK_TEST_ENABLED:
+        return "OUTLOOK_TEST_ENABLED is not set. This test is off by default."
+    if msal is None:
+        return "The msal package is not installed in this environment."
+    missing = [name for name, value in (("MS_CLIENT_ID", MS_CLIENT_ID),
+                                        ("MS_CLIENT_SECRET", MS_CLIENT_SECRET),
+                                        ("MS_REDIRECT_URI", MS_REDIRECT_URI))
+               if not value]
+    if missing:
+        return "Not configured: " + ", ".join(missing) + " must be set in the environment."
+    return ""
+
+
+def _ms_client():
+    return msal.ConfidentialClientApplication(
+        MS_CLIENT_ID, client_credential=MS_CLIENT_SECRET, authority=MS_AUTHORITY)
+
+
+def _aadsts_code(*texts):
+    """The AADSTS id out of whatever Microsoft said.
+
+    It is the only part of the message that is stable enough to look up, and
+    AADSTS65001 / AADSTS90094 are the two that decide whether Phase 4 is
+    possible at all.
+    """
+    # Not a fixed width: AADSTS7000215 is seven digits and a {5,6} bound
+    # matched the first six, reporting a code that does not exist.
+    match = re.search(r"AADSTS\d+", " ".join(str(t or "") for t in texts))
+    return match.group(0) if match else ""
+
+
+def _graph_get(path, token):
+    """GET one Graph endpoint. Returns (data, error_text)."""
+    request_obj = urllib.request.Request(
+        "https://graph.microsoft.com/v1.0" + path,
+        headers={"Authorization": "Bearer " + token, "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request_obj, timeout=25) as response:
+            return json.loads(response.read().decode("utf-8")), ""
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", "replace")
+        except Exception:
+            body = ""
+        # Verbatim. A paraphrased permission error is the one thing that would
+        # make this test worthless.
+        return None, "Graph %s %s: %s" % (exc.code, exc.reason, body[:1500])
+    except Exception as exc:
+        return None, "Graph request failed: %s" % exc
+
+
+def _outlook_page(**kwargs):
+    return render_template("outlook_test.html", user=current_user,
+                           redirect_uri=MS_REDIRECT_URI, **kwargs)
+
+
+@app.get("/outlook-test")
+@login_required
+def outlook_test():
+    if (current_user.email or "").lower() != ADMIN_EMAIL:
+        return redirect(url_for("home"))
+    return _outlook_page(unavailable=_outlook_test_unavailable())
+
+
+@app.get("/outlook-test/start")
+@login_required
+def outlook_test_start():
+    if (current_user.email or "").lower() != ADMIN_EMAIL:
+        return redirect(url_for("home"))
+    unavailable = _outlook_test_unavailable()
+    if unavailable:
+        return _outlook_page(unavailable=unavailable)
+    # CSRF: the state is minted here, kept in the session (it is 32 characters,
+    # not a token) and must come back unchanged.
+    state = uuid4().hex
+    session["ms_state"] = state
+    try:
+        url = _ms_client().get_authorization_request_url(
+            MS_SCOPES, redirect_uri=MS_REDIRECT_URI, state=state,
+            # Force the consent screen so the ANSWER to this test is visible
+            # rather than silently reused from an earlier grant.
+            prompt="consent")
+    except Exception as exc:
+        return _outlook_page(error_title="Could not build the sign-in URL",
+                             error_detail=str(exc))
+    return redirect(url)
+
+
+@app.get("/outlook-test/callback")
+@login_required
+def outlook_test_callback():
+    if (current_user.email or "").lower() != ADMIN_EMAIL:
+        return redirect(url_for("home"))
+    unavailable = _outlook_test_unavailable()
+    if unavailable:
+        return _outlook_page(unavailable=unavailable)
+
+    expected = session.pop("ms_state", None)
+    if not expected or request.args.get("state") != expected:
+        return _outlook_page(
+            error_title="The sign-in did not come back from where it went",
+            error_detail="The state parameter did not match. Start again from "
+                         "the Connect button.")
+
+    # Microsoft refused before any code was issued. THIS is the interesting
+    # path: AADSTS65001 and AADSTS90094 are what "Need admin approval" looks
+    # like on the wire.
+    if request.args.get("error"):
+        detail = request.args.get("error_description") or ""
+        return _outlook_page(
+            error_title="Microsoft refused the request: " + request.args["error"],
+            error_detail=detail,
+            aadsts=_aadsts_code(request.args.get("error"), detail))
+
+    code = request.args.get("code") or ""
+    if not code:
+        return _outlook_page(error_title="Microsoft returned no authorization code",
+                             error_detail="No `code` and no `error` on the callback.")
+
+    try:
+        result = _ms_client().acquire_token_by_authorization_code(
+            code, scopes=MS_SCOPES, redirect_uri=MS_REDIRECT_URI)
+    except Exception as exc:
+        return _outlook_page(error_title="The token exchange raised",
+                             error_detail=str(exc))
+
+    token = (result or {}).get("access_token")
+    if not token:
+        detail = (result or {}).get("error_description") or json.dumps(result or {})[:1500]
+        return _outlook_page(
+            error_title="Microsoft refused the token: " + str((result or {}).get("error") or "unknown"),
+            error_detail=detail,
+            aadsts=_aadsts_code((result or {}).get("error"), detail))
+
+    me, err = _graph_get("/me", token)
+    if err:
+        return _outlook_page(error_title="Signed in, but /me was refused",
+                             error_detail=err, aadsts=_aadsts_code(err))
+    messages, err = _graph_get(
+        "/me/messages?$top=5&$select=subject,from,receivedDateTime"
+        "&$orderby=receivedDateTime%20desc", token)
+    if err:
+        # Worth separating: this is consent granted for the sign-in and
+        # refused for the mailbox, which means Mail.Read specifically is the
+        # blocked one rather than the app as a whole.
+        return _outlook_page(
+            error_title="Signed in, but the mailbox was refused",
+            error_detail=err, aadsts=_aadsts_code(err),
+            display_name=(me or {}).get("displayName", ""))
+
+    rows = []
+    for item in (messages or {}).get("value", [])[:5]:
+        sender = ((item.get("from") or {}).get("emailAddress") or {})
+        rows.append({
+            "subject": item.get("subject") or "(no subject)",
+            "who": sender.get("name") or sender.get("address") or "(unknown sender)",
+            "address": sender.get("address") or "",
+            "when": item.get("receivedDateTime") or "",
+        })
+    # The token goes out of scope here. Nothing is written anywhere.
+    return _outlook_page(display_name=(me or {}).get("displayName", ""),
+                         upn=(me or {}).get("userPrincipalName", ""),
+                         granted_scopes=" ".join(sorted((result or {}).get("scope", "").split())),
+                         messages=rows, succeeded=True)
+
+
 _log_config_at_startup()
 
 
