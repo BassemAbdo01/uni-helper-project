@@ -14284,8 +14284,16 @@ except Exception:                       # pragma: no cover
     msal = None
 
 
-def _outlook_test_gate():
-    """404 unless the flag is on. Called first on all three routes.
+def _outlook_test_admin_only():
+    """404 unless the flag is on, then admin-only. First line of every route.
+
+    Deliberately NOT @login_required. That decorator wraps the view and
+    redirects an anonymous caller to /login?next=/outlook-test before the body
+    runs -- so with the flag off the route still answered 302 while a
+    nonexistent path answered 404, which is precisely the disclosure the flag
+    exists to prevent. Measured against production before this was changed.
+
+    Returns a response to return, or None to carry on.
 
     With the flag off the route does not exist -- not for the admin, not for
     anyone. A throwaway probe that answers 200 with a configuration checklist
@@ -14296,6 +14304,11 @@ def _outlook_test_gate():
     """
     if not OUTLOOK_TEST_ENABLED:
         abort(404)
+    if not getattr(current_user, "is_authenticated", False):
+        return redirect(url_for("login"))
+    if (current_user.email or "").lower() != ADMIN_EMAIL:
+        return redirect(url_for("home"))
+    return None
 
 
 def _outlook_test_unavailable():
@@ -14355,20 +14368,18 @@ def _outlook_page(**kwargs):
 
 
 @app.get("/outlook-test")
-@login_required
 def outlook_test():
-    _outlook_test_gate()
-    if (current_user.email or "").lower() != ADMIN_EMAIL:
-        return redirect(url_for("home"))
+    denied = _outlook_test_admin_only()
+    if denied is not None:
+        return denied
     return _outlook_page(unavailable=_outlook_test_unavailable())
 
 
 @app.get("/outlook-test/start")
-@login_required
 def outlook_test_start():
-    _outlook_test_gate()
-    if (current_user.email or "").lower() != ADMIN_EMAIL:
-        return redirect(url_for("home"))
+    denied = _outlook_test_admin_only()
+    if denied is not None:
+        return denied
     unavailable = _outlook_test_unavailable()
     if unavailable:
         return _outlook_page(unavailable=unavailable)
@@ -14389,11 +14400,10 @@ def outlook_test_start():
 
 
 @app.get("/outlook-test/callback")
-@login_required
 def outlook_test_callback():
-    _outlook_test_gate()
-    if (current_user.email or "").lower() != ADMIN_EMAIL:
-        return redirect(url_for("home"))
+    denied = _outlook_test_admin_only()
+    if denied is not None:
+        return denied
     unavailable = _outlook_test_unavailable()
     if unavailable:
         return _outlook_page(unavailable=unavailable)

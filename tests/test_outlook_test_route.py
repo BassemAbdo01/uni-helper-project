@@ -63,6 +63,21 @@ def test_the_flag_off_hides_it_from_everyone_not_just_the_admin(client, monkeypa
     assert client.get("/outlook-test").status_code == 404
 
 
+def test_the_flag_off_is_404_for_an_anonymous_caller_too(client, monkeypatch):
+    """The one these routes got wrong. @login_required wraps the view and
+    redirects an anonymous caller BEFORE the body runs, so with the flag off
+    production answered 302 to /login?next=/outlook-test while a nonexistent
+    path answered 404 -- telling an unauthenticated prodder the route is
+    there. Measured against the live site. The gate is not a decorator now.
+
+    A route that only 404s once you are signed in is not hidden."""
+    monkeypatch.setattr(nexora, "OUTLOOK_TEST_ENABLED", False)
+    for path in ("/outlook-test", "/outlook-test/start", "/outlook-test/callback"):
+        res = client.get(path)
+        assert res.status_code == 404, f"{path} answered {res.status_code}"
+        assert "login" not in (res.location or ""), path
+
+
 def test_the_flag_off_route_never_redirects_to_microsoft(client, monkeypatch):
     """The gate runs before anything that could build a sign-in URL."""
     monkeypatch.setattr(nexora, "OUTLOOK_TEST_ENABLED", False)
