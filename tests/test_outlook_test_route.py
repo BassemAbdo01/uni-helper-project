@@ -46,22 +46,30 @@ def test_the_flag_is_off_unless_the_environment_says_otherwise():
     assert nexora.OUTLOOK_TEST_ENABLED is False
 
 
-def test_with_the_flag_off_the_page_says_so_and_offers_nothing(client, monkeypatch):
+def test_with_the_flag_off_the_route_does_not_exist(client, monkeypatch):
+    """404, not a helpful page. A throwaway probe that answers 200 with a
+    configuration checklist still tells a prodder that Nexora has a mail
+    integration behind a flag. Off means gone, even for the admin; the
+    checklist lives in OUTLOOK_FEASIBILITY_V1.md."""
     monkeypatch.setattr(nexora, "OUTLOOK_TEST_ENABLED", False)
     _admin(client)
-    body = client.get("/outlook-test").get_data(as_text=True)
-    assert "OUTLOOK_TEST_ENABLED" in body
-    assert "/outlook-test/start" not in body, "it must not offer a button it cannot honour"
+    for path in ("/outlook-test", "/outlook-test/start", "/outlook-test/callback"):
+        assert client.get(path).status_code == 404, path
 
 
-def test_start_refuses_while_the_flag_is_off(client, monkeypatch):
-    """The page hiding the button is not enough; the route is the gate."""
+def test_the_flag_off_hides_it_from_everyone_not_just_the_admin(client, monkeypatch):
+    monkeypatch.setattr(nexora, "OUTLOOK_TEST_ENABLED", False)
+    _signup(client, f"nb{uuid4().hex[:7]}@carleton.ca")
+    assert client.get("/outlook-test").status_code == 404
+
+
+def test_the_flag_off_route_never_redirects_to_microsoft(client, monkeypatch):
+    """The gate runs before anything that could build a sign-in URL."""
     monkeypatch.setattr(nexora, "OUTLOOK_TEST_ENABLED", False)
     _admin(client)
     res = client.get("/outlook-test/start")
-    assert res.status_code == 200
-    assert "OUTLOOK_TEST_ENABLED" in res.get_data(as_text=True)
-    assert res.location is None, "it must not redirect to Microsoft"
+    assert res.status_code == 404
+    assert res.location is None
 
 
 def test_the_flag_alone_is_not_enough(client, monkeypatch):

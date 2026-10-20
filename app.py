@@ -21,7 +21,7 @@ from functools import wraps
 from uuid import uuid4
 from pathlib import Path
 
-from flask import Flask, render_template, request, redirect, url_for, jsonify, Response, send_file, session
+from flask import Flask, render_template, request, redirect, url_for, jsonify, Response, send_file, session, abort
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_sqlalchemy import SQLAlchemy
@@ -14284,10 +14284,22 @@ except Exception:                       # pragma: no cover
     msal = None
 
 
-def _outlook_test_unavailable():
-    """Why this test cannot run, in words, or "" when it can."""
+def _outlook_test_gate():
+    """404 unless the flag is on. Called first on all three routes.
+
+    With the flag off the route does not exist -- not for the admin, not for
+    anyone. A throwaway probe that answers 200 with a configuration checklist
+    is still telling an unauthenticated prodder that Nexora has a mail
+    integration behind a flag, and the checklist lives in
+    OUTLOOK_FEASIBILITY_V1.md where it is more use anyway. The flag is the
+    switch; off means gone.
+    """
     if not OUTLOOK_TEST_ENABLED:
-        return "OUTLOOK_TEST_ENABLED is not set. This test is off by default."
+        abort(404)
+
+
+def _outlook_test_unavailable():
+    """Why this test cannot run even with the flag on, or "" when it can."""
     if msal is None:
         return "The msal package is not installed in this environment."
     missing = [name for name, value in (("MS_CLIENT_ID", MS_CLIENT_ID),
@@ -14345,6 +14357,7 @@ def _outlook_page(**kwargs):
 @app.get("/outlook-test")
 @login_required
 def outlook_test():
+    _outlook_test_gate()
     if (current_user.email or "").lower() != ADMIN_EMAIL:
         return redirect(url_for("home"))
     return _outlook_page(unavailable=_outlook_test_unavailable())
@@ -14353,6 +14366,7 @@ def outlook_test():
 @app.get("/outlook-test/start")
 @login_required
 def outlook_test_start():
+    _outlook_test_gate()
     if (current_user.email or "").lower() != ADMIN_EMAIL:
         return redirect(url_for("home"))
     unavailable = _outlook_test_unavailable()
@@ -14377,6 +14391,7 @@ def outlook_test_start():
 @app.get("/outlook-test/callback")
 @login_required
 def outlook_test_callback():
+    _outlook_test_gate()
     if (current_user.email or "").lower() != ADMIN_EMAIL:
         return redirect(url_for("home"))
     unavailable = _outlook_test_unavailable()

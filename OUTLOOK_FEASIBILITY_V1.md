@@ -114,9 +114,12 @@ permission error would make the whole exercise worthless.
 
 ## Part 3 — How it is built, and what it deliberately does not do
 
-- **Off by default.** `OUTLOOK_TEST_ENABLED` is `0` unless Render says
-  otherwise. The route exists in production right now and answers "this test is
-  off" to the only account that can reach it.
+- **Off by default, and off means 404.** `OUTLOOK_TEST_ENABLED` is `0` unless
+  Render says otherwise, and with it off all three routes return **404 to
+  everyone, the admin included** -- not a helpful "set these variables" page.
+  A throwaway probe answering 200 with a configuration checklist still tells a
+  prodder that Nexora has a mail integration behind a flag, and the checklist
+  is in Part 1 of this document, where it is more use anyway.
 - **Admin only.** All three routes check `ADMIN_EMAIL` before anything else.
 - **No token is stored anywhere, not even the session.** Flask's session is a
   signed **cookie** and browsers drop one over ~4 KB; a Graph access token is
