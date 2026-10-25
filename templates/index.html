@@ -51,7 +51,7 @@
 #mylist .notes .del{border:0;background:none;color:var(--fg-3);cursor:pointer;font-size:16px;
   line-height:1;padding:2px 6px;border-radius:5px}
 #mylist .notes .del:hover{color:var(--red);background:var(--red-soft)}
-.task[hidden]{display:none}
+.task[hidden]{display:none}.qmore{display:inline-flex;align-items:center;gap:6px;margin:12px 0 0;padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:12px;cursor:pointer;transition:color .15s,border-color .15s}.qmore:hover{color:var(--ink);border-color:var(--accent)}.qmore[hidden]{display:none}
 .task{display:grid;grid-template-columns:auto 1fr auto;gap:13px;align-items:center;
   padding:13px 0;border-bottom:1px solid var(--line);width:100%;background:none;border-left:0;
   border-right:0;border-top:0;color:inherit;font:inherit;text-align:left;cursor:pointer}
@@ -315,7 +315,7 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
             {# Two things a student does with a task: tick it off, or go and
                do it. The box ticks; the title opens the work in the LMS when
                the LMS gave a link (never one Nexora made up -- _lms_link). #}
-            <div class="task" data-group="{{ t.group_id }}" data-status="{{ t.status }}" aria-pressed="false"{% if loop.index > 5 %} hidden{% endif %}>
+            <div class="task" data-group="{{ t.group_id }}" data-status="{{ t.status }}" aria-pressed="false"{% if not tasks_expanded and loop.index > 5 %} hidden{% endif %}>
               <button type="button" class="box" aria-pressed="false" aria-label="Mark done: {{ t.title }}">&check;</button>
               <span class="t">
                 <strong>
@@ -336,6 +336,19 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
             <strong>Nothing queued</strong>
             <a href="{{ url_for('connect_brightspace') }}">Connect Brightspace</a> to pull your deadlines in.
           </div>
+        {% endif %}
+        {# The whole list is in the DOM; this decides how much of it is on
+           screen. It is a plain button, not a link: reloading the page to
+           read five more rows is the thing being fixed. #}
+        {% if task_preview|length > 5 %}
+        <button type="button" id="queueMore" class="qmore"
+                data-count="{{ task_preview|length }}"
+                aria-expanded="{{ 'true' if tasks_expanded else 'false' }}">
+          {% if tasks_expanded %}Show fewer{% else %}Show all {{ task_preview|length }}{% endif %}
+        </button>
+        {% endif %}
+        {% if task_truncated %}
+        <p class="meta" style="margin:8px 0 0">Showing {{ task_preview|length }} of {{ task_total }}. Open a course to see the rest.</p>
         {% endif %}
         {# Ticked off. A wrong click used to be recoverable for nine seconds
            and then gone from every view for good. #}
@@ -831,12 +844,29 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
   // Ticking one reveals the next, so two ticks leave five things, not three.
   const SHOWN = 5;
   const queue = () => $$('#tasks .task');
+  // Whether the queue is open. Arriving from "All tasks" starts it open,
+  // because that link promised every task and used to deliver five.
+  let queueOpen = {{ 'true' if tasks_expanded else 'false' }};
+
   function settleQueue() {
     let visible = 0;
     for (const b of queue()) {
-      if (visible < SHOWN) { b.hidden = false; visible++; } else { b.hidden = true; }
+      if (queueOpen || visible < SHOWN) { b.hidden = false; visible++; } else { b.hidden = true; }
     }
+    const more = $('#queueMore');
+    if (!more) return;
+    // Hidden when ticking things off has left five or fewer: a control that
+    // opens a list already fully on screen is noise.
+    const left = queue().length;
+    more.hidden = left <= SHOWN;
+    more.setAttribute('aria-expanded', queueOpen ? 'true' : 'false');
+    more.textContent = queueOpen ? 'Show fewer' : `Show all ${left}`;
   }
+  (function () {
+    const more = $('#queueMore');
+    if (more) more.addEventListener('click', () => { queueOpen = !queueOpen; settleQueue(); });
+  })();
+
   // The done list under the queue, so a wrong click has a way back after the
   // undo toast has gone.
   function addToDone(group, title, sub) {

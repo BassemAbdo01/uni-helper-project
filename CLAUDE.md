@@ -350,6 +350,66 @@ pasting an outline; the parser is the fast path for a clean table and the
 fallback when Gemini is unavailable, so it is not an edge case.
 `tests/test_final_minimum_phrasing.py` pins six orderings of that sentence.
 
+## A conditional scheme applies only when its condition holds
+
+ELEC2501B reported **83%** from "Missed Midterm Scheme" with a midterm mark
+entered, against **82.2%** standard. The official grade is
+
+```python
+complete = [x for x in evaluated if x['complete'] and x['eligible']]
+best = max(complete, key=lambda x: x['grade'])
+```
+
+-- the highest grade among eligible options. Eligibility had two shapes and
+**neither could express this condition**: `requires_completed` asks whether a
+mark is PRESENT, and a `scheme_gate` compares another option's GRADE. Nothing
+could say *only when this is absent*.
+
+So a missed-X scheme carried no eligibility, `required` was 0, `completed >= 0`
+was always true -- and omitting the midterm redistributes its weight, which is
+exactly why it scores HIGHER. **The option that won was the one that should
+have been impossible.**
+
+**An empty mark is not a missed assessment.** This is the part that makes the
+fix safe. Before the midterm happens its score is empty too, so gating on
+emptiness would open the missed scheme months early and report a grade that
+assumes the student skips something they have not sat. `GradeEntry.missed` is
+the student saying "I did not write this", and **only that flag opens the
+scheme**. Until then the option is computed and offered as a SCENARIO, never as
+the official result.
+
+Both halves are needed:
+
+- A conditional option is ineligible unless an assessment it OMITS is flagged
+  missed. Detected from the option's name (`missed|deferred|absent|excused|
+  no-show|did not write`) and from `eligibility.requires_missing` when the
+  outline gives it -- so it works on every analysis already saved, which is the
+  point, because the failure mode is the model not emitting a rule.
+- An option that INCLUDES a flagged assessment is incomplete. Without this the
+  standard scheme stays complete on a stale mark and out-scores the scheme it
+  is supposed to hand over to.
+
+**`complete` and `eligible` are different facts and must not share an answer.**
+The first version appended the scenario note to `missing`, which made
+`complete` False -- so the figure could not be shown, and the audit could not
+see which students had been given the wrong scheme. The same mistake as
+`_evaluate_pass_rules`: "cannot be computed" and "does not apply" are not the
+same thing.
+
+**`pctOf` is the single definition in the calculator.** Special-casing the dial
+alone was tried and caught in the browser: the standing panel went on counting
+the missed midterm and printed **81.00% beside an official panel saying
+85.20%** -- one screen disagreeing with itself, which is the failure this whole
+fix exists to remove. The score is never deleted; untoggling restores it.
+
+`scripts/audit_scheme_eligibility.py --plan` is read-only and has no `--apply`
+on purpose: the right answer per course is the student's to give. It reports
+which saved policies carry a conditional scheme and, more usefully, which ones
+were **being shown the wrong scheme with today's marks**.
+
+`requires_missing` extraction rides with the outline-finder corpus run. The fix
+deliberately needs no prompt change, so it required no corpus run of its own.
+
 ## A rule Nexora cannot check must never fail a student
 
 `_evaluate_pass_rules` is tri-state: `passed` is True, False, or **None** for a

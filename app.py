@@ -142,6 +142,10 @@ app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # up to 8 outline screensho
 # four-year degree is comfortably past sixty enrolments, and the page groups by
 # term, so the only thing a low cap bought was courses vanishing in silence.
 DASHBOARD_COURSE_LIMIT = int(os.environ.get("DASHBOARD_COURSE_LIMIT", "400"))
+# How many queue cards reach the DOM. Five are visible; the rest are one click
+# away. Was a bare 12, which meant a student with eleven things due tomorrow
+# could not see past the fifth without ticking things off.
+TASK_PREVIEW_MAX = int(os.environ.get("TASK_PREVIEW_MAX", "200"))
 
 # The most enrolments one sync will store. Same reasoning: a bound on a
 # pathological payload, not an opinion about how many courses a student may
@@ -809,6 +813,11 @@ class GradeEntry(db.Model):
     score = db.Column(db.Float, nullable=True)
     max_score = db.Column(db.Float, default=100.0)
     category = db.Column(db.String(80), default="assessment")
+    # The student saying "I did not write this". NOT the same as an empty
+    # score: before a midterm happens its mark is empty too, and treating that
+    # as missed makes a missed-midterm scheme eligible months early -- showing
+    # a grade that assumes the student skips it. Only this flag opens one.
+    missed = db.Column(db.Boolean, default=False)
     notes = db.Column(db.String(255), default="")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -1168,6 +1177,7 @@ def ensure_schema_columns():
         },
         "grade_entry": {
             "notes": "VARCHAR(255) DEFAULT ''",
+            "missed": "BOOLEAN DEFAULT FALSE",
         },
         "course_outline_profile": {
             "study_brief_json": "TEXT DEFAULT ''",
@@ -4949,10 +4959,22 @@ def home():
         course_card["art"] = course_art[index % len(course_art)]
         course_card["due_status"] = course_card.get("next_due") or "No date"
 
-    # Twelve, of which the page shows five and reveals the next as one is
-    # ticked off. It sent six and showed five, so two ticks left a list of
-    # three with nothing moving up to fill it.
-    task_preview = dashboard_cards[:12]
+    # Five are shown and the next is revealed as one is ticked off, but the
+    # whole list is RENDERED so it can be opened without ticking anything.
+    #
+    # It used to render twelve. Reported with a screenshot: four items due
+    # tomorrow and one in three days, with no way to see whether there were
+    # seven more behind them -- "maybe theres 7 due in 1 day but they wouldnt
+    # see it until they mark a few as done". A queue you can only read by
+    # destroying it is not a queue.
+    #
+    # TASK_PREVIEW_MAX is high rather than absent, because this is rendered
+    # into the DOM on every dashboard load. `truncated` is reported when it
+    # bites, for the reason COURSE_IMPORT_MAX reports it: a limit a student
+    # cannot see is indistinguishable from a bug.
+    task_total = len(dashboard_cards)
+    task_preview = dashboard_cards[:TASK_PREVIEW_MAX]
+    task_truncated = task_total > len(task_preview)
     # What has been ticked off, newest deadline first, so a wrong click can be
     # put back after the undo toast has gone.
     done_cards = sorted(
@@ -5077,6 +5099,12 @@ def home():
         setup=_setup_state(current_user.id),
         day_notes=_day_notes_for(current_user.id, _student_today(current_user)),
         task_preview=task_preview,
+        task_total=task_total,
+        task_truncated=task_truncated,
+        # "All tasks" promised every task and delivered the same five, because
+        # view=all widens the SERVER filter and the five-card cap is in the
+        # page. Arriving from that link opens the list.
+        tasks_expanded=(view == "all"),
         done_cards=done_cards,
         upcoming_cards=upcoming_cards,
         month_title=month_title,
@@ -9082,7 +9110,7 @@ def course_grades(course_code):
     course = _normalize_course_code(course_code)
     if request.method == "GET":
         rows = GradeEntry.query.filter_by(user_id=current_user.id, course_full=course).order_by(GradeEntry.created_at.asc()).all()
-        return jsonify({"grades": [{"id": r.id, "name": r.name, "weight": r.weight, "score": r.score, "max_score": r.max_score, "category": r.category, "notes": r.notes} for r in rows]})
+        return jsonify({"grades": [{"id": r.id, "name": r.name, "weight": r.weight, "score": r.score, "max_score": r.max_score, "category": r.category, "notes": r.notes, "missed": bool(r.missed)} for r in rows]})
     data = request.get_json(silent=True) or {}
     if request.method == "DELETE":
         row = GradeEntry.query.filter_by(id=str(data.get("id") or ""), user_id=current_user.id, course_full=course).first()
@@ -9104,9 +9132,13 @@ def course_grades(course_code):
         row = GradeEntry(id=uuid4().hex, user_id=current_user.id, course_full=course)
         db.session.add(row)
     row.name=name; row.weight=weight; row.score=score; row.max_score=max_score; row.category=str(data.get("category") or row.category or "assessment")[:80]
+    # Only touched when the caller says so, so saving a mark never silently
+    # clears the flag and an older client cannot unset it by omission.
+    if "missed" in data:
+        row.missed=bool(data.get("missed"))
     row.updated_at=datetime.utcnow()
     db.session.commit()
-    return jsonify({"ok": True, "id": row.id})
+    return jsonify({"ok": True, "id": row.id, "missed": bool(row.missed)})
 
 
 def _grade_row_map(rows):
@@ -9429,6 +9461,87 @@ def _component_source_name(comp):
                or comp.get('label') or '').strip()
 
 
+# A scheme that only applies to a student who did not sit something. The
+# condition is the one shape the eligibility machinery could not express:
+# `requires_completed` asks whether a mark is PRESENT, and a `scheme_gate`
+# compares another option's GRADE. Neither can say "only when this is absent".
+_MISSED_SCHEME = re.compile(
+    r"\b(missed|deferred|absent|excused|no[\s-]?show|"
+    r"did\s+not\s+(write|sit|attend|take))\b", re.I)
+
+
+def _assessment_key(name):
+    """The lookup key for an assessment name.
+
+    `_grade_row_map`, `_find_grade_row` and `_evaluate_option` each inline this
+    same regex. Not refactoring the three of them here -- that is a change to
+    how every grade row is matched and does not belong in a correctness fix --
+    but new code uses one definition rather than adding a fourth copy.
+    """
+    return re.sub(r'[^a-z0-9]+', ' ', str(name or '').lower()).strip()
+
+
+def _row_is_missed(row):
+    return bool(row is not None and getattr(row, "missed", False))
+
+
+def _scheme_component_names(option):
+    return [_component_source_name(c) for c in (option.get('components') or [])
+            if isinstance(c, dict)]
+
+
+def _omitted_by_option(option, analysis):
+    """Assessments the rest of the scheme has and this option leaves out.
+
+    That set is what a "missed X" option is conditional on. Taken from the
+    other options and the top-level component list rather than from the model,
+    so this works on every analysis already saved -- which is the point, since
+    the failure mode IS the model not emitting a rule.
+    """
+    mine = {_assessment_key(n) for n in _scheme_component_names(option)}
+    everything = {}
+    pools = [analysis.get('components') or []]
+    pools += [opt.get('components') or [] for opt in (analysis.get('grading_options') or [])]
+    for pool in pools:
+        for comp in pool:
+            if not isinstance(comp, dict):
+                continue
+            name = _component_source_name(comp)
+            key = _assessment_key(name)
+            if key and key not in mine:
+                everything[key] = name
+    return everything
+
+
+def _missed_scheme_state(option, analysis, row_map):
+    """(is_conditional, eligible, message) for a missed/deferred scheme.
+
+    The gate is the student's own flag, never an empty mark. Until they say
+    they missed it, the option is computed and offered as a SCENARIO -- "if
+    you miss the midterm, this is what happens" -- and can never be the
+    official result.
+    """
+    name = str(option.get('option_name') or '')
+    eligibility = option.get('eligibility') or {}
+    named = [str(x) for x in (eligibility.get('requires_missing') or []) if str(x).strip()]
+    if not (named or _MISSED_SCHEME.search(name)):
+        return False, True, ''
+    # `requires_missing` when the outline gave it, otherwise whatever this
+    # option leaves out that the rest of the scheme includes.
+    candidates = named or list(_omitted_by_option(option, analysis).values())
+    flagged = [c for c in candidates if _row_is_missed(_find_grade_row(row_map, c))]
+    if flagged:
+        return True, True, ''
+    if candidates:
+        pretty = ', '.join(sorted(candidates)[:3])
+        return True, False, (
+            'Applies only once you mark %s as missed. Until then this is a '
+            'scenario, not your grade.' % pretty)
+    return True, False, (
+        'Applies only to a student who missed an assessment. Mark the '
+        'assessment as missed to apply it.')
+
+
 def _evaluate_option(option,row_map,final_override=None,analysis=None):
     points=0.0; missing=[]; details=[]
     analysis=analysis or {}
@@ -9457,6 +9570,25 @@ def _evaluate_option(option,row_map,final_override=None,analysis=None):
     eligible=completed>=required
     if not eligible:
         missing.append(eligibility.get('message') or f'Requires at least {required} of {len(sources)} listed assessment(s); {completed} entered.')
+    # B1. ELEC2501B reported 83% from "Missed Midterm Scheme" with a midterm
+    # mark entered, against 82.2% from the standard scheme. The winner is
+    # `max(grade)` over every eligible option, and a missed-X scheme carried no
+    # eligibility at all -- so `required` was 0, `completed >= 0` was always
+    # true, and leaving the midterm out redistributed its weight, which is
+    # exactly why it scored HIGHER. The scheme that won was the one that should
+    # have been impossible.
+    conditional,missed_ok,missed_note=_missed_scheme_state(option,analysis,row_map)
+    scenario=False
+    if conditional and not missed_ok:
+        eligible=False
+        scenario=True
+        # The note does NOT go in `missing`. `complete` means "every mark this
+        # option needs is entered" and `eligible` means "its condition holds";
+        # folding one into the other is the `_evaluate_pass_rules` mistake --
+        # two different facts sharing an answer. It also made the scenario
+        # unshowable, since the UI reads `complete` to decide whether a figure
+        # is worth printing, and left the audit unable to see which students
+        # had been given the wrong scheme.
     for comp in option.get('components') or []:
         weight=float(comp.get('weight') or 0)
         method=str(comp.get('method') or 'direct')
@@ -9492,9 +9624,18 @@ def _evaluate_option(option,row_map,final_override=None,analysis=None):
                 pct=virtual_match.get('percent')
             else:
                 r=_find_grade_row(row_map,source)
-                override=final_override if (option_final and source==option_final) else None
-                pct=_row_percent(r,override)
-            if pct is None:
+                # A scheme that INCLUDES something the student says they missed
+                # cannot be computed, whatever is in the score box. Without
+                # this the standard scheme stays complete on a stale mark and
+                # out-scores the missed scheme it is supposed to hand over to.
+                # The score itself is never deleted -- unflagging restores it.
+                if _row_is_missed(r):
+                    missing.append(f'{source or "Assessment"} is marked as missed.')
+                    pct=None
+                else:
+                    override=final_override if (option_final and source==option_final) else None
+                    pct=_row_percent(r,override)
+            if pct is None and not _row_is_missed(_find_grade_row(row_map,source)):
                 missing.append(f'{source or "Assessment"} is not entered.')
         if pct is not None:
             contribution=pct/100*weight; points+=contribution
@@ -9502,7 +9643,10 @@ def _evaluate_option(option,row_map,final_override=None,analysis=None):
                 'name': source if not comp.get('source_group') else (comp.get('name') or 'Tests'),
                 'percent':round(pct,2),'weight':weight,'points':round(contribution,2)
             })
-    return {'option_name':option.get('option_name') or 'Grading option','grade':round(points,2),'eligible':eligible,'complete':not missing,'missing':missing,'details':details,'final_source':option_final}
+    return {'option_name':option.get('option_name') or 'Grading option','grade':round(points,2),'eligible':eligible,'complete':not missing,'missing':missing,'details':details,'final_source':option_final,
+            # Computed, shown, and never allowed to be the official result.
+            'scenario':scenario,'scenario_note':missed_note if scenario else '',
+            'conditional':conditional}
 
 
 def _evaluate_pass_rules(analysis,row_map,course_grade,final_override=None):

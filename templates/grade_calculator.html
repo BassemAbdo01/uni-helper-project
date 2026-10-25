@@ -77,6 +77,18 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .marks-row .of{color:var(--fg-3);border-color:var(--line)}
 .marks-row .of:focus{color:var(--fg)}
 .marks-row span{color:var(--fg-3);font-family:var(--mono);font-size:14px;flex:none}
+/* Toggled with aria-pressed, not with [hidden], so no display rule can
+     out-rank it -- the #courseState trap in reverse. */
+.missed-toggle{border:1px solid var(--line);background:transparent;color:var(--muted);
+    font:inherit;font-size:11px;padding:4px 9px;border-radius:999px;cursor:pointer;
+    white-space:nowrap;transition:color .15s,border-color .15s,background .15s}
+  .missed-toggle:hover{color:var(--ink);border-color:var(--accent)}
+  .missed-toggle[aria-pressed="true"]{background:#3A2A12;border-color:#8A6A2F;color:#EFC584}
+  .comp.is-missed{opacity:.72}
+  .comp.is-missed .marks input{text-decoration:line-through}
+  .scenario-line{margin:10px 0 0;padding:9px 12px;border-radius:10px;
+    border:1px dashed var(--line);color:var(--muted);font-size:12px}
+  .scenario-line b{color:var(--ink)}
 .comp-foot{display:flex;justify-content:space-between;gap:10px;margin-top:12px;padding-top:11px;
   border-top:1px solid var(--line);font-family:var(--mono);font-size:10.5px;color:var(--fg-3)}
 .comp-foot b{font-weight:400;color:var(--fg-2)}
@@ -417,6 +429,10 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
               id: c.id || '', name: c.name, weight: Number(c.weight) || 0,
               score: mark, max_score: outOf > 0 ? outOf : 100,
               category: c.category || 'assessment',
+              // Always sent, so untoggling reaches the server. The endpoint
+              // only writes the column when the key is present, so an older
+              // client cannot clear the flag by omission.
+              missed: !!c.missed,
             }),
           }));
         c.id = data.id || c.id;
@@ -568,6 +584,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
         id: row.id, name: row.name ?? 'Assessment', weight: Number(row.weight) || 0,
         earned: row.score == null ? '' : row.score,
         outOf: row.max_score == null ? DEFAULT_OUT_OF : row.max_score,
+        missed: !!row.missed,
         category: row.category || 'assessment',
       }));
     } catch (err) {
@@ -588,6 +605,14 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 
   const num = v => (v === '' || v == null ? null : Number(v));
   const pctOf = c => {
+    // An assessment the student says they did not write contributes nothing,
+    // whatever is still in the score box. This is the ONE place that decides,
+    // so the dial, the contribution line and the standing panel's totals()
+    // all agree. Special-casing the dial alone left the standing panel saying
+    // 81.00% beside an official panel saying 85.20% -- the same screen
+    // disagreeing with itself, which is the bug this whole fix is about.
+    // The score is not deleted: untoggling brings it straight back.
+    if (c.missed) return null;
     const e = num(c.earned), o = num(c.outOf);
     if (e == null || o == null || !(o > 0)) return null;
     return (e / o) * 100;
@@ -898,16 +923,48 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     weight.append(weightInput, weightTag);
 
     const contribution = document.createElement('span');
-    foot.append(weight, contribution);
+
+    // "I missed this" is the ONLY thing that opens a missed/deferred grading
+    // scheme. An empty mark is not a missed assessment: before the midterm
+    // happens its score is empty too, and gating on emptiness would apply a
+    // missed-midterm scheme months early -- showing a grade that assumes the
+    // student skips something they have not sat.
+    const missed = document.createElement('button');
+    missed.type = 'button';
+    missed.className = 'missed-toggle';
+    const paintMissed = () => {
+      const on = !!components[i].missed;
+      missed.setAttribute('aria-pressed', on ? 'true' : 'false');
+      missed.textContent = on ? 'Missed this' : 'I missed this';
+      missed.title = on
+        ? 'Nexora is treating this as not written. Any alternative scheme for a missed assessment can now apply.'
+        : 'Tell Nexora you did not write this. Only then can a "missed" grading scheme apply.';
+    };
+    missed.onclick = () => {
+      components[i].missed = !components[i].missed;
+      paintMissed();
+      calculate();
+      saveMark(i);
+    };
+    paintMissed();
+
+    foot.append(weight, missed, contribution);
     el.append(top, mid, foot);
 
     // One place that knows how this card should currently look.
     el.refresh = () => {
       const now = pctOf(components[i]);
       const w = Number(components[i].weight) || 0;
-      dial.set(now);
+      const isMissed = !!components[i].missed;
+      dial.set(now);                      // pctOf already returns null when missed
       el.classList.toggle('done', now != null);
-      if (now == null) {
+      el.classList.toggle('is-missed', isMissed);
+      if (isMissed) {
+        // The score is NOT deleted -- untoggling brings it straight back. What
+        // changes is that every scheme including this assessment can no longer
+        // be computed, which is what hands over to the alternative scheme.
+        contribution.textContent = 'not written';
+      } else if (now == null) {
         contribution.textContent = 'not marked yet';
       } else {
         contribution.replaceChildren();
