@@ -788,6 +788,12 @@ class CourseContent(db.Model):
     # non-files. "A scraped value is worthless until something consumes it",
     # the same shape as `due_at` before `_import_deadlines` existed.
     file_ext = db.Column(db.String(12), default="")
+    # Nexora's own copy of the file, when one was ever made. SEPARATE from
+    # source_url, which must keep pointing at the university: the copy lives on
+    # Render's filesystem, which is wiped by every deploy, so a row whose link
+    # had been replaced by the copy was left pointing at nothing. The link the
+    # LMS gave is the durable one and is never overwritten.
+    stored_url = db.Column(db.Text, default="")
     content_hash = db.Column(db.String(64), default="")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -1158,6 +1164,7 @@ def ensure_schema_columns():
             # function exists. Existing rows default to "" and gain a real
             # extension on the next sync, the same as every other backfill here.
             "file_ext": "VARCHAR(12) DEFAULT ''",
+            "stored_url": "TEXT DEFAULT ''",
         },
         "grade_entry": {
             "notes": "VARCHAR(255) DEFAULT ''",
@@ -13097,9 +13104,24 @@ def sync_course_file():
     record.updated_at = datetime.utcnow()
     content = CourseContent.query.filter_by(user_id=user.id, source_uid=source_uid).first()
     if content:
-        content.source_url = stored_url
-        original = record.original_source_url
-        content.content_text = json.dumps({"original_source_url": original, "stored_file": True})
+        # The copy goes in its OWN field. This used to do two destructive
+        # things, and neither was survivable:
+        #
+        #   content.source_url = stored_url
+        #   content.content_text = json.dumps({...,"stored_file": True})
+        #
+        # The first replaced the university's link with a path under
+        # `static/nexora_uploads/`, which Render wipes on every deploy -- so
+        # the row ended up pointing at a file that no longer existed, where a
+        # working Brightspace link used to be. The second threw away the
+        # extracted text, which is the only thing the tutor, the summariser
+        # and the outline analyser can actually read, and replaced it with a
+        # six-word JSON stub.
+        #
+        # Nothing calls this route today -- the extension posts to
+        # /api/sync/process-content, which extracts text and stores no file --
+        # so this was a loaded gun rather than a live fire. It is unloaded now.
+        content.stored_url = stored_url
         content.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify({"ok": True, "stored_url": stored_url, "file_name": filename, "size": len(data)})

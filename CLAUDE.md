@@ -714,6 +714,48 @@ An existing test pinned the upload-form URL as the correct `href`. It was
 updated, not weakened: what it exists to check is that the title is an anchor
 and the box ticks, and both still hold -- only the destination was wrong.
 
+## A row's link belongs to the university; Nexora's copy gets its own field
+
+`/api/sync/file` cached a file to `static/nexora_uploads/` and then did two
+destructive things to the row:
+
+```python
+content.source_url  = stored_url
+content.content_text = json.dumps({..., "stored_file": True})
+```
+
+**Render's filesystem is ephemeral** -- wiped by every deploy and restart,
+with no persistent disk attached. So the first line left the row pointing at a
+file that no longer existed, which is a broken link where a working Brightspace
+link used to be. The second threw away the extracted text -- the only thing the
+tutor, the summariser and the outline analyser can read -- and replaced it with
+a six-word JSON stub.
+
+**It was a loaded gun, not a live fire, and the audit that found it first said
+otherwise.** The extension posts to `/api/sync/process-content`, which extracts
+text and writes no file (`existing.stored_url = ''`). `/api/sync/file` is
+called by nothing -- not the extension, not a template, not a test. The first
+report of this said "every deploy silently breaks every cached file", which was
+wrong: check who calls a route before describing what it is doing to
+production.
+
+`CourseContent.stored_url` is where the copy goes now, and `source_url` keeps
+pointing at the university, because the LMS link is the durable one and ours is
+not. `scripts/repair_stored_urls.py --plan/--apply` puts back any row written
+before this; on a database only ever synced by a current extension it finds
+nothing, which is the expected result.
+
+Two rules in that repair worth keeping:
+
+- **A row with no recoverable original is left alone.** `_lms_link` gates the
+  restore, so a `javascript:` original can never be written into an href, and a
+  missing one leaves the dead static path rather than blanking the field -- a
+  dead link at least names the item, an empty one renders no link at all.
+- **Only the exact JSON stub is cleared**, never real text. Blanking it puts
+  the row back under the ~120-character threshold so `needs_content` re-fetches
+  the body, and that round trip needs the student present -- not something to
+  spend on a row that still has its text.
+
 ## A new column needs a line in ensure_schema_columns, or the deploy 500s
 
 `db.create_all()` creates missing TABLES and **never adds a column to a table

@@ -10,3 +10,8 @@ instance/
 .idea/
 .claude/
 scratchpad/
+
+# Per-user course files cached from an LMS. Never in git: this repo is public
+# and these are one student private documents. Two were committed by a test
+# run before this line existed.
+static/nexora_uploads/
