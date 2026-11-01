@@ -15,7 +15,8 @@ This is the same class as the original day-late bug, in the opposite direction:
 confidently wrong, on the screen a student checks to decide what to do today.
 """
 import io
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import app as nexora
 
@@ -40,6 +41,20 @@ def _d(iso):
 
 def _stamp(iso):
     return _d(iso).replace("-", "")
+
+
+def _wall_clock(iso_day, utc_hhmm, zone="America/Toronto"):
+    """What `utc_hhmm` on the shifted `iso_day` reads as on that zone's clock.
+
+    Computed, never written down. Toronto is UTC-4 in summer and UTC-5 in
+    winter, so a hard-coded hour here is a measurement of which side of the
+    changeover the fixture happened to fall on when it was written -- and
+    `_SHIFT` moves the fixture across that boundary twice a year.
+    """
+    hour, minute = (int(part) for part in utc_hhmm.split(":"))
+    moment = datetime(*[int(p) for p in _d(iso_day).split("-")],
+                      hour, minute, tzinfo=timezone.utc)
+    return moment.astimezone(ZoneInfo(zone)).strftime("%H:%M")
 
 
 ALL_DAY_FEED = f"""BEGIN:VCALENDAR
@@ -136,7 +151,8 @@ def test_a_real_timestamp_is_still_converted_to_the_students_day(client):
     rows = _rows(client)
     lab = next(v for k, v in rows.items() if "Lab 4" in k)
     assert lab[0] == _d("2026-10-07"), "02:00Z on the 8th is the 7th in Toronto"
-    assert lab[1] == "22:00"
+    # 22:00 in summer, 21:00 in winter, and which one is not what this pins.
+    assert lab[1] == _wall_clock("2026-10-08", "02:00")
 
 
 def test_the_same_feed_in_utc_is_unchanged_for_the_all_day_event(client):
