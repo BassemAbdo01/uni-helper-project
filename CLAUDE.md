@@ -501,6 +501,97 @@ Existing rows keep whatever date they were imported with until the next sync
 re-writes them. That is acceptable because a sync fixes them; a migration
 cannot, since the original timestamp was never stored.
 
+## A reminder has to fire when nothing of ours is running
+
+"Remind me of this at that time and notify me that day." Storing it is the easy
+half: a reminder is a `Task` with `kind='reminder'`, for the same reason an exam
+is one -- the calendar, the dashboard, the feed, completion and deletion already
+understand Tasks, and a parallel table would have to be taught to every one of
+them.
+
+The hard half is that **Nexora has no scheduler**. One gunicorn web service, so
+code runs when a request arrives and at no other time; nothing in this process
+can wake up at nine in the morning. `POST /api/reminders/dispatch` is what an
+external cron calls, and `REMINDER_DISPATCH_TOKEN` is the entire credential --
+the same reasoning as the `.ics` feed token, because the caller cannot sign in.
+Unset, the route is a **404, and so is a wrong token**: a route that answers
+differently to a bad credential confirms it exists, which is exactly what the
+Outlook probe did by answering 302 where a nonsense path answered 404. POST, not
+GET, for the reason `/api/tour` is: a prefetch must not spend it.
+
+**The moment is computed, never stored.** `due_raw` + `due_time` + the
+student's zone is the single source of truth, and `_reminder_instant_utc` is the
+one place that turns the three into an instant. Storing the instant alongside
+them would be a second copy of one fact, and two copies of a date is how this
+app once showed a deadline a day late on one screen and correctly on another --
+it also means a student who corrects their timezone fixes every reminder they
+have, with no backfill.
+
+A reminder with no time of its own fires at `REMINDER_DEFAULT_HOUR`, not at
+midnight, which is a notification nobody is awake for.
+
+**`reminded_at` and `reminder_state` are two columns because they are two
+facts.** `reminded_at` is the last ATTEMPT -- the `last_sync_attempt` lesson: a
+send that times out may never reach the `except`, and a row still claiming
+nothing was tried is tried again for ever. The attempt is stamped **and
+committed before the message goes out**, so a cron firing every five minutes
+cannot send the same reminder twice while a slow mail server is still thinking.
+The outcome is written afterwards, and a row left `failed` is retried inside the
+window but no oftener than `REMINDER_RETRY_MINUTES` -- a mail server refusing
+connections must not be hammered.
+
+**A dispatcher that has been down does not deliver a day of stale notices.**
+Past `REMINDER_CATCHUP_HOURS` a reminder is never sent, and -- this is the part
+that matters -- it is **never stamped as sent either**, because it was not.
+"Could not be sent" and "was sent" are different facts, the same rule as
+`_evaluate_pass_rules`, and the stamp is the only place anyone could ever learn
+the dispatcher had been down.
+
+The counts the route returns keep that split: `sent`, `failed`, `waiting` (not
+due yet), **`blocked`** (due now and nothing can send it) and `too_late`.
+`blocked` exists because folding it into `waiting` reads as "nothing was due" --
+the `/api/sync/auto` mistake, where a student whose feed was unreachable looked
+exactly like one who had just synced.
+
+**With no SMTP, nothing is attempted and nothing is claimed.** Marking a row
+failed for a send that was never tried would spend its catch-up window, so a
+reminder would stay unsent even if SMTP were configured two minutes later. The
+add sheet says so too, rather than letting a student trust a notification that
+cannot arrive -- `reminders_deliver` is `email_is_configured() and
+REMINDER_DISPATCH_TOKEN`, because both halves are needed and either one missing
+means silence.
+
+**The feed carries an alarm as a second channel, and it is not a substitute.**
+A `VALARM` on a reminder lets the student's own calendar app notify their phone
+with Nexora sending nothing at all. The trigger is **relative** (`PT0S`, or
+`PT<morning>H` for an all-day one): every `DTSTART` this feed writes is a
+floating local time deliberately, and an absolute `TRIGGER` must be UTC, so
+mixing them fires the alarm at the right number o'clock in the wrong zone. Only
+reminders get one -- an alarm on every imported deadline turns a subscribed
+calendar into a notification storm. Google refreshes a feed on its own schedule,
+up to once a day, so a reminder set today for tonight may never reach it: the
+email is the channel that works, the alarm is the one that costs nothing.
+
+Three things found by running it rather than reading it, each a real defect:
+
+- **The planner was giving reminders study hours.** `reminder` is not in
+  `_BASE_EFFORT`, so the kind was narrowed to None and `_item_kind(title)`
+  guessed from the words -- "Email prof about the assignment" came back an
+  assignment and earned three hours of revision. The skip has to test the RAW
+  kind, before the narrowing.
+- **The add sheet's kind whitelist silently rewrote what an entry was.** Left
+  at `exam|due|event`, a reminder opened to edit and saved came back an **exam**
+  -- and an exam is never emailed. Every kind the sheet can SAVE has to be
+  listed there.
+- **`is_deadline=True` was hardcoded on both add paths** and only one had been
+  taught. Two sibling paths reading one payload differently is how every
+  deadline once landed under OTHER.
+
+`paintRemindNote` is a hoisted function declaration that looks its own elements
+up, because `open()` is defined ~180 lines above it and a captured `const` read
+from there is the temporal dead zone that already cost this file a swallowed
+exception and a sentence that never appeared.
+
 ## What day it is NOW is also the student's, not the server's
 
 `local_date_iso` fixed what day a deadline falls ON. Nothing fixed what day it

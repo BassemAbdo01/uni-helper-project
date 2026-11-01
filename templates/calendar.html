@@ -79,6 +79,13 @@
    disagreeing with itself. */
 .cal.exams-only .ev:not(.major){display:none}
 .ev.course-off{display:none}
+  /* A reminder is the student's own nudge, not coursework. It keeps its course
+     colour -- that is what the legend promises -- and is marked by WEIGHT and a
+     glyph instead, the same rule the FINAL badge follows. */
+  .ev[data-kind="reminder"]{border-left:3px solid color-mix(in srgb,var(--ev,var(--amber)) 45%,transparent)}
+  .remind-note{margin:8px 0 0;padding:9px 12px;border-radius:10px;
+    border:1px dashed var(--line);color:var(--muted);font-size:12px;display:block}
+  .remind-note[hidden]{display:none}
 /* Deliberately NOT remembered. "Hide everything but ELEC for a minute" is a
    glance, not a setting, and a filter that survives a refresh is one you forget
    you applied and then report as missing deadlines. */
@@ -443,6 +450,7 @@ dialog.sheet::backdrop{background:#0B0908cc}
         <select id="evKind">
           <option value="exam">Exam or midterm</option>
           <option value="due">Deadline</option>
+          <option value="reminder">Reminder</option>
           <option value="event">Something else</option>
         </select>
       </div>
@@ -467,6 +475,18 @@ dialog.sheet::backdrop{background:#0B0908cc}
 
     <p class="open" id="openSource" hidden>
       <a id="openSourceLink" href="#" target="_blank" rel="noopener noreferrer">Open in your LMS &#8599;</a>
+    </p>
+
+    {# Toggled with el.hidden, so it must NOT carry a class that sets display:
+       the #courseState trap, where .meta.show beat the attribute and left an
+       empty bordered box on the page for ever. #}
+    <p class="remind-note" id="remindNote" hidden>
+      {%- if reminders_deliver %}
+      Nexora will email you at this time, and it goes on your calendar.
+      {%- else %}
+      Reminder emails are not switched on for this site yet, so this will go on
+      your calendar but will not notify you.
+      {%- endif %}
     </p>
 
     <p class="locked" id="importedNote" hidden>
@@ -677,7 +697,10 @@ dialog.sheet::backdrop{background:#0B0908cc}
     $('evTitle').value = event?.title || '';
     $('evDate').value = event?.date || dateIso || '';
     $('evTime').value = event?.time || '';
-    $('evKind').value = event?.kind && ['exam','due','event'].includes(event.kind) ? event.kind : 'exam';
+    /* Every kind the sheet can SAVE has to be listed here, or opening an
+       entry to edit it silently rewrites what it is: a reminder opened and
+       saved came back an exam, which also stops it ever being emailed. */
+    $('evKind').value = event?.kind && ['exam','due','event','reminder'].includes(event.kind) ? event.kind : 'exam';
     $('evCourse').value = [...$('evCourse').options].some(o => o.value === event?.course)
       ? event.course : 'OTHER';
     $('evLocation').value = event?.location || '';
@@ -689,6 +712,9 @@ dialog.sheet::backdrop{background:#0B0908cc}
     if (event?.link) $('openSourceLink').href = event.link;
     $('importedNote').hidden = !event?.imported;
     $('evError').textContent = '';
+    // Setting a <select> in code fires no change event, so the note has to be
+    // painted by hand here as well as on change.
+    paintRemindNote();
     sheet.showModal();
     $('evTitle').focus();
   }
@@ -845,6 +871,23 @@ dialog.sheet::backdrop{background:#0B0908cc}
      why rather than silently, and only when the new work would actually be
      hidden by it. */
   const KEEP_FILTER_NOTE = 'nexora-filter-cleared';
+
+  /* The sheet says whether a reminder will actually notify, and only when a
+     reminder is what is being made.
+
+     A hoisted function DECLARATION that looks its own elements up, so it can be
+     called from `open()` further up the file. Written as a `const` arrow over
+     two captured `const` elements it threw "Cannot access before
+     initialization" from there -- the temporal dead zone that already cost this
+     file a swallowed exception and a sentence that never appeared. */
+  function paintRemindNote() {
+    const note = document.getElementById('remindNote');
+    const sel = document.getElementById('evKind');
+    if (!note || !sel) return;
+    note.hidden = sel.value !== 'reminder';
+  }
+  const evKindEl = document.getElementById('evKind');
+  if (evKindEl) evKindEl.addEventListener('change', paintRemindNote);
 
   const unhideForKinds = kinds => {
     const list = (kinds || []).map(k => String(k || '').toLowerCase());

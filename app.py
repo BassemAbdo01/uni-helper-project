@@ -323,6 +323,28 @@ SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").strip().lower() not in ("0
 SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "nexora.notify@gmail.com").strip()
 PASSWORD_RESET_TTL = timedelta(hours=1)
 
+# Reminders. **Nexora has no scheduler**: one gunicorn web service, so code
+# runs when a request arrives and at no other time. Nothing in this process can
+# wake up at nine in the morning, which is the whole difficulty with a reminder
+# -- an external cron calls /api/reminders/dispatch instead, and the token below
+# is the entire credential, the same reasoning as the .ics feed token, because
+# the caller has no way to sign in. Unset, the route is a 404.
+REMINDER_DISPATCH_TOKEN = os.environ.get("REMINDER_DISPATCH_TOKEN", "").strip()
+# A reminder nobody could send for a day is not sent at all. If the dispatcher
+# has been down, a student opening their mail to fourteen notices of things that
+# already happened is worse than silence -- and every one is still on their
+# calendar, which is where they will actually look.
+REMINDER_CATCHUP_HOURS = int(os.environ.get("REMINDER_CATCHUP_HOURS", "12") or 12)
+# A failed send may be retried inside that window, but not on every call: a mail
+# server refusing connections must not be hammered once a minute.
+REMINDER_RETRY_MINUTES = 15
+# A reminder with no time given is for the morning. Midnight is a notification
+# nobody is awake for.
+REMINDER_DEFAULT_HOUR = int(os.environ.get("REMINDER_DEFAULT_HOUR", "9") or 9)
+# One call must not be able to spend an unbounded amount of time sending mail:
+# gunicorn's worker timeout is 300s and SMTP gets 20s per message.
+REMINDER_BATCH_MAX = 60
+
 
 def email_is_configured():
     return bool(SMTP_HOST and SMTP_FROM)
@@ -771,6 +793,20 @@ class Task(db.Model):
     due_time = db.Column(db.String(5), default="")
     location = db.Column(db.String(255), default="")
     notes = db.Column(db.Text, default="")
+    # A reminder is a Task too, for the same reason an exam is one: the
+    # calendar, the dashboard, the feed, completion and deletion all already
+    # understand Tasks, and a parallel table would have to be taught to every
+    # one of them. `kind='reminder'` plus these two columns is the whole of it.
+    #
+    # `reminded_at` is the last ATTEMPT, not the success. That is the
+    # `last_sync_attempt` lesson: a send that times out may never reach the
+    # `except`, and a row that still claims nothing was tried gets tried again
+    # for ever. `reminder_state` carries the outcome separately, because "could
+    # not be sent" and "was sent" are different facts -- the same rule as
+    # _evaluate_pass_rules, where collapsing two answers into one failed a
+    # student with full marks.
+    reminded_at = db.Column(db.DateTime, nullable=True)
+    reminder_state = db.Column(db.String(20), default="")
 
 
 class CourseContent(db.Model):
@@ -1163,6 +1199,12 @@ def ensure_schema_columns():
             # Existing rows get theirs on the next sync, the same way the
             # timezone repair works. There is nothing to back-fill from.
             "source_link": "TEXT DEFAULT ''",
+            # Reminders. Without these two lines every query against Task
+            # raises UndefinedColumn on Postgres -- the dashboard, the
+            # calendar, the feed, the planner -- while SQLite carries on
+            # locally, which is exactly how it reaches production unnoticed.
+            "reminded_at": "TIMESTAMP NULL",
+            "reminder_state": "VARCHAR(20) DEFAULT ''",
         },
         "course_content": {
             # Without this line the model has a column Postgres does not, and
@@ -5247,7 +5289,10 @@ def complete_task_group(group_id):
 # calendar, the completion toggle and the .ics feed already understand Tasks,
 # and a parallel model would have to be taught to every one of them.
 
-EVENT_KINDS = {"due", "exam", "event"}
+EVENT_KINDS = {"due", "exam", "event", "reminder"}
+# A reminder is not a deadline and must not be counted as one. It is a
+# nudge the student wrote themselves; `is_deadline` says which.
+REMINDER_KIND = "reminder"
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 
@@ -5323,7 +5368,12 @@ def create_event():
     task = Task(
         id=uuid4().hex, user_id=current_user.id,
         group_id=make_group_id(fields["course_full"], base), base_title=base,
-        is_deadline=True, source="manual", sync_state="active",
+        # A reminder is a nudge the student wrote themselves, not something to
+        # hand in. The assistant's add path says the same thing; two sibling
+        # paths reading one payload differently is how every deadline once
+        # landed under OTHER.
+        is_deadline=fields.get("kind") != REMINDER_KIND,
+        source="manual", sync_state="active",
         created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         **fields,
     )
@@ -5570,7 +5620,9 @@ def _recurrence_events(spec, dates):
     course = _normalize_course_code(str(spec.get("course") or "")) or "OTHER"
     kind = str(spec.get("kind") or "event").strip().lower()
     if kind in {"test", "midterm", "final", "quiz"}:
-        kind = "exam"          # EVENT_KINDS is due|exam|event; a test is an exam
+        kind = "exam"          # a test is an exam
+    if kind in {"remind", "reminders", "notification", "todo"}:
+        kind = REMINDER_KIND
     if kind not in EVENT_KINDS:
         kind = "event"
     time_raw = str(spec.get("time") or "").strip()
@@ -5664,7 +5716,8 @@ def _match_description(op):
     if title:
         bits.append(f"named like “{title}”")
     if kind in EVENT_KINDS:
-        bits.append({"exam": "exams", "due": "deadlines"}.get(kind, "events"))
+        bits.append({"exam": "exams", "due": "deadlines",
+                     "reminder": "reminders"}.get(kind, "events"))
     if course:
         bits.append(f"on {course}")
     frm, to = str(m.get("from") or "").strip(), str(m.get("to") or "").strip()
@@ -5958,7 +6011,9 @@ def _calendar_apply(changes, user_id):
             db.session.add(Task(
                 id=uuid4().hex, user_id=user_id,
                 group_id=make_group_id(fields["course_full"], base), base_title=base,
-                is_deadline=True, source="manual", sync_state="active",
+                # A reminder is a nudge, not something to hand in.
+                is_deadline=fields.get("kind") != REMINDER_KIND,
+                source="manual", sync_state="active",
                 created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), **fields))
             done["added"] += 1
             continue
@@ -6716,7 +6771,12 @@ def calendar_ai_events():
         "they are going. This is the op for \"these are ELEC2501, not OTHER\".",
         "",
         'kind is "exam" for tests, midterms, finals and quizzes, "due" for work to '
-        'hand in, otherwise "event".',
+        'hand in, "reminder" when they want to BE REMINDED of something rather '
+        'than recording an assessment ("remind me to...", "remind me about..."), '
+        'otherwise "event".',
+        'A reminder is emailed at its time, so give it one. If they said no time, '
+        'leave time "" and the server uses their morning -- never guess an hour '
+        'they did not say.',
         "course must be one of the student's own codes or \"\". Theirs are: "
         + (", ".join(codes) or "none imported yet") + ".",
         "Never invent a course code or an id.",
@@ -7634,6 +7694,12 @@ def _study_items(user_id, today=None, pref=None):
             continue
         title = card.get("title") or "Coursework"
         course = card.get("course_full") or "OTHER"
+        # Tested on the RAW kind, before the narrowing below. `reminder` is not
+        # in _BASE_EFFORT, so it would be thrown away here and _item_kind would
+        # guess from the words instead -- "Email prof about the assignment"
+        # came back an assignment and was given three hours of revision.
+        if (card.get("kind") or "") == REMINDER_KIND:
+            continue
         kind = card.get("kind") if card.get("kind") in _BASE_EFFORT else None
         kind = kind or _item_kind(title)
         if kind == "event":
@@ -12630,6 +12696,14 @@ def calendar_page():
 
     return render_template(
         "calendar.html",
+        # Whether a reminder can actually be EMAILED. Both halves are needed:
+        # SMTP sends it, and the dispatch token is what lets a cron ask for it
+        # to be sent. With either missing the entry is still made and still
+        # shown -- it simply will not notify, and the sheet says so rather than
+        # letting a student trust a notification that cannot arrive. The same
+        # reasoning as /forgot-password refusing honestly instead of accepting
+        # a request it cannot fulfil.
+        reminders_deliver=bool(email_is_configured() and REMINDER_DISPATCH_TOKEN),
         announce_scan_due=bool(_outline_pending or (_ann_pending and _stale)),
         weeks=weeks,
         calendar_feed_url=url_for("calendar_feed", token=feed_token, _external=True) if feed_token else "",
@@ -12738,6 +12812,208 @@ def _feed_events(user, only=""):
     return list(seen.values())
 
 
+# ============================
+# Reminders
+# ============================
+# "Remind me of this at that time, and notify me that day." The storage is the
+# easy half. The hard half is that nothing of Nexora's is running at that time,
+# which is why REMINDER_DISPATCH_TOKEN and an external cron exist.
+
+
+def _reminder_alarm_trigger(time_raw):
+    """The VALARM TRIGGER for a reminder, relative to the event's own start.
+
+    Relative, not absolute, and that is not a style choice: an absolute
+    TRIGGER must be UTC and carry a Z, while every DTSTART this feed writes is
+    a FLOATING local time deliberately -- the student's wall clock, which is
+    the whole point of `local_date_iso`. Mixing the two would fire the alarm at
+    the right number o'clock in the wrong zone.
+
+    A timed reminder alarms at its start. One with no time is an all-day entry
+    whose start is midnight, so the offset is the morning hour instead -- a
+    notification at midnight is one nobody is awake for.
+    """
+    if _TIME_RE.match((time_raw or "").strip()):
+        return "PT0S"
+    return "PT%dH" % max(0, min(23, REMINDER_DEFAULT_HOUR))
+
+
+def _reminder_instant_utc(due_raw, due_time, zone):
+    """The UTC instant a reminder should fire, from the student's own clock.
+
+    The day and the time are stored exactly as the student gave them -- their
+    calendar day, their wall clock -- and this is the single place that turns
+    the pair into an instant. Storing the instant alongside them would be a
+    second copy of one fact, and two copies of a date is how this app once
+    showed a deadline a day late on one screen and correctly on another.
+
+    Returns None for a row with no readable date, which is never due.
+    """
+    day = parse_iso_date((due_raw or "").strip())
+    if not day:
+        return None
+    raw = (due_time or "").strip()
+    if _TIME_RE.match(raw):
+        hour, minute = (int(part) for part in raw.split(":"))
+    else:
+        hour, minute = REMINDER_DEFAULT_HOUR, 0
+    local = datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
+    return local.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _reminder_is_sendable(row, zone, now_utc):
+    """(send_now, instant, why_not).
+
+    Bounded at both ends deliberately. Too early is obvious; too late matters
+    just as much, because a dispatcher that has been down for three days must
+    not deliver three days of notices at once.
+    """
+    instant = _reminder_instant_utc(row.due_raw, row.due_time, zone)
+    if instant is None:
+        return False, None, "no date"
+    if (row.reminder_state or "") == "sent":
+        return False, instant, "already sent"
+    if row.completed or (row.sync_state or "active") == "dismissed":
+        return False, instant, "done or deleted"
+    if instant > now_utc:
+        return False, instant, "not yet"
+    if instant < now_utc - timedelta(hours=REMINDER_CATCHUP_HOURS):
+        # Never stamped as sent, because it was not. It stays on the calendar
+        # and reads as past, which is the truth.
+        return False, instant, "too late to be useful"
+    last = row.reminded_at
+    if last is not None and last > now_utc - timedelta(minutes=REMINDER_RETRY_MINUTES):
+        return False, instant, "tried a moment ago"
+    return True, instant, ""
+
+
+def _reminder_when_phrase(instant_utc, zone, now_utc):
+    """"Today at 09:00" -- on the student's clock, never the server's."""
+    local = instant_utc.replace(tzinfo=timezone.utc).astimezone(zone)
+    today = now_utc.replace(tzinfo=timezone.utc).astimezone(zone).date()
+    gap = (local.date() - today).days
+    day = {0: "Today", -1: "Yesterday", 1: "Tomorrow"}.get(gap)
+    if day is None:
+        day = local.strftime("%A %d %B")
+    return "%s at %s" % (day, local.strftime("%H:%M"))
+
+
+def _reminder_email(row, zone, instant_utc, now_utc, link=""):
+    """(subject, body). Plain text, because send_email sends plain text."""
+    title = (row.title or "Reminder").strip()
+    when = _reminder_when_phrase(instant_utc, zone, now_utc)
+    lines = [title, "", when + "."]
+    course = (row.course_full or "").strip()
+    if course and course != "OTHER":
+        lines.append("Course: " + course)
+    if (row.location or "").strip():
+        lines.append("Where: " + row.location.strip())
+    if (row.notes or "").strip():
+        lines += ["", row.notes.strip()]
+    lines += ["", "--", "You set this reminder in Nexora."]
+    if link:
+        lines.append(link)
+    return "Reminder: " + title[:120], "\n".join(lines)
+
+
+def _dispatch_reminders(now_utc=None, link=""):
+    """Send every reminder whose moment has come. Returns a count dict.
+
+    Idempotent under overlapping calls, which matters because a cron that fires
+    every five minutes will overlap a slow SMTP server: the attempt is stamped
+    and COMMITTED before the message is sent, so a second caller arriving
+    mid-send sees "tried a moment ago" and leaves it alone. The outcome is
+    written afterwards, which is why `reminded_at` and `reminder_state` are two
+    columns rather than one.
+    """
+    now_utc = now_utc or datetime.utcnow()
+    counts = {"considered": 0, "sent": 0, "failed": 0, "waiting": 0,
+              "blocked": 0, "too_late": 0,
+              "email_configured": email_is_configured()}
+
+    rows = (Task.query
+            .filter(Task.kind == REMINDER_KIND,
+                    Task.completed.is_(False),
+                    db.or_(Task.reminder_state.is_(None),
+                           Task.reminder_state != "sent"))
+            .order_by(Task.due_raw.asc())
+            .limit(500).all())
+
+    zones, batch = {}, 0
+    for row in rows:
+        counts["considered"] += 1
+        if row.user_id not in zones:
+            zones[row.user_id] = _user_zone(db.session.get(User, row.user_id))
+        zone = zones[row.user_id]
+        send, instant, why = _reminder_is_sendable(row, zone, now_utc)
+        if not send:
+            if why == "too late to be useful":
+                counts["too_late"] += 1
+            elif why in ("not yet", "tried a moment ago"):
+                counts["waiting"] += 1
+            continue
+        if batch >= REMINDER_BATCH_MAX:
+            counts["waiting"] += 1
+            continue
+        user = db.session.get(User, row.user_id)
+        if user is None or not (user.email or "").strip():
+            continue
+        # With no SMTP there is nothing to attempt. Claiming the row and
+        # marking it failed would spend its catch-up window on a send that was
+        # never tried, so a reminder would stay unsent even if SMTP were
+        # configured two minutes later. Report it instead; the count is the
+        # only place anyone can see this.
+        if not counts["email_configured"]:
+            counts["blocked"] += 1
+            continue
+        # Claim it first. A send that hangs and is killed must not come back
+        # round and be sent twice.
+        row.reminded_at = now_utc
+        row.reminder_state = "failed"
+        db.session.commit()
+        batch += 1
+        subject, body = _reminder_email(row, zone, instant, now_utc, link=link)
+        if send_email(user.email, subject, body):
+            row.reminder_state = "sent"
+            counts["sent"] += 1
+        else:
+            counts["failed"] += 1
+        db.session.commit()
+    return counts
+
+
+@app.route("/api/reminders/dispatch", methods=["POST"])
+@limiter.limit("240 per hour")
+def reminders_dispatch():
+    """Called by an external scheduler, because this app has none.
+
+    POST, not GET, for the reason /api/tour is: a prefetch or a link preview
+    must not spend it.
+
+    With no token configured this is a 404 and so is a wrong token -- off means
+    gone, and a route that answers differently to a bad credential confirms it
+    exists. That is the lesson the Outlook probe taught by answering 302 to an
+    anonymous caller while a nonsense path answered 404.
+    """
+    if not REMINDER_DISPATCH_TOKEN:
+        abort(404)
+    supplied = (request.headers.get("X-Nexora-Token")
+                or request.args.get("token") or "").strip()
+    if not supplied or not secrets.compare_digest(supplied, REMINDER_DISPATCH_TOKEN):
+        abort(404)
+    try:
+        link = url_for("calendar_page", _external=True)
+    except Exception:
+        link = ""
+    counts = _dispatch_reminders(link=link)
+    # Said plainly, because a cron's log is the only place anyone will see it:
+    # a dispatcher that runs perfectly and sends nothing because SMTP is
+    # unconfigured looks identical to one that had nothing to send.
+    if counts["sent"] or counts["failed"] or counts["blocked"]:
+        app.logger.info("Reminder dispatch: %s", counts)
+    return jsonify(counts)
+
+
 def _build_ics(user, events, only=""):
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     # The subscribed calendar's own name, because a student may end up with
@@ -12786,6 +13062,18 @@ def _build_ics(user, events, only=""):
             lines.append(f"DESCRIPTION:{_ics_escape(detail)}")
         if row.completed:
             lines.append("STATUS:CANCELLED")
+        # A reminder carries an alarm, so the student's own calendar app
+        # notifies them on their phone without Nexora sending anything. It is a
+        # second channel and it costs nothing, but it is not a substitute for
+        # the email: Google refreshes a subscribed feed on its own schedule, up
+        # to once a day, so a reminder set today for tonight may never reach it
+        # in time.
+        if (row.kind or "") == REMINDER_KIND and not row.completed:
+            lines.append("BEGIN:VALARM")
+            lines.append("TRIGGER:" + _reminder_alarm_trigger(time_raw))
+            lines.append("ACTION:DISPLAY")
+            lines.append(f"DESCRIPTION:{_ics_escape(summary)}")
+            lines.append("END:VALARM")
         lines.append("END:VEVENT")
     lines.append("END:VCALENDAR")
     return "\r\n".join(_ics_fold(line) for line in lines) + "\r\n"
@@ -13919,6 +14207,28 @@ def _config_report():
     else:
         add("ok", "Email is configured", f"Sending through {SMTP_HOST}.",
             "Password reset works.")
+
+    # Both halves are needed and either one missing means total silence: SMTP
+    # sends the reminder, the token is what lets a cron ask for it to be sent.
+    # Reported separately from email because the failure a student feels is
+    # different -- they asked to be notified at a time and were not.
+    if not REMINDER_DISPATCH_TOKEN:
+        add("warning", "Reminders cannot fire",
+            "REMINDER_DISPATCH_TOKEN is not set, so /api/reminders/dispatch is a 404.",
+            "A student can still create a reminder and still see it on their calendar, "
+            "and the add sheet tells them it will not notify -- but nothing will send "
+            "it. Nexora has no scheduler of its own; an external cron has to call that "
+            "route.")
+    elif not email_is_configured():
+        add("warning", "Reminders cannot be delivered",
+            "The dispatch token is set but SMTP is not.",
+            "The dispatcher runs and sends nothing. Its `blocked` count says how many "
+            "reminders came due with no way to deliver them.")
+    else:
+        add("ok", "Reminders can fire",
+            "Dispatch token set and SMTP configured.",
+            "Whether they ACTUALLY fire depends on the external cron still calling "
+            "/api/reminders/dispatch -- nothing here can detect that it stopped.")
 
     if not os.environ.get("SENTRY_DSN", "").strip():
         add("warning", "Error reporting is off",

@@ -13,6 +13,7 @@ engineering log.
 | [`COURSE_EXPORT_AUDIT_V1.md`](COURSE_EXPORT_AUDIT_V1.md) | What the app actually stores (text, not files) and what full-file export would cost per student per term |
 | [`ACADEMIC_UPDATE_DESIGN_V1.md`](ACADEMIC_UPDATE_DESIGN_V1.md) | Dedupe and retention for the table that once reached 786 MB and suspended the database |
 | [`OUTLOOK_FEASIBILITY_V1.md`](OUTLOOK_FEASIBILITY_V1.md) | Whether a university tenant permits a student to grant mail access, and what each Microsoft error code means for the build |
+| [`REMINDERS_SETUP_V1.md`](REMINDERS_SETUP_V1.md) | What has to exist before a reminder can notify anyone, and why the app cannot do it alone |
 | [`STUDY_PLANNER_PLAN_V1.md`](STUDY_PLANNER_PLAN_V1.md) | Audit of the existing planner before extending it, including why authored study blocks cannot share a table with generated ones |
 
 ## Grade intelligence
