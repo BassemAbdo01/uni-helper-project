@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import app as nexora
+from conftest import utc_wall_clock
 
 
 # Anchored to the day the suite RUNS. Written against a fixed 7 October 2026,
@@ -44,17 +45,9 @@ def _stamp(iso):
 
 
 def _wall_clock(iso_day, utc_hhmm, zone="America/Toronto"):
-    """What `utc_hhmm` on the shifted `iso_day` reads as on that zone's clock.
-
-    Computed, never written down. Toronto is UTC-4 in summer and UTC-5 in
-    winter, so a hard-coded hour here is a measurement of which side of the
-    changeover the fixture happened to fall on when it was written -- and
-    `_SHIFT` moves the fixture across that boundary twice a year.
-    """
-    hour, minute = (int(part) for part in utc_hhmm.split(":"))
-    moment = datetime(*[int(p) for p in _d(iso_day).split("-")],
-                      hour, minute, tzinfo=timezone.utc)
-    return moment.astimezone(ZoneInfo(zone)).strftime("%H:%M")
+    """This fixture's shifted day, on that zone's clock. One definition, in
+    conftest -- two files hit this trap a week apart."""
+    return utc_wall_clock(_d(iso_day), utc_hhmm, zone)
 
 
 ALL_DAY_FEED = f"""BEGIN:VCALENDAR

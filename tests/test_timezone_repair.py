@@ -171,6 +171,8 @@ def test_canvas_states_its_own_zone_and_that_is_used():
 # timezones. What these tests pin is the RELATIONSHIP between the four DTSTART
 # shapes and the day each one lands on; where they sit in the year is incidental,
 # and hard-coding it made them expire.
+from conftest import utc_wall_clock  # noqa: E402
+
 _ANCHOR = date(2026, 10, 13)
 _SHIFT = (date.today() - _ANCHOR).days
 
@@ -235,7 +237,9 @@ def test_a_ten_pm_deadline_is_not_pushed_to_the_next_day(client):
     import_feed(client)
     found = days_by_title()
     lab04 = next(v for k, v in found.items() if "Inheritance" in k)
-    assert lab04 == (_d("2026-10-06"), "22:00")
+    # 22:00 in summer, 21:00 in winter -- the DAY is what this pins, and the
+    # hour is computed so the changeover cannot fail it. See utc_wall_clock.
+    assert lab04 == (_d("2026-10-06"), utc_wall_clock(_d("2026-10-07"), "02:00"))
 
 
 def test_a_tzid_time_is_honoured(client):

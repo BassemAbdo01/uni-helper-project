@@ -23,6 +23,32 @@ os.environ.setdefault("SECRET_KEY", "test-only-secret-not-used-anywhere-real")
 import pytest  # noqa: E402
 
 
+def utc_wall_clock(day_iso, utc_hhmm, zone="America/Toronto"):
+    """What `utc_hhmm` on `day_iso` (UTC) reads as on that zone's clock.
+
+    For tests that anchor their fixtures to `date.today()` and then assert a
+    TIME. The dates had to be anchored because Nexora stops carrying work far
+    enough in the past -- but anchoring them means the fixture slides across
+    the daylight-saving changeover twice a year, and 02:00Z is 22:00 in
+    Toronto in summer and 21:00 in winter.
+
+    Two files have now failed on exactly that, a week apart, for reasons with
+    nothing to do with what they test. The hour is a MEASUREMENT of which side
+    of the changeover the fixture happened to fall on when it was written; what
+    these tests pin is that a real timestamp is converted to the student's
+    clock at all. So compute it.
+
+    `day_iso` is the real (already shifted) date of the UTC instant.
+    """
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    hour, minute = (int(part) for part in utc_hhmm.split(":"))
+    moment = datetime(*[int(p) for p in day_iso.split("-")],
+                      hour, minute, tzinfo=timezone.utc)
+    return moment.astimezone(ZoneInfo(zone)).strftime("%H:%M")
+
+
 @pytest.fixture()
 def client():
     """A test client with a clean database and rate limiting switched off."""
