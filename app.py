@@ -2220,6 +2220,73 @@ def make_group_id(course_full, base):
     return hashlib.sha1(raw).hexdigest()[:16]
 
 
+# D2L gives an assignment and the folder you upload it to two ids and two
+# titles, so they arrived as two deadlines: "Assignment 3: Gate-level
+# implementation" beside "Assignment 3: Place to upload your solution". The
+# student sees one piece of work twice and ticks off half of it.
+#
+# The phrases are deliberately UNMISTAKABLE, because the two failure modes are
+# not symmetric. Too narrow leaves two cards, which is exactly what happens
+# today. Too broad merges two real assessments and hides one behind the other,
+# which is the worse half of the "delete acts on the group, not the row" rule.
+# The bare word "submission" is therefore NOT here: "Assignment 8c Innovation
+# Proposal - Final Submission" is a real Carleton deadline, reported as one.
+_UPLOAD_COMPANION = re.compile(
+    r"(place\s+to\s+upload|submit\s+here|submission\s+folder|dropbox\s+folder|"
+    r"upload\s+(your|here|the)\b|hand\s*-?\s*in\s+here)", re.I)
+
+
+def _dropbox_stem(title):
+    """The work this title is the upload folder FOR, or "" if it is not one.
+
+    "" also covers a companion with nothing in front of it ("Submit here"):
+    there is no stem to match a sibling with, and folding it into a guess
+    would attach a deadline to work it may have nothing to do with.
+    """
+    text = str(title or "").strip()
+    match = _UPLOAD_COMPANION.search(text)
+    if not match:
+        return ""
+    stem = re.sub(r"[\s:;,\-\u2013\u2014(\[]+$", "", text[:match.start()]).strip()
+    return stem
+
+
+def _stem_owns(stem, base):
+    """Does `base` name the work `stem` is the upload folder for?
+
+    A prefix match on a TOKEN boundary, so "Assignment 3" can never claim
+    "Assignment 30" -- the whole risk in this fold is a stem that is also the
+    start of something else.
+    """
+    s = re.sub(r"\s+", " ", str(stem or "")).strip().lower()
+    b = re.sub(r"\s+", " ", str(base or "")).strip().lower()
+    if not s or not b or not b.startswith(s):
+        return False
+    rest = b[len(s):]
+    return rest == "" or not rest[0].isalnum()
+
+
+def _sibling_base_for(stem, course_full, user_id, payload_bases=None):
+    """The base_title of the ONE sibling this companion belongs to, or "".
+
+    Ambiguity is left alone on purpose. Two siblings could own it, and picking
+    one hides a real assessment behind another -- two cards is the lesser
+    failure, and the one the student can already see and work around.
+
+    The payload is searched before the database so a first sync folds in the
+    same pass, rather than showing two cards until the next one.
+    """
+    if not stem:
+        return ""
+    found = {b for b in (payload_bases or ()) if _stem_owns(stem, b)}
+    if not found:
+        rows = Task.query.filter_by(user_id=user_id, course_full=course_full).all()
+        found = {(t.base_title or t.title or "") for t in rows
+                 if not _dropbox_stem(t.title or "")
+                 and _stem_owns(stem, t.base_title or t.title or "")}
+    return found.pop() if len(found) == 1 else ""
+
+
 # ============================
 # Convert raw tasks to grouped cards
 # ============================
@@ -2476,6 +2543,17 @@ def import_calendar_string(ics_text, mark_missing=True):
     feed_zone = _user_zone(current_user)
     floating_uids = _ics_floating_uids(ics_text)
     all_day_uids = _ics_all_day_uids(ics_text)
+    # The same fold the extension path does, built the same way. Two sibling
+    # paths reading one payload differently is how every deadline once landed
+    # under OTHER.
+    feed_bases = {}
+    for _ev in cal.events:
+        _t = (getattr(_ev, "name", "") or "").strip()
+        if not _t or _dropbox_stem(_t):
+            continue
+        feed_bases.setdefault(extract_course_from_event(_ev) or "OTHER",
+                              set()).add(base_title(_t))
+
     for event in cal.events:
         title = (getattr(event, "name", "") or "").strip()
         if not title:
@@ -2508,6 +2586,10 @@ def import_calendar_string(ics_text, mark_missing=True):
         course_full = extract_course_from_event(event) or "OTHER"
         cprefix = "OTHER" if course_full == "OTHER" else course_prefix(course_full)
         base = base_title(title)
+        _sibling = _sibling_base_for(_dropbox_stem(title), course_full,
+                                     current_user.id, feed_bases.get(course_full))
+        if _sibling:
+            base = _sibling
         gid = make_group_id(course_full, base)
         source_uid = _event_uid(event, course_full, title, kind)
         source_hash = _event_hash(event, title, due_raw, course_full, kind)
@@ -4885,10 +4967,6 @@ def home():
     cards = apply_filters(cards, course_filter, deadlines_only)
     cards = view_filter(cards, view)
     cards = sort_cards(cards)
-    groups = group_for_ui(cards)
-
-    urgent = len(groups["overdue"]) + len(groups["today"]) + len(groups["panic"])
-    week = urgent + len(groups["soon"])
 
     reminders = []
 
@@ -4912,6 +4990,35 @@ def home():
 
     # Dashboard V2 helper data
     dashboard_cards = [decorate_card(c) for c in sort_cards(view_filter(build_grouped_cards(raw_tasks), "all"))]
+
+    # The stat row counts THIS list -- the one the queue beneath it renders.
+    #
+    # It used to count `cards`, which `view_filter` has already cut down to the
+    # current view, and the default view is "today", which keeps only
+    # `dleft <= 0`. So everything due tomorrow or later was removed BEFORE the
+    # week was counted: `soon` and `panic` were always empty, `week` could only
+    # ever equal `urgent`, and the page said **"0 due this week" above five
+    # items due in one and three days**. Reported exactly that way.
+    #
+    # Same class as "37 courses in the extension, 11 on the dashboard": two
+    # numbers taken from two different lists on one screen.
+    #
+    # The buckets come from `status_for` via `decorate_card`, which measures
+    # from `_today_for_request()` -- the student's own day, not the server's.
+    # Reusing them rather than re-deriving a window here is deliberate: a
+    # second opinion about what "this week" means is how two screens come to
+    # disagree.
+    stat_counts = {}
+    for c in dashboard_cards:
+        stat_counts[c["status"]] = stat_counts.get(c["status"], 0) + 1
+
+    stat_overdue = stat_counts.get("overdue", 0)
+    stat_today = stat_counts.get("today", 0)
+    # 0-7 days: due today, `panic` (1-3) and `soon` (4-7). Overdue is NOT in
+    # here. It has its own cell, work that was due last week is not due this
+    # one, and counting it in both would make the number disagree with the
+    # label printed beside it.
+    stat_week = stat_today + stat_counts.get("panic", 0) + stat_counts.get("soon", 0)
 
     course_map = {}
     # Every dated piece of work, per course. Which term a course belongs to is
@@ -5063,8 +5170,14 @@ def home():
 
 
     summary = {
-        "urgent": urgent,
-        "week": week,
+        "overdue": stat_overdue,
+        "today": stat_today,
+        # What the sentence above the row actually says: things to deal with
+        # today. Overdue plus due-today, which is what it has always rendered
+        # -- `panic` was in the arithmetic but the view filter had already
+        # emptied it, so adding it now would quietly change the number.
+        "urgent": stat_overdue + stat_today,
+        "week": stat_week,
         "reminders": reminders,
     }
 
@@ -5119,7 +5232,6 @@ def home():
 
     return render_template(
         "index.html",
-        groups=groups,
         view=view,
         summary=summary,
         prefixes=prefixes,
@@ -6960,8 +7072,38 @@ def _looks_like_an_exam(text):
 # because the old suggestion panel wanted anything that smelled like a sitting;
 # what has to stand out on a calendar is the handful of things that decide the
 # grade. Flagging every pre-lab quiz as major is the same as flagging nothing.
+# "Final" is an ordinary adjective on coursework -- final draft, final
+# submission, final report, final project -- and the qualifier here used to be
+# OPTIONAL, so the bare word matched wherever it stood. "Week 7 Quiz ... Final
+# Subtopic Report ... Final Submission" wore the FINAL badge, which is the
+# loudest thing this calendar can say about a day.
+#
+# `_NOT_AN_EXAM` could never have caught it: that list is about *practice* and
+# *review*, a rehearsal of the thing rather than a different thing wearing the
+# same word.
+#
+# Two positive signals, and no blacklist of nouns -- the `_material_section`
+# decision. A list of what names the final is short; a list of everything
+# "final" might be modifying is endless and wrong the first time a course
+# invents a new one. Anything unrecognised still collects its EXAM or TEST
+# badge below, so this can only ever DOWNGRADE a tag, never drop a row.
+_FINAL_ALONE = re.compile(r"^\W*finals?\W*$", re.I)
+
+
+def _names_the_final(title):
+    """The title says THE final exam, not that something is the final one.
+
+    Qualified ("Final Exam", "Final Test"), or the word standing alone as the
+    assessment once the course code is taken off -- which is how a university
+    exam schedule prints it, with no noun for it to be modifying.
+    """
+    text = str(title or "")
+    if re.search(r"\bfinal\s+(exam|examination|test|assessment)\b", text, re.I):
+        return True
+    return bool(_FINAL_ALONE.match(COURSE_REGEX.sub("", text)))
+
+
 _MAJOR_WORDS = [
-    ("FINAL", re.compile(r"\bfinal(\s+(exam|examination|test|assessment))?\b", re.I)),
     ("MIDTERM", re.compile(r"\b(midterm|mid-term|mid\s+term)(\s+(exam|examination|test))?\b", re.I)),
     ("TEST", re.compile(r"\b((?:unit|term|chapter)\s*\d*\s*test|test\s*\d*)\b", re.I)),
     ("EXAM", re.compile(r"\bexam(ination)?\b", re.I)),
@@ -6988,6 +7130,8 @@ def _major_assessment_label(kind, title):
     if _NOT_AN_EXAM.search(title):
         return ""
     kind = str(kind or "").strip().lower()
+    if _names_the_final(title):
+        return "FINAL"
     for label, pattern in _MAJOR_WORDS:
         if pattern.search(title):
             return label
@@ -12106,6 +12250,17 @@ def _import_deadlines(user, items, default_course=""):
     zone = _user_zone(user)
     counts = {"added": 0, "updated": 0, "unchanged": 0}
     now_text = datetime.utcnow().isoformat()
+    # Every title in THIS payload that is not itself an upload folder, so a
+    # companion folds on the first sync rather than after the next one.
+    payload_bases = {}
+    for _it in items[:CONTENT_IMPORT_MAX]:
+        _t = str(_it.get("title") or "").strip()
+        if not _t or _dropbox_stem(_t):
+            continue
+        _c = _normalize_course_code(
+            _it.get("course") or _it.get("course_full") or default_course or "OTHER")
+        payload_bases.setdefault(_c, set()).add(base_title(_t))
+
     for item in items[:CONTENT_IMPORT_MAX]:
         kind_name = str(item.get("content_type") or "").strip().lower()
         if kind_name not in {"assignment", "quiz"}:
@@ -12123,6 +12278,13 @@ def _import_deadlines(user, items, default_course=""):
         course_full = _normalize_course_code(
             item.get("course") or item.get("course_full") or default_course or "OTHER")
         base = base_title(title)
+        # An upload folder is not a second deadline. It takes the assignment's
+        # group so the two render as one card -- and keeps its own row, so the
+        # link into D2L's dropbox is not lost.
+        _sibling = _sibling_base_for(_dropbox_stem(title), course_full, user.id,
+                                     payload_bases.get(course_full))
+        if _sibling:
+            base = _sibling
         gid = make_group_id(course_full, base)
         # Stable across re-syncs and distinct from the feed's uids, so the two
         # sources update their own row instead of fighting over one.

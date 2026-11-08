@@ -501,6 +501,104 @@ Existing rows keep whatever date they were imported with until the next sync
 re-writes them. That is acceptable because a sync fixes them; a migration
 cannot, since the original timestamp was never stored.
 
+## A stat and the list under it must count the same rows
+
+**"0 due this week" printed directly above five items due in one and three
+days.** The stats came from `cards`, which `view_filter` has already cut down
+to the current view -- and the default view is `today`, which keeps only
+`dleft <= 0`. So everything due tomorrow or later was removed BEFORE the week
+was counted: `panic` and `soon` were always empty, `week = urgent + len(soon)`
+could only ever equal `urgent`, and the number was structurally incapable of
+describing the week.
+
+The queue beneath it is built from `dashboard_cards` -- `view_filter(..., "all")`
+-- so the page listed five things the stat said did not exist. Same class as
+**"37 courses in the extension, 11 on the dashboard"**: two numbers taken from
+two different lists on one screen. The student believes the number.
+
+All three cells now count `dashboard_cards`, the list the queue renders, and
+they reuse the buckets `status_for` already assigned through `decorate_card`
+rather than re-deriving a window. That matters: a second opinion about what
+"this week" means is exactly how two screens come to disagree, and
+`status_for` measures from `_today_for_request()` -- the student's own day,
+not the server's.
+
+**Overdue is not counted as due this week.** It has its own cell, work that
+was due last week is not due this one, and counting it in both would make the
+number disagree with the label printed beside it. `urgent` keeps meaning
+overdue + due-today, which is what it has always *rendered*: `panic` was in
+the old arithmetic but the view filter had already emptied it, so folding it
+in now would quietly change the number while claiming to fix it.
+
+## "Final" is an adjective far more often than it is an exam
+
+`_MAJOR_WORDS` had the qualifier **optional**:
+
+```python
+("FINAL", re.compile(r"\bfinal(\s+(exam|examination|test|assessment))?\b", re.I))
+```
+
+so the bare word matched wherever it stood, and a Brightspace entry called
+"Week 7 Quiz ... Final Subtopic Report ... Final Submission" wore the **FINAL**
+badge -- the loudest thing this calendar can say about a day, spent on a
+weekly report.
+
+`_NOT_AN_EXAM` could never have caught it. That list is about *practice* and
+*review*: a rehearsal of the thing, not a different thing wearing the same
+word. Final draft, final submission, final report, final project, final
+version -- the noun is different every time.
+
+`_names_the_final(title)` is a **positive signal**, the `_material_section`
+decision again: a list of what names the final is short, while a list of every
+noun "final" might be modifying is endless and wrong the first time a course
+invents a new one. Two ways in, and nothing else:
+
+- **qualified** -- `final exam`, `final examination`, `final test`,
+  `final assessment`.
+- **standing alone as the assessment**, once `COURSE_REGEX` takes the course
+  code off. "SYSC 2004 Final" is how a university exam schedule prints it:
+  there is no noun for the word to be modifying.
+
+It can only ever DOWNGRADE a tag, never drop a row -- "Final Lab Exam" stops
+claiming to be the final and is still badged EXAM, which is the same answer
+`_final_name_score` gives it one screen over.
+
+## An assignment and the folder you upload it to are one deadline
+
+D2L publishes "Assignment 3: Gate-level implementation" and "Assignment 3:
+Place to upload your solution" as two items with two ids, so `_import_deadlines`
+made two `Task` rows with two `source_uid`s -- and the thing that collapses
+duplicates, `make_group_id(course, base_title)`, keys on a title that differs.
+The student sees one piece of work twice and ticks off half of it.
+
+`_dropbox_stem` recognises an upload folder, `_stem_owns` matches it to its
+sibling and `_sibling_base_for` picks one, after which the companion takes the
+assignment's `group_id` and renders inside its card. It keeps its own row, so
+the link into D2L's dropbox is not lost.
+
+**The two failure modes are not symmetric, and the whole design follows from
+that.** Too narrow leaves two cards, which is exactly what happens today. Too
+broad merges two real assessments and hides one behind the other -- and delete
+acts on the group, not the row. So:
+
+- **The phrases are unmistakable** and the bare word "submission" is not one
+  of them. "Assignment 8c Innovation Proposal - Final Submission" is a real
+  Carleton deadline, reported as one.
+- **The prefix match is on a token boundary**, so "Assignment 3" can never
+  claim "Assignment 30". A stem that is also the start of something else is
+  the entire risk here.
+- **An ambiguous stem is left alone.** Where two siblings could own the
+  companion, picking one hides a real assessment; two cards is the lesser
+  failure and the one the student can already see.
+- **A companion with no stem** ("Submit here" on its own) folds into nothing,
+  because folding it into a guess attaches a deadline to work it may have
+  nothing to do with.
+
+The payload is searched before the database so a first sync folds in the same
+pass, and **both importers do it the same way** -- the feed path builds the
+same map from `cal.events`. Two sibling paths reading one payload differently
+is how every deadline once landed under OTHER.
+
 ## A reminder has to fire when nothing of ours is running
 
 "Remind me of this at that time and notify me that day." Storing it is the easy

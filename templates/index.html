@@ -273,14 +273,14 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
 </div>
 
 <div class="strip">
-  <div class="cell {% if groups['overdue']|length %}bad{% endif %}">
+  <div class="cell {% if summary.overdue %}bad{% endif %}">
     <span class="k">Overdue</span>
-    <div class="v">{{ groups['overdue']|length }}</div>
-    <span class="s">{% if groups['overdue']|length %}Needs clearing first{% else %}Nothing behind{% endif %}</span>
+    <div class="v">{{ summary.overdue }}</div>
+    <span class="s">{% if summary.overdue %}Needs clearing first{% else %}Nothing behind{% endif %}</span>
   </div>
-  <div class="cell {% if groups['today']|length %}warn{% endif %}">
+  <div class="cell {% if summary.today %}warn{% endif %}">
     <span class="k">Due today</span>
-    <div class="v">{{ groups['today']|length }}</div>
+    <div class="v">{{ summary.today }}</div>
     <span class="s">{{ summary.week }} due this week</span>
   </div>
   {# The courses the student is in NOW, not every course they have ever taken.

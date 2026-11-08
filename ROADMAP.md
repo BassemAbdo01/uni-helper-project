@@ -11,6 +11,11 @@ ELEC 2501"), and draw study blocks and the class timetable on the Calendar.
 
 # Part 1 — Bugs, ahead of everything
 
+**B1, B2, B3 and B4 have shipped.** Their sections are kept below as the
+record of what was wrong and why the fix took the shape it did; the live
+reasoning is in CLAUDE.md. **B5, B6 and B7 are still open.**
+
+
 Diagnosed before planning. Three of the seven were already findable in the
 code; those read as fact below, and the rest say what still needs measuring.
 
@@ -158,7 +163,8 @@ lectures is the right direction regardless of the UI.
 
 # Part 3 — The queue
 
-1. **Ephemeral-disk fix** — committed, unpushed, waiting on your `--plan` row count
+1. ~~Ephemeral-disk fix~~ — **live** since 2026-10-27. The `--plan` row
+   count is still unrun, but it only reports; nothing waits on it.
 2. **Outline finder** + instructor / email / office-hours extraction (one corpus run)
 3. **Brightspace grade sync** — audit first
 4. **Job system** — heartbeat, 3-attempt cap, idempotency, startup requeue, env flag off
