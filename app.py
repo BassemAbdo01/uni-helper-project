@@ -667,6 +667,83 @@ def _display_code(code):
     return "" if _PLACEHOLDER_CODE.match(text) else text
 
 
+# EHS, AODA, WHMIS, orientation and training shells are real Brightspace org
+# units and arrive through the same import as a course: they have no outline,
+# no grades and no deadlines, and on a four-year account they outnumber the
+# five courses the student is actually taking.
+#
+# A POSITIVE signal with a safe default -- the `_material_section` decision
+# again. A list of what IS non-academic is short; a list of every real course
+# name is endless and wrong the first time a department invents one. And the
+# two failure modes are not symmetric. Missing a training shell leaves one
+# extra card, which is exactly what happens today. Filing a real course as
+# non-academic hides its outline, its grades, its deadlines and its study
+# plan. So anything unrecognised stays academic.
+#
+# Two tiers, because the words are not equally safe. The strong list is
+# unmistakable whatever the course code says. The weak list holds words a real
+# course can legitimately use -- "Orientation to Professional Practice" is a
+# nursing course -- so those only count when the org unit has NO course code
+# of its own, which is the shape a service shell has and a real offering does
+# not.
+# Safe with any course code, because none of these can be the name of a
+# taught course: they are about the LMS itself, or they say "training module"
+# in so many words.
+_NON_ACADEMIC_STRONG = re.compile(r"""(
+      \bWHMIS\b
+    | welcome\s+to\s+(?:brightspace|d2l)
+    | getting\s+started\s+(?:with|in|on)\s+(?:brightspace|d2l)
+    | brightspace\s+(?:tutorial|training|help|support|orientation)
+    | \bsandbox\b
+    | (?:demo|template|practice)\s+course
+    | training\s+(?:module|modules|shell|portal)
+    | (?:mandatory|required|compliance|employee|staff|volunteer|safety)\s+training
+)""", re.I | re.VERBOSE)
+
+# Trusted only where the org unit has NO course code of its own. Every word
+# here can legitimately name a course -- "OHSA 3000 Occupational Health and
+# Safety Law" and "NURS 1000 Orientation to Professional Practice" are real,
+# and EHS is a real subject code (Environmental Health Sciences), so the first
+# cut of this list would have hidden a whole department. A compliance shell
+# carries no code; a real offering does.
+_NON_ACADEMIC_WEAK = re.compile(r"""(
+      \bAODA\b
+    | \bEHS\b
+    | health\s*(?:and|&|\+)\s*safety
+    | occupational\s+health
+    | (?:laboratory|lab|radiation|fire|chemical)\s+safety
+    | bio-?safety
+    | workplace\s+(?:violence|harassment|hazard)
+    | violence\s+prevention
+    | respectful\s+workplace
+    | academic\s+integrity
+    | accessib\w*\s+(?:training|awareness)
+    | \borientation\b
+    | \bonboarding\b
+    | student\s+services
+    | career\s+services
+    | library\s+(?:services|resources|guide)
+    | co-?op\s+(?:program|services|portal)
+)""", re.I | re.VERBOSE)
+
+
+def _looks_non_academic(code, name):
+    """Is this org unit a training or service shell rather than a course?
+
+    Only ever consulted when a SyncedCourse row is CREATED, never on an
+    update, so a student who restores a course Nexora guessed wrong about
+    keeps it restored through every later sync. That is the
+    `sync_state='dismissed'` rule: a decision the student made must not be
+    undone by the next import.
+    """
+    text = f"{name or ''} {code or ''}"
+    if _NON_ACADEMIC_STRONG.search(text):
+        return True
+    # No course code of its own -- the shape a service shell has. A real
+    # offering carries one, so the looser words are only trusted here.
+    return bool(not _display_code(code) and _NON_ACADEMIC_WEAK.search(text))
+
+
 def _newest_offering_per_code(rows):
     """{course_code: the offering that should represent it}.
 
@@ -5229,6 +5306,23 @@ def home():
     # showing five -- a number that disagrees with what is under it.
     current_term_courses=next((g["courses"] for g in course_groups
                                if g["label"]==current_term_label), [])
+    # What `_looks_non_academic` filed away, named, so the guess is auditable
+    # and reversible. Only rows Nexora hid itself: a course the student removed
+    # has had its content, grades and tasks deleted, so there is nothing to put
+    # back and listing it would promise one.
+    #
+    # One entry per code, newest offering, the same rule every other list on
+    # this page follows -- two screens disagreeing about which offering a code
+    # means is the same class of bug as two disagreeing about a grade.
+    non_academic = sorted(
+        ({"course": row.course_code,
+          "display_code": _display_code(row.course_code),
+          "title": row.course_name or row.course_code,
+          "term": row.term or ""}
+         for row in _newest_offering_per_code(
+             [c for c in all_synced_courses
+              if bool(getattr(c, "is_hidden", False))]).values()),
+        key=lambda c: c["title"].lower())
 
     return render_template(
         "index.html",
@@ -5245,6 +5339,7 @@ def home():
         course_groups=course_groups,
         current_term_label=current_term_label,
         current_term_courses=current_term_courses,
+        non_academic=non_academic,
         show_tour=not bool(getattr(current_user, "tour_done", False)),
         # Accounts that existed before /start, and anyone who skipped it. Two
         # indexed counts per dashboard load, and it disappears the moment
@@ -12113,11 +12208,20 @@ def _import_courses(user, courses):
                 existing.updated_at = datetime.utcnow()
                 counts["updated"] += 1
         else:
+            # A training or service shell is stored, not dropped: it keeps its
+            # name, its term and its Brightspace link, so the dashboard can
+            # list it under "Filed as non-academic" with a Restore button and
+            # a wrong guess costs one click. A `HiddenCourse` tombstone would
+            # mean no row at all, and with no row there is nothing for the
+            # student to restore -- which was the whole reason this is allowed
+            # to guess. Set on CREATION only, so a restore survives every
+            # later sync.
             db.session.add(SyncedCourse(
                 id=uuid4().hex, user_id=user.id, source_uid=source_uid,
                 course_code=code, course_name=name, term=data["term"],
                 instructor=data["instructor"], image_url=data["image_url"],
                 brightspace_url=url, source_hash=fingerprint,
+                is_hidden=_looks_non_academic(code, name),
             ))
             counts["added"] += 1
             db.session.add(AcademicUpdate(
@@ -12371,6 +12475,37 @@ def _cap_content_text(text, kind):
     return text[:cap - len(_TRUNCATED_NOTE)] + _TRUNCATED_NOTE
 
 
+# A new lecture earned TWO update rows: "New lecture: Lecture 3" and, under
+# it, "Review recommended: Lecture 3" -- whose detail is the same 150-character
+# sentence about every lecture in the course. An outline earned two the same
+# way. "Recent updates" on a course workspace shows twelve, so a course that
+# imports twenty lectures in one sync spent half of its twelve saying six
+# things twice, and a student scrolling it learned nothing from the second
+# half of each pair.
+#
+# Fixed at the WRITER, not the renderer: merging two rows at display time
+# leaves the table carrying both, and that table reached 786 MB and 96% of the
+# database. Writing half as many rows for the commonest content type there is
+# the right direction whatever the UI does with them.
+#
+# The pointer is still worth saying once and was never worth a row: it rides
+# on the detail line, after the module name, which is the part that actually
+# varies between two lectures.
+_NEW_CONTENT_POINTER = {
+    "lecture": "Study Tools can turn it into flashcards, a quiz or a study guide.",
+    "outline": "Analyze it once to build the grading scheme and the outcome calculator.",
+}
+
+
+def _new_content_detail(kind, module_name):
+    """The one detail line for a newly imported item."""
+    pointer = _NEW_CONTENT_POINTER.get(str(kind or "").strip().lower(), "")
+    module = str(module_name or "").strip()
+    if module and pointer:
+        return f"{module} · {pointer}"
+    return module or pointer or "Imported from Brightspace."
+
+
 def _source_uid(item, course, title, use_url=True):
     """The stable id for one scraped item. ONE definition, both importers.
 
@@ -12593,16 +12728,13 @@ def _import_content(user, payload):
                 content_hash=fingerprint,
             ))
             counts["added"] += 1
+            # ONE row. See _new_content_detail: the lecture's "Review
+            # recommended" twin and the outline's "ready for analysis" twin
+            # said nothing the title did not, and cost a slot each in a list
+            # of twelve plus a row each in the biggest table in the database.
             announce(course, "new_content", f"New {item_data['content_type']}: {title}",
-                     item_data["module_name"] or "Imported from Brightspace.", source_uid)
-            if item_data["content_type"] == "lecture":
-                announce(course, "ai_recommendation", f"Review recommended: {title}",
-                         "Nexora detected a new lecture. Open Study Tools to create flashcards, a quiz, or a study guide, and schedule a 30–45 minute review.",
-                         source_uid)
-            elif item_data["content_type"] == "outline":
-                announce(course, "outline_detected", "Course outline ready for analysis",
-                         "Analyze it once to build the official grading scheme and course-specific outcome calculator.",
-                         source_uid)
+                     _new_content_detail(item_data["content_type"],
+                                         item_data["module_name"]), source_uid)
     # AcademicUpdate gains a row for every item added or changed, on every
     # sync, and nothing reads one older than a few days -- the dashboard's
     # "Recent updates" reads the content rows instead (_recent_updates).
@@ -12720,10 +12852,15 @@ def _time_of_day_key(item):
 def calendar_page():
     month_raw = request.args.get("month", "")
 
+    # The student's day, not the server's. `days_until` has always asked
+    # `_today_for_request()`, so every entry's countdown was already on their
+    # clock while the grid drawn around it was on UTC -- which is how this
+    # survived: at 8pm in Ottawa on 31 October the page opened on November
+    # with no cell marked today, and the entries inside it disagreed.
+    today = _today_for_request()
     try:
         current_month = datetime.strptime(month_raw, "%Y-%m").date()
     except ValueError:
-        today = date.today()
         current_month = date(today.year, today.month, 1)
 
     year = current_month.year
@@ -12737,7 +12874,16 @@ def calendar_page():
     next_month = (last_day + timedelta(days=1)).replace(day=1)
 
     raw_tasks = load_tasks()
+    # Completed work appears here and nowhere else in a calendar sense: the
+    # dashboard's "Done recently" is a short list of the last few, and a
+    # student asking "did I hand that in?" is asking about a DAY. Ticking
+    # something off used to delete it from the month entirely, which reads as
+    # the record being lost rather than the work being finished.
     cards = sort_cards(build_grouped_cards(raw_tasks))
+    done_on_calendar = build_grouped_cards(raw_tasks, completed=True)
+    for card in done_on_calendar:
+        card["done"] = True
+    cards = sort_cards(cards + done_on_calendar)
 
     # One colour per course. `cards` is every dated item the student has, not
     # just this month's, so the mapping does not change as they page through
@@ -12755,10 +12901,13 @@ def calendar_page():
     tasks_by_date = {}
 
     for c in cards:
-        dleft = days_until(c.get("main_due_raw", ""))
+        dleft = days_until(c.get("main_due_raw", ""), today=today)
 
-        if dleft is not None and dleft < -7:
-            continue
+        # Nothing is dropped for being old. The month grid is a record of a
+        # term, and `dleft < -7` made every month before this one empty --
+        # thirty-one squares drawn around work the student could see in
+        # Brightspace. Past entries are MUTED instead, which is a thing the
+        # page can say and an absence is not.
 
         due = parse_iso_date(c.get("main_due_raw", ""))
 
@@ -12780,7 +12929,7 @@ def calendar_page():
                 "title": c.get("title", "Task"),
                 "course": course,
                 "color_index": color_index,
-                "status": status_for(c.get("main_due_raw", ""))[1],
+                "status": "Done" if c.get("done") else status_for(c.get("main_due_raw", ""))[1],
                 # Enough for the editor to open on this entry without a second
                 # request. `id` is any row of the group; delete and edit resolve
                 # the rest of the group from it server-side.
@@ -12790,6 +12939,12 @@ def calendar_page():
                 # three or four squares in a term that decide the grade.
                 "major": major,
                 "days_left": dleft,
+                # What the mute reads off. `done` is a decision the student
+                # made and `past` is a day that went by -- the
+                # `_close_off_yesterday` split, and they are drawn
+                # differently: done is struck through, past is only dimmed.
+                "done": bool(c.get("done")),
+                "past": dleft is not None and dleft < 0,
                 "time": c.get("due_time") or "",
                 "location": c.get("location") or "",
                 "notes": c.get("notes") or "",
@@ -12816,7 +12971,7 @@ def calendar_page():
         week.append({
             "day": day_num,
             "iso": iso,
-            "is_today": d == date.today(),
+            "is_today": d == today,
             "tasks": tasks_by_date.get(iso, []),
         })
 
@@ -12872,9 +13027,9 @@ def calendar_page():
         month_title=current_month.strftime("%B %Y"),
         prev_month=prev_month.strftime("%Y-%m"),
         next_month=next_month.strftime("%Y-%m"),
-        this_month=date.today().strftime("%Y-%m"),
-        is_this_month=(year, month) == (date.today().year, date.today().month),
-        today_iso=date.today().isoformat(),
+        this_month=today.strftime("%Y-%m"),
+        is_this_month=(year, month) == (today.year, today.month),
+        today_iso=today.isoformat(),
         known_courses=known_courses,
         # The legend. A colour nobody can decode is just decoration, and he
         # asked for this by name: "so everyone knows what each color is".

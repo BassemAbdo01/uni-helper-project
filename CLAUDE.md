@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 819 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 1,406 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -500,6 +500,133 @@ Rules that keep it correct:
 Existing rows keep whatever date they were imported with until the next sync
 re-writes them. That is acceptable because a sync fixes them; a migration
 cannot, since the original timestamp was never stored.
+
+## The calendar draws the past, quietly
+
+Three separate defects, all of them "the calendar is wrong about what is
+behind you", and the third is the one nobody was looking for.
+
+- **`dleft < -7` dropped the past entirely.** Page back to October in December
+  and the grid drew thirty-one empty squares around a term's work. The month
+  grid is a RECORD; an absence is not something the page can mean.
+- **A completed deadline had never appeared on the calendar at all.**
+  `build_grouped_cards` defaults to `completed=False`, so ticking something
+  off removed it from its day. The dashboard's "Done recently" is the last few
+  items; a student asking *did I hand that in?* is asking about a DAY, and
+  this is the only screen that answers in days.
+- **The route measured from `date.today()`** -- the server's date, UTC on
+  Render -- for the month it opens on, `is_today`, `this_month`,
+  `is_this_month` and `today_iso`. `days_until` has always asked
+  `_today_for_request()`, and that is exactly why this survived: every entry's
+  countdown was on the student's clock while the grid drawn around it was not.
+  At 8pm in Ottawa on 31 October the calendar opened on **November** with no
+  cell marked today.
+
+**Weight is the only thing that changes.** `.ev.past` and `.ev.done` are
+dimmed and hover back to full strength; the course colour never moves, because
+the colour is what the legend promises and a September entry that stopped
+being its course's colour would break that promise to make a different point.
+
+**`done` and `past` are two facts and are drawn differently.** A decision the
+student made is struck through; a day that went by is only dimmed -- the
+`_close_off_yesterday` split. A completed entry also reads **Done**, never
+`status_for`'s "Overdue": it is not overdue, it is finished, and saying
+otherwise on the screen someone checks to decide what to do tonight is the
+whole class of bug this file keeps paying for.
+
+**A final that has been sat stops lighting its square.** `hasmajor` and
+`hasfinal` are the loudest thing this grid can say about a day -- "these four
+squares decide your grade" -- and an exam already written does not. The cell
+marks are computed from entries that are neither past nor done. The entry is
+still drawn inside the cell and still carries its badge; only the shouting
+stops.
+
+The dashboard's `view_filter` is deliberately **not** touched. Its `archive`
+view exists to show exactly the rows past `-7`, and changing it would change
+the queue, which is not what was wrong.
+
+## A training shell is not a course
+
+EHS, AODA, WHMIS, orientation and training shells are real Brightspace org
+units and arrive through the same import as a course. They have no outline, no
+grades and no deadlines, and once "import everything" shipped they outnumber
+the five courses a student is actually taking.
+
+`_looks_non_academic(code, name)` is a **positive signal with a safe default**,
+the `_material_section` decision again: a list of what IS non-academic is
+short, while a list of every real course name is endless and wrong the first
+time a department invents one. The two failure modes are not symmetric --
+missing a shell leaves one extra card, which is the status quo; filing a real
+course as non-academic hides its outline, its grades, its deadlines and its
+study plan. So anything unrecognised stays academic.
+
+**Two tiers, and the first cut of this was wrong in a way worth keeping
+written down.** `occupational health` and `health and safety` started in the
+list that matches whatever the code says, and that files **OHSA 3000
+Occupational Health and Safety Law** as a training shell. `\bEHS\b` was worse:
+EHS is a real subject code (Environmental Health Sciences), so an entire
+department would have gone. Measured against eleven real course titles before
+anything shipped.
+
+So the split is not "unmistakable word" versus "ambiguous word". It is whether
+the phrase **can name a taught course at all**:
+
+- **strong** -- about the LMS itself (`welcome to brightspace`, `sandbox`,
+  `template course`) or saying "training module" in so many words. Safe with
+  any code attached.
+- **weak** -- every safety, compliance and service word, trusted only where
+  the org unit has **no course code of its own**. That is the shape Carleton's
+  service shells have (`_normalize_course_code` gives them `COURSE<orgUnitId>`)
+  and a real offering does not. The absence of a code is a precondition, never
+  a signal on its own: "(MS LAP) Math and Stats Learning Assistance Program"
+  and a cross-listed course whose code the parser missed both land there and
+  both stay.
+
+**It sets `SyncedCourse.is_hidden`, not a `HiddenCourse` tombstone**, which is
+a deliberate departure from what the roadmap said. A tombstone means the row is
+never created -- and with no row there is nothing for the student to restore,
+which was the roadmap's own stated reason for allowing a guess at all. The
+flag keeps the name, the term and the Brightspace link, and `/api/course/<c>/
+visibility` already restores it. Nothing is deleted to hide a shell, so a
+restore returns the course with whatever was imported for it.
+
+**It runs only when the row is CREATED, never on an update.** That is the
+`sync_state='dismissed'` rule the other way up: a decision the student made
+must not be undone by the next import. Without it, putting a course back would
+last until the next sync.
+
+**And the guess is printed.** The dashboard carries "N filed as non-academic"
+under the course groups, naming each one with a Put back button. A filter a
+student cannot see is indistinguishable from their courses going missing --
+which is what "37 courses in the extension, 11 on the dashboard" cost. Only
+rows Nexora hid itself are listed: a course the student REMOVED has had its
+content, grades and tasks deleted, so offering it back here would promise a
+restore that cannot return any of them.
+
+## One update row per item, not two for a lecture
+
+`announce()` wrote **two** `AcademicUpdate` rows for every new lecture: "New
+lecture: Lecture 3" and, under it, "Review recommended: Lecture 3", whose
+detail is the same 150-character sentence about every lecture in the course.
+An outline earned two the same way. "Recent updates" on a course workspace
+shows twelve, so a course importing twenty lectures in one sync spent half of
+its twelve saying six things twice.
+
+**Fixed at the writer, not the renderer.** Merging the pair at display time
+leaves the table carrying both, and that table reached 786 MB and 96% of the
+database. Writing half as many rows for the commonest content type there is
+the right direction whatever the UI later does with them.
+
+The pointer was worth saying once and was never worth a row of its own, so it
+rides on the detail line (`_new_content_detail`) after the module name -- which
+is the part that actually varies between two lectures. Nothing read
+`ai_recommendation` or `outline_detected`: no consumer filters on
+`update_type` at all, and `/api/updates` is called by nothing.
+
+`test_the_row_count_does_not_grow_with_sync_count` asserted **5** for a
+three-item payload. It was pinned to a measurement, so the fix read as a
+regression; it asserts one row per item now. Pin invariants, never
+measurements -- the same lesson as the model table and the rate-limit test.
 
 ## A stat and the list under it must count the same rows
 

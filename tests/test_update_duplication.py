@@ -66,16 +66,45 @@ def test_the_same_sync_twice_announces_each_item_once(client, synced):
     assert sorted(updates(uid)) == sorted(first), "five more syncs added nothing"
 
 
-def test_a_lecture_and_an_outline_still_get_their_second_row_once(client, synced):
-    """A lecture earns a review recommendation and an outline earns an
-    analysis prompt -- each exactly once, not once per sync."""
+def test_each_item_gets_exactly_one_row_however_many_syncs(client, synced):
+    """B7. A lecture used to earn a second row -- "Review recommended:
+    Chapter 5" under "New lecture: Chapter 5" -- and an outline a third kind.
+    Three items are three rows now, not five, and four syncs do not change
+    that."""
     headers, uid = synced
     for _ in range(4):
         client.post("/api/sync/content", headers=headers, json=PAYLOAD)
-    kinds = [u[1] for u in updates(uid)]
-    assert kinds.count("ai_recommendation") == 1
-    assert kinds.count("outline_detected") == 1
+    rows = updates(uid)
+    kinds = [u[1] for u in rows]
     assert kinds.count("new_content") == 3          # one per item, not four
+    assert len(rows) == 3, rows                      # and nothing else
+    assert "ai_recommendation" not in kinds
+    assert "outline_detected" not in kinds
+
+
+def test_the_pointer_rides_on_the_detail_line(client, synced):
+    """The advice was worth saying once and was never worth a row of its own.
+    It is the part of the detail that does not vary between two lectures, so
+    it goes AFTER the module name, which is the part that does."""
+    headers, uid = synced
+    client.post("/api/sync/content", headers=headers, json={
+        "course": "CHEM1101",
+        "replace_courses": ["CHEM1101"],
+        "items": [
+            {"content_type": "lecture", "title": "Chapter 5",
+             "module_name": "Week 3", "source_uid": "u-lec"},
+            {"content_type": "outline", "title": "Course Outline", "source_uid": "u-out"},
+            {"content_type": "page", "title": "Piazza", "source_uid": "u-page"},
+        ],
+    })
+    with nexora.app.app_context():
+        detail = {u.related_uid: u.detail
+                  for u in nexora.AcademicUpdate.query.filter_by(user_id=uid).all()}
+    assert detail["u-lec"].startswith("Week 3")
+    assert "Study Tools" in detail["u-lec"]
+    assert "Analyze it once" in detail["u-out"]
+    # A page has no pointer and no module name, and must not be left blank.
+    assert detail["u-page"] == "Imported from Brightspace."
 
 
 def test_genuinely_new_content_is_still_announced(client, synced):
@@ -163,5 +192,8 @@ def test_the_row_count_does_not_grow_with_sync_count(client, synced):
     headers, uid = synced
     for _ in range(20):
         client.post("/api/sync/content", headers=headers, json=PAYLOAD)
-    # 3 items + 1 lecture recommendation + 1 outline prompt
-    assert len(updates(uid)) == 5
+    # One row per item -- the invariant, not a count of the rows this fixture
+    # happens to produce. It said 5 because a lecture and an outline each
+    # earned a second row; B7 made that one, and a test pinned to the number
+    # would have read as a regression rather than as the fix.
+    assert len(updates(uid)) == len(PAYLOAD["items"])

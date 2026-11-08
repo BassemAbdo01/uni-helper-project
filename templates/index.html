@@ -119,6 +119,21 @@
   background:none;border:0;color:var(--fg-2);font:inherit;font-size:13px;text-decoration:none;cursor:pointer}
 .cmenu a:hover,.cmenu button:hover{background:var(--surface);color:var(--fg)}
 .cmenu button{color:var(--red)}
+.nonacad{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+.nonacad summary{cursor:pointer;font-family:var(--mono);font-size:10px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--fg-3)}
+.nonacad summary:hover{color:var(--fg-1)}
+.nonacad .note{margin:8px 0 10px}
+.nonacad-row{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:8px 0;border-bottom:1px solid var(--line)}
+.nonacad-row:last-child{border-bottom:0}
+.nonacad-row strong{font-weight:550}
+.nonacad-row code{font-family:var(--mono);font-size:10px;color:var(--fg-3)}
+.nonacad-row small{color:var(--fg-3)}
+.nonacad-row button{flex:none;background:none;border:1px solid var(--line-2);color:var(--fg-1);
+  border-radius:6px;padding:5px 9px;font-size:12px;cursor:pointer}
+.nonacad-row button:hover{border-color:var(--amber);color:var(--fg)}
+.nonacad-row button[disabled]{opacity:.5;cursor:default}
 
 /* ---- first-run tour ----
    A spotlight rather than a modal walkthrough: the student sees the real page
@@ -445,6 +460,26 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
           <strong>Your courses will appear here</strong>
           <a href="{{ url_for('connect_brightspace') }}">Connect Brightspace</a> to import them.
         </div>
+      {% endif %}
+      {#
+        What Nexora filed as non-academic -- EHS, WHMIS, orientation and
+        training shells. It is allowed to guess only because this says so and
+        hands it straight back: a filter a student cannot see is
+        indistinguishable from their courses going missing, which is the
+        lesson "37 courses in the extension, 11 on the dashboard" cost.
+      #}
+      {% if non_academic %}
+        <details class="nonacad">
+          <summary>{{ non_academic|length }} filed as non-academic</summary>
+          <p class="note">Training and service shells, kept out of your course
+            list. If one of these is a real course, put it back.</p>
+          {% for c in non_academic %}
+            <div class="nonacad-row" data-course="{{ c.course }}">
+              <span><strong>{{ c.title }}</strong>{% if c.display_code %} <code>{{ c.display_code }}</code>{% endif %}{% if c.term %} <small>{{ c.term }}</small>{% endif %}</span>
+              <button type="button" class="restore-course">Put back</button>
+            </div>
+          {% endfor %}
+        </details>
       {% endif %}
     </section>
   </div>
@@ -973,6 +1008,34 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
       card.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 220 }).onfinish = () => card.remove();
     } catch (err) {
       btn.disabled = false; btn.textContent = 'Remove from Nexora';
+      alert(err.message);
+    }
+  }));
+
+  /* ---- put a non-academic course back ----
+     The same endpoint "Remove from Nexora" uses, with action: restore. It
+     clears the tombstone and un-hides every offering of the code, so the
+     course re-appears on the next load with whatever was already imported for
+     it -- nothing was deleted to hide it. */
+  $$('.restore-course').forEach(btn => btn.addEventListener('click', async () => {
+    const row = btn.closest('.nonacad-row');
+    const course = row?.dataset.course;
+    if (!course) return;
+    btn.disabled = true; btn.textContent = 'Putting back\u2026';
+    try {
+      const res = await fetch(`/api/course/${encodeURIComponent(course)}/visibility`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'restore' })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not put this course back.');
+      // Where it belongs in the term groups is the server's answer, not a
+      // guess made here -- the same reason "Put back" on a done task re-reads
+      // the page instead of inserting the row itself.
+      location.reload();
+    } catch (err) {
+      btn.disabled = false; btn.textContent = 'Put back';
       alert(err.message);
     }
   }));

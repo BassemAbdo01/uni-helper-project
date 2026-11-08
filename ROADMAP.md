@@ -11,9 +11,21 @@ ELEC 2501"), and draw study blocks and the class timetable on the Calendar.
 
 # Part 1 — Bugs, ahead of everything
 
-**B1, B2, B3 and B4 have shipped.** Their sections are kept below as the
-record of what was wrong and why the fix took the shape it did; the live
-reasoning is in CLAUDE.md. **B5, B6 and B7 are still open.**
+**Part 1 is done: B1 to B7 have all shipped.** Their sections are kept below
+as the record of what was wrong and why each fix took the shape it did; the
+live reasoning is in CLAUDE.md.
+
+Two things the last three turned up that the sections below do not say:
+
+- **B6 does not use `HiddenCourse`,** which is what B6 below prescribes. A
+  tombstone means the course row is never created, and with no row there is
+  nothing for the student to restore -- the roadmap's own reason for letting
+  it guess. `SyncedCourse.is_hidden` keeps the name, the term and the link,
+  and the dashboard lists what was filed away with a Put back button.
+- **B5 was three defects, not one.** Besides the `-7` cut it turned out that
+  completed work had never been drawn on the calendar at all, and that the
+  route measured today from `date.today()` -- the server's clock -- while
+  every entry inside the grid was already on the student's.
 
 
 Diagnosed before planning. Three of the seven were already findable in the

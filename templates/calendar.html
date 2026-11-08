@@ -164,6 +164,16 @@
   background:var(--surface-2);min-width:0;width:100%;text-align:left;border-top:0;border-right:0;
   border-bottom:0;font:inherit;color:inherit;cursor:pointer;display:block}
 .ev:hover{background:var(--surface-3)}
+/* The past is drawn, not dropped -- see B5. Weight is the only thing that
+   changes: the course colour is what the legend promises, and a September
+   entry that stopped being its course's colour would break that promise to
+   make a different point. Hover brings it back to full strength, because a
+   muted row still has to be readable when you go looking for it. */
+.ev.past,.ev.done{opacity:.42}
+.ev.past:hover,.ev.done:hover,.ev.past:focus-visible,.ev.done:focus-visible{opacity:1}
+/* Done is a decision the student made; past is a day that went by. Different
+   facts, drawn differently -- the _close_off_yesterday split. */
+.ev.done strong{text-decoration:line-through;text-decoration-thickness:1px}
 .ev:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
 .day.today .ev{background:var(--surface-3)}
 .ev strong{display:block;font-size:11.5px;font-weight:500;line-height:1.3;
@@ -388,15 +398,25 @@ dialog.sheet::backdrop{background:#0B0908cc}
     {% for week in weeks %}
       {% for day in week %}
         {% if day %}
+          {#
+            `hasmajor` and `hasfinal` are the loudest thing this grid can say
+            about a day -- "these four squares decide your grade". An exam you
+            have already sat does not, so a past or completed entry no longer
+            lights the cell. The entry is still drawn inside it; only the
+            shouting stops.
+          #}
+          {% set live_major = day.tasks|selectattr('major')|rejectattr('past')|rejectattr('done')|list %}
           <div class="day{% if day.is_today %} today{% endif %}{%
-            if day.tasks|selectattr('major')|first %} hasmajor{% endif %}{%
-            if day.tasks|selectattr('major', 'equalto', 'FINAL')|first %} hasfinal{% endif %}" data-date="{{ day.iso }}">
+            if live_major %} hasmajor{% endif %}{%
+            if live_major|selectattr('major', 'equalto', 'FINAL')|first %} hasfinal{% endif %}" data-date="{{ day.iso }}">
             <span class="n">{{ day.day }}</span>
             <button type="button" class="dayadd" data-date="{{ day.iso }}"
                     aria-label="Add an event on {{ day.iso }}">+</button>
             <div class="evs">
               {% for task in day.tasks %}
-                <button type="button" class="ev{% if task.major %} major{% endif %}" style="--ev:var(--c{{ task.color_index }})"
+                <button type="button" class="ev{% if task.major %} major{% endif %}{%
+                        if task.past %} past{% endif %}{% if task.done %} done{% endif %}"
+                        style="--ev:var(--c{{ task.color_index }})"
                         {% if task.major %}data-major="{{ task.major }}"{% endif %}
                         data-id="{{ task.id }}" data-title="{{ task.title }}"
                         data-course="{{ task.course }}" data-date="{{ day.iso }}"
