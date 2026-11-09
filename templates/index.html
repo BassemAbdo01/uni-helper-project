@@ -119,6 +119,13 @@
   background:none;border:0;color:var(--fg-2);font:inherit;font-size:13px;text-decoration:none;cursor:pointer}
 .cmenu a:hover,.cmenu button:hover{background:var(--surface);color:var(--fg)}
 .cmenu button{color:var(--red)}
+.course .grade{display:flex;align-items:baseline;gap:7px;margin:10px 0 0}
+.course .grade b{font-size:19px;font-weight:600;letter-spacing:-.01em;color:var(--fg)}
+.course .grade i{font-family:var(--mono);font-style:normal;font-size:10px;font-weight:700;
+  letter-spacing:.1em;padding:2px 6px;border-radius:4px;border:1px solid var(--line-2);
+  color:var(--fg-2)}
+.course .grade.bad b{color:var(--red)}
+.course .grade.bad i{border-color:var(--red);color:var(--red)}
 .nonacad{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
 .nonacad summary{cursor:pointer;font-family:var(--mono);font-size:10px;letter-spacing:.08em;
   text-transform:uppercase;color:var(--fg-3)}
@@ -438,6 +445,28 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);border
                   <span class="code">{{ c.display_code }}</span>
                   <span class="name">{{ c.title }}</span>
                   <span class="meta">{% if c.next_title %}Next: {{ c.next_title|truncate(46) }}{% else %}No deadlines imported yet{% endif %}</span>
+                  {#
+                    The grade a student would see if they opened the
+                    calculator, from `_compute_official_result` -- the one
+                    place this maths lives. It is shown only when there IS one:
+                    a course with no confirmed outline or no marks entered says
+                    nothing, because an empty grade slot on every card reads as
+                    the feature being broken rather than as there being nothing
+                    to report.
+
+                    FAIL is a real answer and has to be able to say so. The
+                    standing panel on the grade calculator once printed D-
+                    beside an official panel reading FAIL, on the same student,
+                    because only the server knows that a 49 on the lecture
+                    component fails the course.
+                  #}
+                  {% if c.grade is defined and c.grade is not none %}
+                    <span class="grade{% if c.grade_status == 'FAIL' %} bad{% endif %}"
+                          {% if c.grade_failed_rule %}title="{{ c.grade_failed_rule }}"{% endif %}>
+                      <b>{{ '%.1f'|format(c.grade) }}%</b>
+                      {% if c.grade_status == 'FAIL' %}<i>FAIL</i>{% elif c.grade_letter %}<i>{{ c.grade_letter }}</i>{% endif %}
+                    </span>
+                  {% endif %}
                   <span class="foot">
                     <b>{{ c.content_count or c.total }} item{{ '' if (c.content_count or c.total) == 1 else 's' }}</b>
                     <span>{{ c.due_status }}</span>

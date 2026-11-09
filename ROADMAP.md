@@ -161,14 +161,27 @@ lectures is the right direction regardless of the UI.
 
 # Part 2 — Quick wins, after the bugs
 
-- **Current grade + letter on each dashboard course card.** Must call
+**All three have shipped.** The live reasoning is in CLAUDE.md. What the
+sections below do not say:
+
+- The **Carleton preset** turned out to be `DEFAULT_GRADING_SCALE` exactly --
+  checked against Carleton's own published table. Nexora's built-in default has
+  always been Carleton's scale, so what the preset buys is `configured`, not
+  the numbers.
+- The **outline-date** gate needed three states, not two. "Current term" and
+  "another term" are not the only answers: a student who pasted an outline into
+  the grade calculator has no course row to place it by, and excluding that
+  swallowed an outline they had just uploaded. The preview offers an
+  unplaceable course; only the auto-add refuses it.
+
+- ~~**Current grade + letter on each dashboard course card.**~~ Must call
   `_compute_official_result`, never a second copy of the pass-rule maths —
   that is how two screens come to disagree about a pass.
-- **Carleton grading-scale preset** in Settings.
-- **Outline dates auto-added to the calendar, with undo**, replacing the review
-  banner. Note: the *old* "exams found in your course material" panel was
-  deleted for offering year-less dates from first-year announcements. This is
-  different — outline dates are current-term and dated — but it must stay
+- ~~**Carleton grading-scale preset** in Settings.~~
+- ~~**Outline dates auto-added to the calendar, with undo**~~, replacing the
+  review banner. Note: the *old* "exams found in your course material" panel
+  was deleted for offering year-less dates from first-year announcements. This
+  is different — outline dates are current-term and dated — but it must stay
   current-term only and year-aware, or it repeats that.
 
 ---

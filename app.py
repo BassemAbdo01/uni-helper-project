@@ -744,6 +744,74 @@ def _looks_non_academic(code, name):
     return bool(not _display_code(code) and _NON_ACADEMIC_WEAK.search(text))
 
 
+# How many courses the dashboard will work out a grade for. Not a page size --
+# a guard, like DASHBOARD_COURSE_LIMIT. A student has five or six courses with
+# marks in them; an account with forty is pathological and the page still has
+# to render.
+DASHBOARD_GRADE_MAX = 40
+
+
+def _dashboard_course_grades(user_id, codes):
+    """{course: {grade, letter, status, failed_rule}} for the cards that can have one.
+
+    `_compute_official_result` is THE definition and this calls it. The grade
+    calculator, the course workspace, the study planner's at-risk check and
+    now the dashboard card all ask the same function the same question --
+    anything else is how a card comes to say 78% beside a panel saying FAIL.
+
+    Two queries decide who is worth asking about. Running the full computation
+    for every course would be two more each, 800 on an account at the course
+    limit, on the page a student opens first.
+    """
+    codes = [c for c in codes if c and c != "OTHER"]
+    if not codes:
+        return {}
+    # A policy nobody confirmed is a reading of an outline that nobody checked,
+    # and `_compute_official_result` refuses it with a 409 anyway. Asking is
+    # the expensive part, so decide it here rather than there.
+    confirmed = set()
+    for row in CourseOutlineProfile.query.filter_by(user_id=user_id).all():
+        try:
+            analysis = json.loads(row.grading_json or "{}")
+        except (ValueError, TypeError):
+            continue
+        if analysis and analysis.get("confirmed") is not False:
+            confirmed.add(row.course_full)
+    if not confirmed:
+        return {}
+    marked = {row[0] for row in db.session.query(GradeEntry.course_full)
+              .filter(GradeEntry.user_id == user_id).distinct().all()}
+
+    out = {}
+    for code in codes:
+        if code not in confirmed or code not in marked:
+            continue
+        if len(out) >= DASHBOARD_GRADE_MAX:
+            break
+        try:
+            result, error = _compute_official_result(user_id, code)
+        except Exception:
+            # A card is decoration next to the page it sits on. An outline
+            # shape this has never met must not take the dashboard down.
+            app.logger.exception("dashboard grade failed for %s", code)
+            continue
+        if error or not result or result.get("official_grade") is None:
+            continue
+        failed = next((r.get("message") for r in (result.get("pass_rules") or [])
+                       if r.get("passed") is False), "")
+        out[code] = {
+            "grade": result["official_grade"],
+            "letter": result.get("letter_grade") or "",
+            # FAIL is a real answer and the card has to be able to say it. The
+            # standing panel on the grade calculator once printed D- beside an
+            # official panel saying FAIL, because only the server knows a 49 on
+            # the lecture component fails the course.
+            "status": result.get("official_status") or "",
+            "failed_rule": failed or "",
+        }
+    return out
+
+
 def _newest_offering_per_code(rows):
     """{course_code: the offering that should represent it}.
 
@@ -4702,6 +4770,27 @@ DEFAULT_GRADING_SCALE = [
     {"letter":"F","minimum":0.0},
 ]
 
+# A scale a student can fill in with one click instead of hunting down their
+# university's PDF. Carleton first because that is who the beta is.
+#
+# Carleton's published table is A+ 90-100, A 85-89, A- 80-84, B+ 77-79,
+# B 73-76, B- 70-72, C+ 67-69, C 63-66, C- 60-62, D+ 57-59, D 53-56, D- 50-52,
+# F 0-49 -- which is `DEFAULT_GRADING_SCALE` to the point. So the preset reuses
+# it rather than restating it: two copies of one table is how a letter comes to
+# differ between two screens, and this one decides what a transcript says.
+#
+# What the preset buys is therefore not the numbers. It is `configured`. An
+# unconfigured scale is Nexora guessing, the student cannot tell that from a
+# saved answer, and `grading_scale_configured` is surfaced for exactly that
+# reason. One click turns the guess into their answer.
+GRADING_SCALE_PRESETS = [
+    {"id": "carleton", "name": "Carleton University",
+     "note": "A+ 90, A 85, B+ 77, C+ 67, D- 50. Nexora's built-in default is "
+             "already this scale -- saving it records that you checked.",
+     "scale": DEFAULT_GRADING_SCALE},
+]
+
+
 def _normalize_grading_scale(raw):
     cleaned=[]
     for item in raw or []:
@@ -4753,6 +4842,7 @@ def settings():
     # secret URL for a student who never asked for one.
     token=(current_user.calendar_token or "").strip()
     return render_template("settings.html", user=current_user, grading_scale=grading_scale,
+                           grading_scale_presets=GRADING_SCALE_PRESETS,
                            timezones=COMMON_TIMEZONES,
                            current_timezone=(current_user.timezone or "").strip(),
                            calendar_feed_url=url_for("calendar_feed", token=token, _external=True) if token else "")
@@ -5155,6 +5245,16 @@ def home():
     # hiding their courses. The cap that remains is a guard against a
     # pathological account, not a page-size.
     course_cards = all_course_cards[:DASHBOARD_COURSE_LIMIT]
+
+    # The grade a student would see if they opened the calculator, on the card
+    # -- from `_compute_official_result`, the one place that maths lives.
+    _grades = _dashboard_course_grades(current_user.id,
+                                       [c.get("course") for c in course_cards])
+    for card in course_cards:
+        found = _grades.get(card.get("course"))
+        if found:
+            card.update(grade=found["grade"], grade_letter=found["letter"],
+                        grade_status=found["status"], grade_failed_rule=found["failed_rule"])
 
     course_titles = {
         "SYSC2004": "Object-Oriented Programming",
@@ -6281,6 +6381,10 @@ ANNOUNCE_RESCAN_HOURS = 6        # how often the calendar may spend a call unask
 ANNOUNCEMENT_SCAN_DAYS = 75      # how far back an announcement can be and still be about work to come
 ANNOUNCEMENT_SCAN_MAX = 14       # how many candidates reach the model
 ANNOUNCEMENT_HORIZON_DAYS = 300  # how far ahead a stated date may be
+# How many dates may be written unasked in one go. A term's outlines state a
+# handful; a number far above that means something has been misread, and an
+# undo that has to remove forty entries is not an undo.
+OUTLINE_DATE_ADD_MAX = 12
 
 
 def _announcement_candidates(user_id, today, zone):
@@ -6326,6 +6430,136 @@ def _announcement_candidates(user_id, today, zone):
     return out
 
 
+def _outline_date_title(text, course):
+    """What to call a date the outline states.
+
+    `_exam_title` answers well when the row names an exam and answers "Exam"
+    when it does not -- which is a confidently wrong label on a calendar, and
+    it collapses two different rows onto one title and one stem. The outline's
+    own words are the better answer: they are what the student will recognise,
+    and they came from their own document.
+    """
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    if _EXAM_WORDS.search(raw):
+        return _exam_title(raw, course)
+    # The course code is already the entry's course; repeating it in the title
+    # is the "SYSC2004 - " every workspace row used to carry.
+    cleaned = COURSE_REGEX.sub("", raw).strip(" -\u2013\u2014:,.")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return (cleaned or raw or "Course date")[:120]
+
+
+def _outline_date_kind(text):
+    """"exam" only when the outline says so.
+
+    A project demo badged EXAM wears the loudest mark this calendar has and
+    earns the study planner's revision ladder. `kind` was hardcoded "exam" on
+    both paths, which is the `is_deadline=True` mistake: one value assumed for
+    every row because it was true of the rows in front of us.
+    """
+    return "exam" if _EXAM_WORDS.search(str(text or "")) else "due"
+
+
+def _term_verdicts(user_id, today):
+    """{course_code: True | False} -- is this course in the CURRENT term?
+
+    A code that is absent from the result could not be placed at all, which is
+    a third answer and not the same as False. The `_evaluate_pass_rules` rule:
+    "no" and "cannot say" are different facts, and collapsing them is how a
+    student who pasted this term's outline into the grade calculator -- a
+    profile with no `SyncedCourse` row behind it -- had the dates in it
+    silently discarded.
+
+    One definition, the dashboard's: a stated term outranks everything, and a
+    course Brightspace never dated is read from its own deadlines
+    (`_term_from_dates`) exactly as the course groups do.
+    """
+    label = _current_term_label(today)
+    verdicts, undated = {}, set()
+    for row in SyncedCourse.query.filter_by(user_id=user_id).all():
+        code = row.course_code or ""
+        if not code or bool(getattr(row, "is_hidden", False)):
+            continue
+        if _term_meta(row.term or "")[1]:
+            # A stated term is an answer either way, and the newest offering
+            # wins: a course taken twice is current if its current row is.
+            verdicts[code] = verdicts.get(code, False) or (_term_label(row.term or "") == label)
+        else:
+            undated.add(code)
+    undated -= set(verdicts)
+    if undated:
+        dates = {}
+        for row in (Task.query.filter_by(user_id=user_id)
+                    .filter(Task.course_full.in_(list(undated))).all()):
+            if row.due_raw:
+                dates.setdefault(row.course_full, []).append(row.due_raw)
+        for code in undated:
+            guess = _term_from_dates(dates.get(code, []))
+            if guess:                       # no dates, no answer -- stay absent
+                verdicts[code] = guess == label
+    return verdicts
+
+
+def _outline_date_uid(course, day, title):
+    """The stable id for one outline-stated date.
+
+    It is what stops a date the student deleted from coming straight back on
+    the next page load: `delete_event` dismisses an imported row rather than
+    removing it, so the uid survives and this never offers it again. The same
+    rule `_import_deadlines` follows -- deleting something the LMS gave you is
+    not undone by the next sync.
+    """
+    return f"outline:{course}:{day.isoformat()}:{_assessment_stem(title or '')}"[:255]
+
+
+def _pending_outline_dates(user_id, today, zone):
+    """Outline dates that belong on the calendar and are not on it.
+
+    Only from a CONFIRMED analysis. An unconfirmed one is a reading of an
+    outline that nobody has checked, and `_compute_official_result` already
+    refuses to report a grade from one -- writing dates out of it while
+    declining to report its grades would be the app trusting it in one place
+    and not the other.
+    """
+    confirmed = set()
+    for row in CourseOutlineProfile.query.filter_by(user_id=user_id).all():
+        try:
+            analysis = json.loads(row.grading_json or "{}")
+        except (ValueError, TypeError):
+            continue
+        if analysis and analysis.get("confirmed") is not False:
+            confirmed.add(row.course_full)
+    if not confirmed:
+        return []
+
+    # `term_is_current` must be a YES. None means the course could not be
+    # placed in a term at all, and this writes to a calendar without asking --
+    # the preview may offer an unplaceable course with a tick beside it, but
+    # nothing unasked-for is written on a guess about which year it is.
+    found = [f for f in _outline_dated_assessments(user_id, today, zone)
+             if f["course"] in confirmed
+             and f.get("term_is_current") is True
+             and today <= f["date"] <= today + timedelta(days=ANNOUNCEMENT_HORIZON_DAYS)]
+    if not found:
+        return []
+
+    # Every state, dismissed included -- that is the whole point of the uid.
+    known = {row[0] for row in db.session.query(Task.source_uid)
+             .filter(Task.user_id == user_id,
+                     Task.source_uid.in_([_outline_date_uid(f["course"], f["date"], f["title"])
+                                          for f in found])).all()}
+    out, seen = [], set()
+    for f in found:
+        uid = _outline_date_uid(f["course"], f["date"], f["title"])
+        if uid in known or uid in seen:
+            continue
+        if _already_on_the_calendar(user_id, f["course"], f["date"], f["title"]):
+            continue
+        seen.add(uid)
+        out.append(dict(f, uid=uid))
+    return out[:OUTLINE_DATE_ADD_MAX]
+
+
 def _already_on_the_calendar(user_id, course, day, title):
     """Whether this is a date the student already has.
 
@@ -6368,12 +6602,28 @@ def _outline_dated_assessments(user_id, today, zone):
     """
     out = []
     rows = CourseOutlineProfile.query.filter_by(user_id=user_id).all()
+    verdicts = _term_verdicts(user_id, today)
     for profile in rows:
         try:
             analysis = json.loads(profile.grading_json or "{}")
         except (ValueError, TypeError):
             continue
         course = profile.course_full or "OTHER"
+        # A third-year account carries first-year outlines -- "import
+        # everything" made sure of it -- and a date printed as "October 30"
+        # states no year, so `_find_date` anchors it to the nearest
+        # occurrence, which is this October. Offering a first-year MATH 1004
+        # test as a date this term is precisely what got the old "exams found
+        # in your course material" panel deleted.
+        #
+        # A course KNOWN to be in another term is dropped here, for every
+        # caller. A course that cannot be placed is carried with
+        # `term_is_current: None`, and what to do about that is the caller's
+        # decision: the preview offers it with a tick beside it, the auto-add
+        # refuses to write it.
+        current = verdicts.get(course)
+        if current is False:
+            continue
         # The outline's own year is the reference, so "Oct 30" in a Fall outline
         # is this Fall and not whichever one the server happens to be in.
         reference = today
@@ -6389,8 +6639,12 @@ def _outline_dated_assessments(user_id, today, zone):
                 continue
             out.append({
                 "course": course,
+                "term_is_current": current,
                 "date": when,
-                "title": _exam_title(description or raw, course),
+                "title": _outline_date_title(description or raw, course),
+                # Not every date an outline states is an exam, and the badge is
+                # the loudest thing the calendar can say about a day.
+                "kind": _outline_date_kind(description or raw),
                 "time": _find_time(raw) or _find_time(description) or "",
                 "location": _find_location(description) or "",
                 "why": (description or raw)[:240],
@@ -6712,6 +6966,54 @@ def calendar_from_image():
                     "understood": understood, "notes": notes})
 
 
+@app.route("/api/calendar/outline-dates", methods=["POST"])
+@login_required
+@requires_active
+def add_outline_dates():
+    """Put the dates a confirmed outline states onto the calendar.
+
+    Deliberately NOT behind `ai_limit`: no model runs here. The pipeline did
+    the extraction when the outline was analysed, so this is a database read
+    and a write, and charging it against the quota that protects outline
+    analysis would be charging for nothing.
+
+    POST, not GET, for the reason `/api/tour` is: it writes, and a prefetch
+    must not spend it. The page asks after it has painted; the SERVER decides
+    whether there is anything to do, the same split as `/api/sync/auto` --
+    three open tabs each ask, and the uid check means only the first writes.
+    """
+    today = _today_for_request()
+    zone = _user_zone(current_user)
+    pending = _pending_outline_dates(current_user.id, today, zone)
+    if not pending:
+        return jsonify({"ok": True, "added": 0, "events": []})
+
+    events = []
+    for found in pending:
+        title = found["title"][:200]
+        course = found["course"]
+        task = Task(
+            id=uuid4().hex, user_id=current_user.id,
+            group_id=make_group_id(course, title), title=title, base_title=title,
+            course_full=course, course_prefix=course_prefix(course),
+            due_raw=found["date"].isoformat(), due_time=found["time"] or "",
+            location=found["location"] or "", kind=found.get("kind") or "exam",
+            is_deadline=True,
+            # Not "manual": `delete_event` removes a manual row outright and
+            # dismisses an imported one, and dismissal is what has to happen
+            # here -- a deleted row whose uid is gone would be written again on
+            # the next load, which is the delete looking broken.
+            source="outline", sync_state="active", source_uid=found["uid"],
+            created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        db.session.add(task)
+        events.append({"id": task.id, "title": title, "course": course,
+                       "date": task.due_raw, "time": task.due_time,
+                       "why": found.get("why", "")})
+    db.session.commit()
+    return jsonify({"ok": True, "added": len(events), "events": events})
+
+
 @app.route("/api/calendar/scan-announcements", methods=["POST"])
 @ai_limit
 @login_required
@@ -6745,7 +7047,8 @@ def scan_announcements():
             continue
         outline_changes.append({
             "op": "add", "title": found["title"], "date": day.isoformat(),
-            "time": found["time"], "course": found["course"], "kind": "exam",
+            "time": found["time"], "course": found["course"],
+            "kind": found.get("kind") or "exam",
             "location": found["location"], "source_title": "Course outline",
             "why": found["why"],
             "label": f"Add “{found['title']}” on {day.isoformat()}"
@@ -13005,6 +13308,15 @@ def calendar_page():
     # Outline dates are free -- already extracted, no model -- so they are worth
     # offering whenever one is pending, throttle or no throttle. Only reading
     # ANNOUNCEMENTS costs a call, and only that is rate limited.
+    # Dates a confirmed outline states are ADDED, not offered: nothing about
+    # them is a guess. The flag only decides whether the page bothers asking;
+    # `/api/calendar/outline-dates` decides whether to do it, the same split
+    # as `sync_due` and `/api/sync/auto`, so a page an hour old cannot force a
+    # write and three open tabs write once between them.
+    _outline_dates_pending = bool(_pending_outline_dates(current_user.id, _today, _zone))
+    # What is left for the review banner: a date from an outline that has NOT
+    # been confirmed. Those stay a suggestion, because an unchecked reading of
+    # an outline is exactly what the student has not agreed to yet.
     _outline_pending = any(
         _today <= f["date"] <= _today + timedelta(days=ANNOUNCEMENT_HORIZON_DAYS)
         and not _already_on_the_calendar(current_user.id, f["course"], f["date"], f["title"])
@@ -13022,6 +13334,7 @@ def calendar_page():
         # a request it cannot fulfil.
         reminders_deliver=bool(email_is_configured() and REMINDER_DISPATCH_TOKEN),
         announce_scan_due=bool(_outline_pending or (_ann_pending and _stale)),
+        outline_dates_pending=_outline_dates_pending,
         weeks=weeks,
         calendar_feed_url=url_for("calendar_feed", token=feed_token, _external=True) if feed_token else "",
         month_title=current_month.strftime("%B %Y"),

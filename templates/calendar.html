@@ -909,6 +909,8 @@ dialog.sheet::backdrop{background:#0B0908cc}
   const evKindEl = document.getElementById('evKind');
   if (evKindEl) evKindEl.addEventListener('change', paintRemindNote);
 
+  const OUTLINE_ADDED = 'nexora-outline-added';
+
   const unhideForKinds = kinds => {
     const list = (kinds || []).map(k => String(k || '').toLowerCase());
     if (!list.length || list.every(k => k === 'exam')) return;
@@ -940,6 +942,61 @@ dialog.sheet::backdrop{background:#0B0908cc}
     showToast(note);
     try { sessionStorage.removeItem(KEEP_FILTER_NOTE); } catch (_) {}
   }, 0);
+
+  /* ---- what the outline said, now on the calendar ----
+     Written before the reload that put the entries on the page and read after
+     it, the same mechanism as the note above and deferred for the same reason:
+     `showToast` touches `undo`, which is a `let` several hundred lines below.
+
+     The undo is the ordinary delete, so it leaves the ordinary tombstone and
+     the date is never written again -- which is the only reason adding these
+     without asking is fair. */
+  setTimeout(() => {
+    let raw = null;
+    try { raw = sessionStorage.getItem(OUTLINE_ADDED); } catch (_) {}
+    if (!raw) return;
+    let added = null;
+    try { added = JSON.parse(raw); } catch (_) {}
+    if (!added || !added.ids || !added.ids.length) {
+      try { sessionStorage.removeItem(OUTLINE_ADDED); } catch (_) {}
+      return;
+    }
+    showToast(added.text, async () => {
+      await Promise.all(added.ids.map(id =>
+        fetch(`/api/events/${encodeURIComponent(id)}`, { method: 'DELETE' })
+          .catch(() => {})));
+      location.reload();
+    }, 45000);
+    try { sessionStorage.removeItem(OUTLINE_ADDED); } catch (_) {}
+  }, 0);
+
+  {% if outline_dates_pending %}
+  /* The flag decides whether to ASK; the server decides whether to DO. Three
+     open tabs all ask and the uid check means only the first one writes --
+     the `/api/sync/auto` split, and for the same reason: this page may be an
+     hour old by the time the request lands. */
+  (async () => {
+    let res, data;
+    try {
+      res = await fetch('/api/calendar/outline-dates', { method: 'POST' });
+      data = await res.json();
+    } catch (_) { return; }
+    if (!res.ok || !data.added) return;
+
+    const n = data.added;
+    const first = data.events[0] || {};
+    // Name the thing. "3 dates were added" is a notification; "your BIOL1103
+    // midterm on 2026-10-30" is something a student can check.
+    const text = (n === 1
+      ? `Added “${first.title}” on ${first.date} from your ${first.course} outline.`
+      : `Added ${n} dates your course outlines state, starting with “${first.title}” on ${first.date}.`);
+    try {
+      sessionStorage.setItem(OUTLINE_ADDED, JSON.stringify({
+        text, ids: data.events.map(e => e.id) }));
+    } catch (_) {}
+    location.reload();          // the month is rendered by the server
+  })();
+  {% endif %}
 
   /* ---- the calendar assistant ----
      The model chooses WHAT to do and to WHICH entries, picking from ids the
@@ -1327,15 +1384,28 @@ dialog.sheet::backdrop{background:#0B0908cc}
   /* ---- deleting, with a way back ---- */
   let undo = null, undoTimer = null;
 
-  function showToast(text, action) {
+  /* `ms` because an undo for something the student did NOT ask for needs
+     longer than one for something they just pressed. Nine seconds is right
+     for the delete toast -- they pressed delete a moment ago and are looking
+     at the result. The outline-date toast appears for a write the page made
+     while they were reading something else, and it was already dead by the
+     time it was clicked: the button stays on screen and `hideToast` has set
+     `undo` to null, so it takes the click and does nothing. */
+  function showToast(text, action, ms) {
     undo = action;
     $('toastText').textContent = text;
     $('toastUndo').hidden = !action;
     $('toast').classList.add('on');
     clearTimeout(undoTimer);
-    undoTimer = setTimeout(hideToast, 9000);
+    undoTimer = setTimeout(hideToast, ms || 9000);
   }
-  function hideToast() { $('toast').classList.remove('on'); undo = null; }
+  /* The button goes with the offer. A control that is visible and inert is
+     worse than one that is gone. */
+  function hideToast() {
+    $('toast').classList.remove('on');
+    $('toastUndo').hidden = true;
+    undo = null;
+  }
 
   $('toastUndo').onclick = async () => {
     const action = undo;

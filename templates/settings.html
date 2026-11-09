@@ -43,14 +43,44 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 </div>
 
 <div class="narrow">
+  <style>
+    .presets{display:flex;flex-wrap:wrap;gap:8px}
+    .presets .preset{flex:none}
+    .presetnote{margin-top:10px;color:var(--fg-3);font-size:13px;line-height:1.55}
+  </style>
   <div class="note">
     <strong style="color:var(--fg)">Set this up before outline analysis.</strong>
     Uploading your university's grading-scale page saves it straight away.
     AI extraction is not always exact, so check every threshold afterwards.
   </div>
 
+  {#
+    Before the upload, because for the students this is built for it is the
+    whole job: one click instead of finding, downloading and analysing a PDF.
+    It FILLS the editor and does not save -- the bands are right there to read,
+    and Save is the sentence the student says. The upload saves straight away
+    because it has nothing to show first.
+  #}
+  {% if grading_scale_presets %}
   <section class="card">
-    <header><div><span class="k">Fastest route</span><h2>Read it off the official page</h2></div></header>
+    <header><div><span class="k">One click</span><h2>Use your university's scale</h2></div></header>
+    <div class="body pad">
+      <div class="presets">
+        {% for preset in grading_scale_presets %}
+          <button class="btn quiet sm preset" type="button"
+                  data-preset="{{ preset.id }}">{{ preset.name }}</button>
+        {% endfor %}
+      </div>
+      {% for preset in grading_scale_presets %}
+        <p class="presetnote" data-presetnote="{{ preset.id }}">{{ preset.note }}</p>
+      {% endfor %}
+      <p class="status" id="presetStatus" role="status"></p>
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="card">
+    <header><div><span class="k">Or read it off a page</span><h2>Upload the official scale</h2></div></header>
     <div class="body pad">
       <form id="scaleUpload">
         <div class="field">
@@ -246,6 +276,22 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     });
     rows.replaceChildren(frag);
   }
+
+  /* ---- a preset fills the editor; Save is still the student's word ---- */
+  const PRESETS = {{ grading_scale_presets|tojson }};
+  document.querySelectorAll('.preset').forEach(btn => btn.onclick = () => {
+    const preset = PRESETS.find(p => p.id === btn.dataset.preset);
+    if (!preset) return;
+    // A copy, or editing a band would reach into the preset and the next
+    // press would hand back whatever was typed over it.
+    scale = preset.scale.map(band => ({ ...band }));
+    universityName = preset.name;
+    render();
+    setStatus($('presetStatus'),
+      preset.name + "'s scale is loaded below. Press Save grading scale to keep it.",
+      'ok');
+    $('saveScale').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
 
   $('scaleUpload').onsubmit = async e => {
     e.preventDefault();

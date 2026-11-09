@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 1,406 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 1,451 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -500,6 +500,112 @@ Rules that keep it correct:
 Existing rows keep whatever date they were imported with until the next sync
 re-writes them. That is acceptable because a sync fixes them; a migration
 cannot, since the original timestamp was never stored.
+
+## The grade on the dashboard card is the same grade
+
+Each course card carries the current grade and its letter, and it comes from
+`_compute_official_result` -- never a second copy of the pass-rule arithmetic.
+That is the rule the grade calculator, the course workspace and the planner's
+at-risk check already follow, and it is not a style preference: the
+calculator's own standing panel once printed **D-** beside an official panel
+reading **FAIL** for the same student, because only the server knows that a 49
+on the lecture component fails the course. A card that says 72% beside a panel
+saying FAIL is that bug one screen over.
+
+**The cost is the whole design.** That function runs two queries per course and
+`DASHBOARD_COURSE_LIMIT` is 400, so calling it per card would put eight hundred
+queries on the page a student opens first. `_dashboard_course_grades` decides
+in TWO queries who is worth asking about -- a confirmed policy, and at least
+one mark -- and asks only about those. `test_it_does_not_ask_about_a_course_
+that_cannot_answer` builds thirty empty courses and pins that the expensive
+call is made once.
+
+**It says nothing rather than saying nothing useful.** No confirmed outline,
+no marks entered, or an analysis this has never met: the card renders as it did
+before. An empty grade slot on every card reads as the feature being broken
+rather than as there being nothing to report. And a failing rule puts FAIL on
+the card with the rule's own sentence as the title, because FAIL is a real
+answer and a card that can only say numbers would have to round it to one.
+
+## The grading scale is one click for the students this is built for
+
+`GRADING_SCALE_PRESETS`. Carleton's published table is A+ 90-100, A 85-89,
+A- 80-84, B+ 77-79, B 73-76, B- 70-72, C+ 67-69, C 63-66, C- 60-62, D+ 57-59,
+D 53-56, D- 50-52, F 0-49 -- checked against Carleton's own pages before being
+written down, and **it is `DEFAULT_GRADING_SCALE` exactly**. So the preset
+reuses that list rather than restating it; two copies of one table is how a
+letter comes to differ between two screens, and this table decides what a
+transcript says.
+
+**What the preset buys is therefore not the numbers. It is `configured`.** An
+unconfigured scale is Nexora guessing, a student cannot tell that from a saved
+answer, and `grading_scale_configured` is surfaced for exactly that reason.
+The button FILLS the editor and does not save -- the bands are on screen to be
+read and Save is the student's own word. The upload saves straight away
+because it has nothing to show first.
+
+## The dates an outline states go on the calendar by themselves
+
+They were already extracted -- the pipeline pulls `important_dates` out of
+every analysed outline and the course workspace shows them -- and the calendar,
+the one place a student goes to find out when things are, only offered them
+behind a button labelled "Check announcements" that also spends a Gemini call.
+
+`POST /api/calendar/outline-dates` writes them, and it is deliberately **not**
+behind `ai_limit`: no model runs, the pipeline did that work when the outline
+was analysed, and charging this against the quota that protects outline
+analysis would be charging for a database read. POST for the reason `/api/tour`
+is. The page asks after it has painted and the SERVER decides whether to do it
+-- the `/api/sync/auto` split, so three open tabs ask and one writes.
+
+Writing without asking is only fair because **nothing about it is a guess**:
+no model, and the student has CONFIRMED that analysis. An unconfirmed one stays
+a suggestion in the review banner, on the same reasoning that makes
+`_compute_official_result` refuse to report a grade from one -- trusting a
+reading in one place while declining it in another is the inconsistency.
+
+**The term question has three answers.** A third-year account carries
+first-year outlines, and "October 30" states no year, so `_find_date` anchors
+it to THIS October. That is precisely what got the old "exams found in your
+course material" panel deleted. The first cut of the gate excluded anything
+not provably current -- and broke four existing tests, correctly, because a
+student who pasted this term's outline into the grade calculator has a
+`CourseOutlineProfile` and no `SyncedCourse` row at all. **A missing course row
+is not evidence of an old term.** `_term_verdicts` answers True, False, or
+absent, and the two callers want different things from absent:
+
+- the scan preview OFFERS it, with a tick beside it and the course named.
+- the auto-add REFUSES it, because it writes.
+
+A course KNOWN to be in another term is dropped for both. `_evaluate_pass_rules`
+again: "no" and "cannot say" are different facts.
+
+**The undo is the ordinary delete, and that is what makes this safe.**
+`delete_event` dismisses an imported row rather than removing it, so
+`_outline_date_uid` survives and the date is never written back. A row that was
+really deleted would reappear on the next page load, which is the delete
+looking broken -- the `sync_state='dismissed'` rule, which is why these are
+`source="outline"` and not `"manual"`.
+
+Three things found by running it rather than reading it:
+
+- **An outline row reading "Project demo" was titled "Exam".** `_exam_title`
+  returns that literal string when it finds no exam phrase, which was right for
+  its old caller and is a confidently wrong label on a calendar. Worse, two
+  such rows reduce to one stem, so the second would be dropped as a duplicate
+  of the first. `_outline_date_title` keeps the outline's own words.
+- **`kind` was hardcoded `"exam"` on both paths.** A project demo badged EXAM
+  wears the loudest mark this calendar has and earns the study planner's
+  revision ladder. `_outline_date_kind` says exam only when the outline does.
+  The `is_deadline=True` mistake: one value assumed for every row because it
+  was true of the rows in front of us.
+- **The Undo was dead when it was clicked.** `showToast` hides after nine
+  seconds and `hideToast` nulls `undo`, so the button stayed on screen, took
+  the click and did nothing. Nine seconds is right for the delete toast -- the
+  student pressed delete a moment ago and is looking at the result. This toast
+  appears for a write the page made while they were reading something else, so
+  it gets 45 seconds, and `hideToast` now hides the button with the offer: a
+  control that is visible and inert is worse than one that is gone.
 
 ## The calendar draws the past, quietly
 
