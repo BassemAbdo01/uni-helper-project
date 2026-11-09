@@ -15,7 +15,7 @@ no folder called `nexora`.
 | `static/nexora-app.css` | The design system: tokens, rail, cards, buttons, forms. Change a token here and every page follows. |
 | `static/` | `style.css` and `nexora-target.css` are dead since the redesign -- nothing links them |
 | `extension/` | Chrome extension that scrapes Brightspace and pushes to `/api/sync/*` |
-| `tests/` | pytest — 1,451 tests. `conftest.py` points the suite at a throwaway DB. |
+| `tests/` | pytest — 1,541 tests. `conftest.py` points the suite at a throwaway DB. |
 | `evals/` | live-API outline eval. Not run by pytest; costs quota. |
 | `*_V*.md` | Changelogs, newest version number = most recent work |
 
@@ -1820,6 +1820,219 @@ call: it is the riskiest file in the repo and this change is about where
 things live, not how they are calculated. Remove its outline/grades tabs only
 once he has said the new page is better.
 
+## Where this course's outline actually is
+
+`_outline_candidates` / `_best_outline_row` / `_outline_row_for`. Five places
+asked "where is this course's outline" and answered it five ways:
+
+| site | how it found the outline |
+|---|---|
+| the workspace's outline tab | `content_type` OR a title matching `course\s*outline|syllabus` |
+| `/outline/analyze` with no `source_uid` | `content_type` only |
+| `/outline/amend` | `profile.source_uid`, then `content_type` |
+| `/api/course/<c>/ask` | `content_type` only |
+| `_build_course_brief` | `content_type` only |
+
+`content_type` is the EXTENSION's answer, decided during the scrape, so it only
+ever helps what is scraped after a Web Store release -- the `file_ext` and
+deadline-date trap. Its rule also wants the word "course" in front of
+"outline", so **"ELEC 2501 Outline.pdf", "Green Sheet" and "Course
+Description" are not outlines to any part of Nexora**, and the student meets
+"No course outline has been detected for this course yet" with their outline
+sitting in the Lectures list. Deciding it on the server fixes every row already
+in the database.
+
+The last two sites are the sharp end. `ask_course_ai` must back every claim
+with a verbatim quote checked against the outline text, so a student who
+PICKED their outline by hand could have it analysed and then not be able to ask
+it anything -- Ask found no text and answered from the saved numbers with no
+document behind it, which is exactly what `_verify_quote_in_source` exists to
+prevent.
+
+**Two tiers and a safe default**, the `_looks_non_academic` split. A title that
+can only be naming the outline is trusted alone; everything else -- including a
+bare "Outline", because "Essay outline template" is a real course file -- has to
+be corroborated by what is in the document. Scored against 18 real outline
+namings and the 32-title corpus from a live account: **18 of 18 found, zero
+confident false positives**, one listed-only miss ("Lab report outline"), which
+is the harmless direction.
+
+**`confident` is what separates offering a document from reading one.** The
+workspace analyses the top candidate without being asked, and that call writes a
+grading policy, so it may only fire on a document whose own title says what it is
+or whose contents prove it. Everything else is listed for the student to pick --
+the `_term_verdicts` split again.
+
+**Ranking is half the point.** The page analyses the FIRST candidate with text,
+and with no order that was whichever row the query happened to yield -- the
+`_newest_offering_per_code` bug one screen over.
+
+**The strongest signal is a measurement, not a guess.**
+`_outline_body_looks_gradable` runs `_local_outline_analysis` and asks
+`_fallback_is_usable` -- the same gate the analyze route uses to decide whether a
+deterministic parse is fit to show a student.
+
+**And the cost of that nearly made it unshippable.** This runs on every
+course-workspace render, over every content row. Measured: **1.8 seconds on a
+41-row course and 6.6 on a 206-row one**, which is the twelve-second dashboard
+one screen over. The first guess -- the hint regex -- was wrong, and reordering
+around it bought nothing and made the big case worse. Profiling found a single
+`_local_outline_analysis` call costing 4.0 s, and the cause is **density, not
+length**: that parser is superlinear in the number of grading-label-like lines,
+so 40,000 characters of ordinary outline prose parses in 146 ms while 15,400
+characters carrying 600 percentages takes **5.4 seconds**. Slicing cannot help.
+`_OUTLINE_MAX_WEIGHTS` (80) bounds it, and the finder went to **27 ms**. Measure
+before diagnosing; the first suspect was wrong twice.
+
+**The analyze route says which document it read.** `source_title` and
+`source_guessed`. Reading the wrong document is not dangerous because the
+analysis is wrong -- it comes back `confirmed: False` and
+`_compute_official_result` refuses to report a grade from an unconfirmed policy
+-- it is dangerous because a student who is not told will confirm a lab manual's
+breakdown believing it came from their outline.
+
+**An analysis nobody asked for must not delete a mark somebody typed.** The
+route's last act is `GradeEntry...delete()`, which is right for an analysis
+someone PRESSED -- a new outline replaces the old scheme -- and is not something
+to do unprompted. A student can enter assessments by hand with no profile at
+all, and the workspace analyses a detected outline on its own, so the two
+together destroyed entered marks. Measured on a throwaway database before the
+guard: one hand-entered Midterm 27/30, removed. `auto` is checked SERVER-side,
+because a flag a caller can forget is no protection.
+
+## Who teaches the course
+
+`instructor`, `instructor_email`, `office_hours`, `office_location` on the
+outline schema. Every outline states them and Nexora threw them away, so a
+student who wanted to email their professor went back to Brightspace -- and
+"Email my prof" cannot be built on a detail nobody extracted.
+
+The shape is the `letter_requirements` shape: **the model answers, the server
+checks the answer against the source and fills what the model missed.** All
+three parts are load-bearing. The model, because an outline states four
+addresses -- the professor, two TAs, the department -- and choosing between them
+is a reading problem. The verification, because **a fabricated email address is
+the worst failure available here**: a wrong grade is visibly a grade and gets
+questioned, while a plausible address is indistinguishable from a real one until
+a student emails it about a deferral and never hears back. The deterministic
+reader, because there is no Gemini key on a self-hosted install and the free key
+429s.
+
+**An address is a TOKEN and must be checked as one.** The first version of
+`_verify_contacts` tested `value in source`, which passes
+`a.patel@carleton.ca` against an outline that says `anita.patel@carleton.ca` --
+it is literally a substring. So the check accepted an invented address differing
+from the real one by four characters. Caught by running it. Same family as
+`\bfinal\b` matching "Final Lab Exam".
+
+Two more found the same way: "Taught by Dr. Adeyemi" carries no colon, so
+requiring a separator after every label missed it; and outlines print the whole
+contact block on one line -- "Instructor: Dr. Mbeki  Office: NI 340  Email: ..."
+-- so anchoring the office label to the start of a line missed it on every one of
+them.
+
+## A transferred weight is conditional far more often than it is automatic
+
+Reported from a real SYSC2004 F26 outline, with a screenshot. Nexora extracted
+two schemes and offered both to a student who **sat** the midterm and scored 75:
+
+| | |
+|---|---|
+| Scheme 1 (Stated Weighting) | quizzes 5, labs 6, assignments 9, midterm 30, final 50 |
+| Scheme 2 (Midterm Weight Transferred to Final) | quizzes 5, labs 6, assignments 9, final 80 |
+
+The outline says the transfer is for students "unable to write the midterm
+exam", who "can request" it, with documentation, within three working days.
+Measured with that student's own marks: scheme 1 is **90.5**, scheme 2 is
+**97.4**, and the official grade is the best eligible option -- so Nexora
+reported a grade **6.9 points above the real one** on a policy the student had
+confirmed.
+
+This is B1 under a different vocabulary. `_MISSED_SCHEME` read the option's
+NAME and matches missed|deferred|absent|excused|no-show|did not write; the model
+named this one after the arithmetic, so the guard never fired.
+
+**The discriminator is what the outline says TRIGGERS the transfer**, and the
+corpus already holds both shapes. `weight_migration` is "if your percentage on
+the final examination is HIGHER than your percentage on the midterm test ...
+This adjustment is AUTOMATIC" -- every student is entitled to that, and gating it
+would UNDERSTATE a grade, which is the opposite error and equally wrong.
+`_AUTOMATIC_TRANSFER` is what keeps that case working.
+
+Two layers, because the failure mode is the model not writing the condition
+down:
+
+- `_option_evidence` reads the saved analysis -- the option's name, its
+  eligibility message, its notes, and any rule naming an assessment it leaves
+  out. That works on analyses already on file.
+- `_gate_conditional_transfers` reads the SOURCE at analysis time and sets
+  `eligibility.requires_missing`, quoting the outline sentence it acted on. It
+  matches the option by what it LEAVES OUT rather than by what it is called, so
+  it needs no agreement from the model about naming.
+
+**An option that omits nothing can never be conditional.** The first version
+lacked that guard, and the explanation this gate appends mentions both
+"Transferred" (from the other option's name) and "missed" -- so the sentence
+written for scheme 2 made scheme 1 look conditional too, every option became
+ineligible, and the student was shown **no grade at all**. That is worse than
+the bug being fixed. Found by running it.
+
+## Telling Nexora what is wrong with the scheme
+
+`POST /api/course/<code>/outline/revise`, and "Fix this scheme" on the grade
+calculator. Asked for directly: *"there HAS TO BE A WAY for students to talk to
+the Nexora AI and let him fix the schema like remove an entire section or edit
+it but nexora has to be smart and warn the student and confirm with the schema
+first."*
+
+Three things existed and none of them is this. `/outline/correct` takes
+structured edits, so the student has to work out the structure.
+`/outline/amend` reads an announcement and applies it IMMEDIATELY -- right for
+"the prof announced a bonus", wrong for "delete the midterm". The tutor only
+offers to ADD.
+
+**The split is the calendar assistant's, and it is the whole feature: the model
+reads the request, the server decides what it would do, and nothing is written
+until the student says yes.** Apply sends back the EDITS the preview returned,
+not the sentence, so what is saved is exactly what was on screen -- and they are
+re-checked against the scheme on the way in, the `recourse` rule, since a name
+the scheme does not have is dropped rather than created.
+
+Every warning is computed on the server from facts it holds. **A warning that
+depends on the model noticing is not a warning, it is a hope.**
+
+- **a mark would stop counting** -- removing a component the student has scored.
+- **the weights would stop adding up** -- the one error nobody sees until a
+  grade is wrong. Bonus weight excluded, as `_check_total` already does.
+- **it contradicts the outline** -- the "confirm with the schema first" part.
+  If the outline says Midterm 30% and the student is setting it to 0, Nexora
+  quotes the line back. It still does it; outlines get amended and sections get
+  cancelled. **A line about a THRESHOLD is not a line about a weight**: the
+  first version quoted "students must get at least 50% on the final
+  examination" as evidence the final is worth 50%, which reads as the outline
+  stating a weight when it states a pass mark. Caught in the browser.
+- **something else refers to it** -- a pass rule, selection rule or alternative
+  scheme naming a component about to disappear. `_evaluate_pass_rules` again: a
+  rule left pointing at nothing fails a student for a requirement nobody can
+  evaluate.
+
+**Two defects in `_apply_outline_edits` only showed up by driving it**, and both
+are the same bug this file keeps paying for -- more than one number for one
+student, on one screen:
+
+- **A kept mark kept its WEIGHT.** A removed component's row is preserved when
+  it carries a score, which is right, but it kept `weight=30` -- so every total
+  that divides by the weights still divided by it, and the calculator reported
+  **92.23%** (119.9 out of 130) for a student whose scheme now totalled 100.
+  The weight is zeroed, which is what the removal already promises in so many
+  words.
+- **A weight edit never reached the grading options.** Each option carries its
+  own copy, so after the change the page showed 92.23% from the edited
+  component list while `_compute_official_result` read the stale option and
+  said **68**. Only a copy still holding the OLD value is updated -- an option
+  that deliberately weighs a component differently is the entire point of
+  having options.
+
 ## Adding to an outline that is already on file
 
 `/api/course/<code>/outline/amend` and, on the tutor, "add this to the
@@ -2003,6 +2216,14 @@ remembering before "fixing" one to match the other.
 The runner also applies `_scheme_is_uncorroborated` before scoring, because
 every route does and the pipeline does it internally -- scoring the raw reply
 would measure something no student is ever shown.
+
+Run **2026-11-09**, after rule 18 (instructor / email / office hours) was
+added: **15/16**, the single failure being `multi_option_eligibility` on
+`gemini-3.5-flash-lite` with "selection_rules empty" -- the documented
+model-dependent case. Re-run on its own three times it passed 3/3, including
+once ON flash-lite, so the new rule cost nothing. That case is the canary for
+prompt length, so check it specifically after adding a rule, and re-run it
+before believing a failure.
 
 **A long rule crowds out a short one.** Rule 17 was first written as a
 paragraph explaining derived components, whole-course requirements and what it

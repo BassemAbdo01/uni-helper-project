@@ -3805,6 +3805,452 @@ def _outline_rule_minimums(parsed):
             if name: minimums[name.lower()]=minimum
     return minimums
 
+# What a course outline is CALLED, in two tiers -- the `_looks_non_academic`
+# split, and for the same reason: the two failure modes are not symmetric.
+# Missing the outline leaves the student where they are today, with a dead end
+# saying nothing was detected. Picking the WRONG document and analysing it
+# writes a grading scheme they may confirm, so a phrase that can only be
+# naming the outline is trusted on its own and everything else has to be
+# corroborated by what is actually in the file.
+_OUTLINE_TITLE_STRONG = re.compile(r"""(
+      course\s*(?:outline|syllabus|information|info|description|policies|policy)
+    | \bsyllabus\b
+    | green\s*sheet
+    | (?:grading|marking|evaluation|assessment)\s*(?:scheme|breakdown|policy|policies|distribution)
+    | course\s*(?:guide|handbook)
+)""", re.I | re.VERBOSE)
+
+# Each of these names the outline more often than not, and none of them can be
+# trusted alone. "Outline" is the sharpest example: "Essay outline template"
+# and "Lab report outline" are real course files and neither is the thing that
+# decides a grade.
+_OUTLINE_TITLE_WEAK = re.compile(r"""(
+      \boutline\b | \bsyllabi\b
+    | first\s*(?:day|class)\s*(?:handout|package|notes)
+    | about\s+(?:this\s+)?(?:the\s+)?course
+    | course\s*overview | general\s+information
+    | \bcourse\s*pack\b
+)""", re.I | re.VERBOSE)
+
+# An addendum is an addition TO the outline, so it is a candidate -- the
+# amendment route exists for exactly this text -- but it must never outrank
+# the outline itself, or the scheme is built from the correction alone.
+_OUTLINE_TITLE_PARTIAL = re.compile(
+    r"addend|amendment|supplement|errata|revision|update[sd]?\b|correction", re.I)
+
+# Phrases that a course outline carries and almost nothing else does. Deliberately
+# not about grades -- a lab manual states the lab's own breakdown, so the weights
+# are checked separately, by parsing them.
+_OUTLINE_BODY_HINTS = re.compile(
+    r"office\s*hours|academic\s+integrity|academic\s+misconduct|plagiaris"
+    r"|prerequisite|late\s+(?:penalt|submission|assignment)|deferred\s+(?:exam|term)"
+    r"|learning\s+outcomes|course\s+objectives|required\s+text|instructor\b"
+    r"|undergraduate\s+calendar|academic\s+accommodation", re.I)
+
+# How much of a body to read when deciding. This runs on a page render over
+# every content row a course has, and an outline body is capped at 120,000
+# characters, so the whole thing times forty rows is not something to do while
+# someone waits.
+_OUTLINE_BODY_SCAN = 20000
+
+# And a ceiling on DENSITY, which is what actually costs -- measured, after
+# length turned out to be the wrong suspect. `_local_outline_analysis` is
+# superlinear in the number of grading-label-like lines it finds, not in how
+# much text it is handed: 40,000 characters of ordinary outline prose parses
+# in 146 ms, while 15,400 characters carrying 600 percentages takes **5.4
+# seconds**. Slicing cannot help, because the density is the same all the way
+# down.
+#
+# A real grading scheme is a dozen weighted rows, or three dozen across
+# alternative schemes. A document with hundreds is a course page listing every
+# assessment, or a marks export -- not a scheme, and not worth parsing to find
+# out. The analyze route still reads the whole document when a student asks it
+# to; this ceiling only ever affects RANKING.
+_OUTLINE_MAX_WEIGHTS = 80
+# And a hard ceiling on how many bodies are worth PARSING, since
+# `_local_outline_analysis` is the expensive half. Rows are parsed best-title
+# first, so the ceiling only ever drops rows that had nothing else going for
+# them.
+_OUTLINE_BODY_PARSE_MAX = 10
+# Below this a body is a stub -- a title row, a link, "see the attached PDF" --
+# and cannot corroborate anything. The same threshold the fetch paths use.
+_OUTLINE_BODY_MIN = 200
+
+# A row that is ABOUT one assessment is not the course outline, whatever else
+# its title says. "Outline quiz" and "Assignment 1: outline of your essay" both
+# match the weak title list.
+_OUTLINE_NOT_THE_DOC = re.compile(
+    r"\bquiz\b|\bassignment\b|\bdropbox\b|\bmidterm\b|\brubric\b"
+    r"|\bsubmission\b|\btemplate\b|\bworksheet\b|lab\s*\d", re.I)
+
+
+def _outline_body_might_grade(text):
+    """The cheap half of the gradable test: could this text POSSIBLY carry a
+    grading scheme? Substring work only, so it is safe to run on every row.
+
+    It exists as its own function because the expensive half must never be
+    reached by a lecture, and because `_outline_candidates` spends its parse
+    budget on rows that pass this -- a budget consumed by rows that were going
+    to be rejected in a microsecond is not a budget.
+    """
+    body = str(text or "")[:_OUTLINE_BODY_SCAN]
+    if len(body.strip()) < _OUTLINE_BODY_MIN:
+        return False
+    if "%" not in body and not re.search(r"\d+\s*(?:marks|points|pts)\b", body, re.I):
+        return False
+    if body.count("%") > _OUTLINE_MAX_WEIGHTS:
+        return False
+    return bool(re.search(r"grad|evaluat|assess|weight|worth", body, re.I))
+
+
+def _outline_body_looks_gradable(text):
+    """Does this text carry a grading scheme the free parser can read?
+
+    This is the strongest signal there is, and it is a MEASUREMENT rather than
+    a guess: `_fallback_is_usable` is the same gate the analyze route uses to
+    decide whether a deterministic parse is fit to show a student. If the
+    weights in this document add up, it is a grading scheme; if they do not,
+    nothing here understood it as one.
+    """
+    if not _outline_body_might_grade(text):
+        return False
+    try:
+        return bool(_fallback_is_usable(_local_outline_analysis(
+            str(text or "")[:_OUTLINE_BODY_SCAN])))
+    except Exception:
+        # A body this parser cannot read is not evidence of anything, and it
+        # must never be able to take down the page that lists the candidates.
+        return False
+
+
+def _outline_candidate_score(row, parse_body=True):
+    """(score, confident, why) for one content row, or (0, False, '') if it is
+    not a candidate at all.
+
+    `confident` is what separates OFFERING a document from READING one. The
+    workspace analyses a candidate on its own, without being asked, and that
+    call writes a grading policy -- so it may only ever fire on a document
+    whose own title says what it is, or whose contents prove it. Everything
+    else is listed for the student to pick, which is the `_term_verdicts`
+    split: the preview offers, the write refuses.
+    """
+    title = str(getattr(row, "title", "") or "")
+    kind = str(getattr(row, "content_type", "") or "").lower()
+    body = str(getattr(row, "content_text", "") or "")
+    strong = bool(_OUTLINE_TITLE_STRONG.search(title))
+    weak = bool(_OUTLINE_TITLE_WEAK.search(title))
+    # An assessment's own page is never the outline. Checked after `strong`
+    # so that a file genuinely called "Course Outline and Assignment Schedule"
+    # is not thrown away by the word "assignment".
+    if not strong and _OUTLINE_NOT_THE_DOC.search(title):
+        return 0.0, False, ""
+
+    # ORDER IS THE WHOLE COST HERE. Measured before this was reordered: 1.8
+    # seconds on a 41-row course and 6.6 on a 206-row one, on the render of a
+    # page a student opens constantly -- the twelve-second dashboard one
+    # screen over. The body work ran on every row, including forty lectures
+    # that could never qualify, so nothing below may touch the body until the
+    # title has had its say.
+    named = bool(kind == "outline" or strong or weak)
+    gradable = bool(parse_body and (named or _outline_body_might_grade(body))
+                    and _outline_body_looks_gradable(body))
+    # The hints are a tie-breaker, never a qualification. Left to admit a row
+    # on their own they admit the academic-integrity page, the office-hours
+    # page and the deferred-exam policy -- every one of which quotes the
+    # outline and none of which IS it. Something has to name the document or
+    # carry its grading scheme first -- so they are also not worth COUNTING
+    # until the row has qualified.
+    if not (named or gradable):
+        return 0.0, False, ""
+    hints = len(set(m.group(0).lower() for m in _OUTLINE_BODY_HINTS.finditer(
+        body[:_OUTLINE_BODY_SCAN])))
+
+    score, why = 0.0, []
+    if kind == "outline":
+        # The extension said so during the scrape. Still the best single piece
+        # of evidence, just no longer the only one.
+        score += 100.0
+        why.append("Brightspace filed it as the course outline")
+    if strong:
+        score += 60.0
+        why.append("its title names the course outline")
+    elif weak:
+        score += 25.0
+        why.append("its title suggests the outline")
+    if gradable:
+        score += 40.0
+        why.append("it contains a grading scheme that adds up")
+    score += min(hints, 4) * 4.0
+    if hints:
+        why.append("it reads like an outline")
+    if _OUTLINE_TITLE_PARTIAL.search(title):
+        # A real candidate, never the leading one.
+        score -= 30.0
+        why.append("it looks like an addition to the outline rather than the outline")
+    if len(body.strip()) < _OUTLINE_BODY_MIN:
+        # Not a penalty on the document, a statement about what is on file for
+        # it: the text still has to be fetched before anything can read it.
+        score -= 5.0
+
+    if score <= 0:
+        return 0.0, False, ""
+    confident = bool(kind == "outline" or strong or (weak and gradable) or (gradable and hints >= 2))
+    return score, confident, "; ".join(why[:3])
+
+
+def _outline_candidates(user_id, course, rows=None):
+    """Every row that could be this course's outline, best first.
+
+    One definition, used by the workspace's outline tab and by the analyze
+    route's fallback, so the list a student is shown and the document Nexora
+    reads can never disagree.
+    """
+    if rows is None:
+        rows = (CourseContent.query.filter_by(user_id=user_id, course_full=course)
+                .order_by(CourseContent.updated_at.desc()).all())
+    # Title first, so the body-parsing ceiling only ever drops rows that had
+    # nothing but their contents going for them.
+    ordered = sorted(rows, key=lambda r: (
+        0 if str(getattr(r, "content_type", "") or "").lower() == "outline" else
+        1 if _OUTLINE_TITLE_STRONG.search(str(getattr(r, "title", "") or "")) else
+        2 if _OUTLINE_TITLE_WEAK.search(str(getattr(r, "title", "") or "")) else 3))
+    out, parsed = [], 0
+    for row in ordered:
+        allow = parsed < _OUTLINE_BODY_PARSE_MAX
+        score, confident, why = _outline_candidate_score(row, parse_body=allow)
+        # Only a row that could actually reach the parser spends the budget.
+        # Counting every row spent it on lectures the cheap gate rejects in a
+        # microsecond, so a course with forty of them listed first had no
+        # budget left for the outline sitting underneath.
+        if allow and _outline_body_might_grade(getattr(row, "content_text", "")):
+            parsed += 1
+        if score > 0:
+            out.append({"row": row, "score": score, "confident": confident, "why": why})
+    out.sort(key=lambda c: (-c["score"], str(getattr(c["row"], "title", "") or "")))
+    return out
+
+
+def _best_outline_row(user_id, course, rows=None):
+    """(row, confident) -- the row to analyse when the student named none.
+
+    `confident` is passed back rather than acted on here: the caller decides,
+    because reading a document and offering it are different acts.
+    """
+    for candidate in _outline_candidates(user_id, course, rows=rows):
+        row = candidate["row"]
+        if len(str(getattr(row, "content_text", "") or "").strip()) >= _OUTLINE_BODY_MIN:
+            return row, candidate["confident"]
+    candidates = _outline_candidates(user_id, course, rows=rows)
+    if candidates:
+        # Nothing has text yet. Hand back the best one anyway: the analyze
+        # route answers `needs_content` for it and the extension fetches it.
+        return candidates[0]["row"], candidates[0]["confident"]
+    return None, False
+
+
+def _outline_row_for(user_id, course, profile=None):
+    """The content row holding this course's outline, or None.
+
+    `profile.source_uid` first: it records a DECISION -- the document the
+    student picked in the workspace, or the one whose analysis they confirmed
+    -- and a decision outranks a guess. Only with nothing recorded does the
+    finder choose.
+
+    Five call sites asked this question five different ways, and two of them
+    (`ask_course_ai` and `_build_course_brief`) matched on `content_type`
+    alone, which is the EXTENSION's answer from scrape time. So a student who
+    picked their outline by hand could get it analysed and then not be able to
+    ask it a question: Ask found no text, and an answer with no document behind
+    it is exactly the thing `_verify_quote_in_source` exists to prevent.
+    """
+    if profile is None:
+        profile = CourseOutlineProfile.query.filter_by(
+            user_id=user_id, course_full=course).first()
+    uid = str(getattr(profile, "source_uid", "") or "")
+    if uid:
+        row = CourseContent.query.filter_by(
+            user_id=user_id, course_full=course, source_uid=uid).first()
+        if row is not None:
+            return row
+    row, _confident = _best_outline_row(user_id, course)
+    return row
+
+
+_EMAIL_IN_TEXT = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+# An address that belongs to a desk rather than a person. A student told to
+# email "the instructor" at advising@ gets no answer and does not know why.
+_EMAIL_NOT_A_PERSON = re.compile(
+    r"^(?:info|help|support|admin|office|registrar|advising|advisor|enquir|inquir"
+    r"|accommodation|accessibility|webmaster|noreply|no-reply|it|service|support"
+    r"|undergrad|graduate|dean|chair|department|dept|general)\b", re.I)
+
+# Who is teaching, as outlines label it. "Instructor of Record" is the formal
+# one; "Taught by" and "Lecturer" are the common informal ones.
+# "Taught by Dr. Adeyemi" carries no colon, so requiring a separator missed
+# it entirely -- found by running this against that shape. The separator is
+# optional only after "taught by", which is already a complete phrase; after a
+# bare "Instructor" it stays required, or the word in a sentence ("the
+# instructor will announce") swallows the rest of the line as a name.
+_INSTRUCTOR_LABEL = re.compile(
+    r"(?:^|\n)\s*(?:(?:course\s+)?(?:instructor(?:\s+of\s+record)?|professor|lecturer"
+    r"|course\s+coordinator)\s*(?:\(s\))?\s*[:\u2013\u2014-]"
+    r"|taught\s+by\s*[:\u2013\u2014-]?)\s*([^\n]{2,120})",
+    re.I)
+
+# A teaching assistant is not the instructor, and an outline lists both under
+# labels that are one word apart.
+_TA_LINE = re.compile(r"\b(?:ta|t\.a\.|teaching\s+assistant|marker|tutor)\b", re.I)
+
+_OFFICE_HOURS_LABEL = re.compile(
+    r"office\s*hours?\s*(?:are|:|\u2013|\u2014|-)?\s*([^\n]{0,160})", re.I)
+
+# Not anchored to the start of a line: outlines put the whole contact block on
+# one line -- "Instructor: Dr. Mbeki  Office: NI 340  Email: ..." -- and
+# anchoring missed the office on every one of them. The colon has to sit
+# directly after the word, so "office hours:" cannot match this, and
+# `_clean_contact_value` cuts the value at whatever label follows it.
+_OFFICE_LOCATION_LABEL = re.compile(
+    r"\b(?:office\s*location|office|room)\s*[:\u2013\u2014-]\s*([^\n]{2,80})", re.I)
+
+# A person's name, as it survives being pulled off a label line: letters,
+# spaces, hyphens, apostrophes and the usual titles. Anything with a digit or
+# an @ in it is a room number or an address that ran into the name.
+_NAME_SHAPE = re.compile(r"^(?:dr|prof|professor|mr|mrs|ms|mx)?\.?\s*"
+                         r"[A-Z][A-Za-z'\u2019.-]*(?:\s+[A-Z][A-Za-z'\u2019.-]*){0,3}$")
+
+
+def _clean_contact_value(value, limit=160):
+    """Trim a value pulled off a label line, or return ''."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = text.strip(" \u2013\u2014-;,:|")
+    # A label line often carries the next field after it. Cut at the point
+    # another label starts rather than storing "Patel Office: ME 4158 Email:".
+    text = re.split(r"\s(?:e-?mail|office|phone|tel|room|website)\s*:", text, 1, re.I)[0]
+    return text.strip(" \u2013\u2014-;,:|")[:limit]
+
+
+def _outline_contacts(text):
+    """{instructor, instructor_email, office_hours, office_location} read out of
+    an outline deterministically. Any field it cannot answer is ''.
+
+    This is the floor, not the ceiling: it runs with no Gemini key, on the free
+    key's 429s, and on a self-hosted install. The model's answer is preferred
+    where it survives verification.
+    """
+    out = {"instructor": "", "instructor_email": "", "office_hours": "",
+           "office_location": ""}
+    body = str(text or "")
+    if not body.strip():
+        return out
+    # Normalise the line structure only. The VALUES have to stay verbatim or
+    # the verification below is checking against something the outline never
+    # said.
+    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in body.splitlines()]
+    flat = "\n".join(lines)
+
+    match = _INSTRUCTOR_LABEL.search(flat)
+    if match:
+        candidate = _clean_contact_value(match.group(1), 120)
+        # Strip an address or a phone number that shared the line.
+        candidate = _EMAIL_IN_TEXT.sub("", candidate).strip(" ,;|")
+        if _NAME_SHAPE.match(candidate):
+            out["instructor"] = candidate
+
+    # The address, decided by what is NEAR it rather than by its position: an
+    # outline puts the instructor's address on the instructor's line.
+    best, best_rank = "", -1
+    for found in _EMAIL_IN_TEXT.finditer(flat):
+        address = found.group(0)
+        local = address.split("@", 1)[0]
+        if _EMAIL_NOT_A_PERSON.match(local):
+            continue
+        line_start = flat.rfind("\n", 0, found.start()) + 1
+        line_end = flat.find("\n", found.end())
+        line = flat[line_start:line_end if line_end != -1 else len(flat)]
+        # Look a little above the address too: "Instructor:" is often its own
+        # line with the details indented under it.
+        above = flat[max(0, line_start - 160):line_start]
+        if _TA_LINE.search(line):
+            rank = 0
+        elif _INSTRUCTOR_LABEL.search("\n" + line) or re.search(
+                r"instructor|professor|lecturer|coordinator", line, re.I):
+            rank = 3
+        elif re.search(r"instructor|professor|lecturer|coordinator", above, re.I) \
+                and not _TA_LINE.search(above):
+            rank = 2
+        else:
+            rank = 1
+        if out["instructor"] and out["instructor"].split()[-1].lower() in address.lower():
+            # The surname is in the address. That is the strongest tie there is.
+            rank += 4
+        if rank > best_rank:
+            best, best_rank = address, rank
+    if best_rank >= 1:
+        out["instructor_email"] = best
+
+    match = _OFFICE_HOURS_LABEL.search(flat)
+    if match:
+        hours = _clean_contact_value(match.group(1))
+        if not hours:
+            # The label was alone on its line; the hours are the next one.
+            tail = flat[match.end():].lstrip("\n")
+            hours = _clean_contact_value(tail.split("\n", 1)[0] if tail else "")
+        # It has to say something about WHEN, or it is prose about the concept
+        # of office hours ("office hours are posted on Brightspace").
+        if hours and re.search(r"\d|mon|tue|wed|thu|fri|sat|sun|appointment|by\s+arrangement",
+                               hours, re.I):
+            out["office_hours"] = hours
+
+    match = _OFFICE_LOCATION_LABEL.search(flat)
+    if match:
+        where = _clean_contact_value(match.group(1), 80)
+        where = _EMAIL_IN_TEXT.sub("", where).strip(" ,;|")
+        # "Office: hours are 10-11" is the hours label matching the office one.
+        if where and not re.match(r"hours?\b", where, re.I):
+            out["office_location"] = where
+    return out
+
+
+def _verify_contacts(parsed, source_text):
+    """Keep only contact details the outline actually states.
+
+    A hallucinated email address is the worst thing this extraction can
+    produce: a wrong grade is visibly a grade and gets questioned, while a
+    plausible address looks exactly like a real one until a student emails it
+    about a deferred exam and never hears back. So every value has to appear
+    VERBATIM in the source -- `_verify_quote_in_source` applied to a field
+    instead of a sentence.
+
+    Anything the model got wrong falls back to the deterministic read rather
+    than to nothing, and anything it left blank is filled the same way.
+    """
+    if not isinstance(parsed, dict):
+        return parsed
+    body = str(source_text or "")
+    squashed = re.sub(r"\s+", " ", body).lower()
+    # An address is a TOKEN, and it has to be checked as one. A substring test
+    # passes "a.patel@carleton.ca" against an outline that says
+    # "anita.patel@carleton.ca", because it is literally a substring of it --
+    # so the first version of this check accepted an invented address that
+    # differs from the real one by four characters and goes nowhere. Found by
+    # running it. Same family as `\bfinal\b` matching "Final Lab Exam".
+    stated = {m.group(0).lower() for m in _EMAIL_IN_TEXT.finditer(body)}
+    local = _outline_contacts(body)
+    for field in ("instructor", "instructor_email", "office_hours", "office_location"):
+        value = _clean_contact_value(parsed.get(field), 160)
+        keep = ""
+        if value:
+            if field == "instructor_email":
+                keep = value if value.lower() in stated else ""
+            elif re.sub(r"\s+", " ", value).lower() in squashed:
+                keep = value
+        if not keep:
+            keep = local.get(field, "")
+        parsed[field] = keep
+    return parsed
+
+
 def _outline_request(row):
     return {
         "source_uid": row.source_uid,
@@ -7874,9 +8320,7 @@ def _build_course_brief(user_id, course):
     if not components:
         return None, "That outline has no assessments to plan around yet."
 
-    outline = CourseContent.query.filter_by(
-        user_id=user_id, course_full=course, content_type="outline").order_by(
-        CourseContent.updated_at.desc()).first()
+    outline = _outline_row_for(user_id, course)
     outline_text = _sanitize_extracted_text((outline.content_text or "") if outline else "")
     # Module and lecture titles say what the course is actually covering, which
     # an outline's topic list sometimes does not.
@@ -9615,7 +10059,18 @@ def course_workspace(course_code):
     resources = [c for c in contents if c.content_type in ("file", "resource", "link", "practice", "page")]
     quizzes = [c for c in contents if c.content_type == "quiz"]
     announcements = [c for c in contents if c.content_type == "announcement"]
-    course_outlines = [c for c in contents if c.content_type == "outline" or re.search(r'course\s*outline|syllabus', c.title or '', re.I)]
+    # One definition, shared with the analyze route's fallback. This list used
+    # to be `content_type == 'outline'` OR a title matching
+    # `course\s*outline|syllabus`, which is narrower than the extension's own
+    # rule in one direction and wider in another, and in no particular order --
+    # the page auto-analyses the FIRST entry that has text, so the document
+    # that decided a student's grading scheme was whichever row the query
+    # happened to yield first. `_outline_candidates` ranks them and `confident`
+    # says which ones may be read without being asked.
+    _outline_picks = _outline_candidates(current_user.id, course, rows=contents)
+    course_outlines = [c["row"] for c in _outline_picks]
+    outline_pick_meta = {c["row"].source_uid: {"why": c["why"], "confident": c["confident"]}
+                         for c in _outline_picks}
     grade_entries = GradeEntry.query.filter_by(user_id=current_user.id, course_full=course).order_by(GradeEntry.created_at.asc()).all()
     outline_profile = CourseOutlineProfile.query.filter_by(user_id=current_user.id, course_full=course).first()
     study_artifacts = StudyArtifact.query.filter_by(user_id=current_user.id, course_full=course).order_by(StudyArtifact.updated_at.desc()).limit(30).all()
@@ -9669,6 +10124,7 @@ def course_workspace(course_code):
         quizzes=quizzes,
         announcements=announcements,
         course_outlines=course_outlines,
+        outline_pick_meta=outline_pick_meta,
         grade_entries=grade_entries,
         grade_groups=_group_grade_entries(grade_entries),
         outline_profile=outline_profile,
@@ -10074,8 +10530,57 @@ def _component_source_name(comp):
 # `requires_completed` asks whether a mark is PRESENT, and a `scheme_gate`
 # compares another option's GRADE. Neither can say "only when this is absent".
 _MISSED_SCHEME = re.compile(
-    r"\b(missed|deferred|absent|excused|no[\s-]?show|"
-    r"did\s+not\s+(write|sit|attend|take))\b", re.I)
+    r"\b(missed?|deferred|absent|absence|excused|no[\s-]?show"
+    r"|unable\s+to\s+(write|sit|attend|take|complete)"
+    r"|(did|do|could|can)\s?not\s+(write|sit|attend|take)"
+    r"|cannot\s+(write|sit|attend|take))\b", re.I)
+
+# The OTHER kind of transfer: one the outline applies by itself, to everyone,
+# on how the student performed. `weight_migration` in the corpus is the shape
+# -- "if your percentage on the final examination is HIGHER than your
+# percentage on the midterm test, the midterm weight will be transferred ...
+# This adjustment is AUTOMATIC and applies only in the student's favour."
+#
+# Every student is entitled to that, so it is an ordinary alternative scheme
+# and gating it would UNDERSTATE a grade. This pattern is what keeps the fix
+# below from breaking it.
+_AUTOMATIC_TRANSFER = re.compile(
+    r"\b(higher|greater|better|best|exceeds?|outperforms?|whichever"
+    r"|automatic(?:ally)?|in\s+the\s+student'?s?\s+favour|favor)\b", re.I)
+
+
+def _option_evidence(option, analysis):
+    """Everything the saved analysis says ABOUT this option.
+
+    The option's NAME alone was the old test, and a name is whatever the model
+    chose to call it -- "Midterm Weight Transferred to Final" describes the
+    arithmetic and says nothing about who it is for. The sentences the model
+    was told to record (rule 15: "record the triggering condition in rules")
+    are where the condition actually lives, so they are read too.
+    """
+    eligibility = option.get('eligibility') or {}
+    bits = [str(option.get('option_name') or ''),
+            str(eligibility.get('message') or ''),
+            str(option.get('notes') or ''),
+            str(option.get('description') or '')]
+    for comp in (option.get('components') or []):
+        if isinstance(comp, dict):
+            bits.append(str(comp.get('notes') or ''))
+    # A rule that names an assessment this option leaves out is the sentence
+    # explaining why it is left out.
+    # ONLY rules that name an assessment THIS option leaves out. An earlier
+    # version also swept in any rule mentioning transferred/added-to weight,
+    # and the note this very gate appends says both "Transferred" (from the
+    # other option's name) and "missed" -- so the explanation written for
+    # scheme 2 made scheme 1 look conditional too, and the student was left
+    # with no eligible option and no grade at all. Found by running it.
+    omitted = [str(n).lower() for n in _omitted_by_option(option, analysis).values()]
+    if omitted:
+        for rule in (analysis.get('rules') or []):
+            text = rule if isinstance(rule, str) else str(rule)
+            if any(name and name in text.lower() for name in omitted):
+                bits.append(text)
+    return " \n".join(b for b in bits if b)
 
 
 def _assessment_key(name):
@@ -10129,10 +10634,29 @@ def _missed_scheme_state(option, analysis, row_map):
     you miss the midterm, this is what happens" -- and can never be the
     official result.
     """
-    name = str(option.get('option_name') or '')
     eligibility = option.get('eligibility') or {}
     named = [str(x) for x in (eligibility.get('requires_missing') or []) if str(x).strip()]
-    if not (named or _MISSED_SCHEME.search(name)):
+    # Read the TRIGGER rather than the name. A SYSC2004 outline moved a
+    # midterm's weight onto the final for students "unable to write" it, the
+    # model called the option "Midterm Weight Transferred to Final", and none
+    # of the missed-vocabulary appears in that -- so the scheme was offered to
+    # a student who sat the midterm and reported a grade 6.9 points high.
+    #
+    # `_AUTOMATIC_TRANSFER` is what stops this gating the legitimate case: a
+    # transfer the outline grants everyone on performance is an ordinary
+    # alternative scheme, and gating that would understate a grade instead.
+    # An option that leaves NOTHING out cannot be a missed-assessment scheme:
+    # the whole mechanism is that omitting an assessment redistributes its
+    # weight. Without this, the stated scheme -- which contains every
+    # component -- could be talked into gating itself by a stray sentence, and
+    # a student with every option ineligible is shown no grade at all. That is
+    # worse than the bug being fixed, and it happened.
+    if not (named or _omitted_by_option(option, analysis)):
+        return False, True, ''
+    evidence = _option_evidence(option, analysis)
+    absence = bool(_MISSED_SCHEME.search(evidence))
+    automatic = bool(_AUTOMATIC_TRANSFER.search(evidence))
+    if not (named or (absence and not automatic)):
         return False, True, ''
     # `requires_missing` when the outline gave it, otherwise whatever this
     # option leaves out that the rest of the scheme includes.
@@ -10148,6 +10672,107 @@ def _missed_scheme_state(option, analysis, row_map):
     return True, False, (
         'Applies only to a student who missed an assessment. Mark the '
         'assessment as missed to apply it.')
+
+
+# Language that says a weight MOVES. Deliberately not "worth" or "counts":
+# every outline says those about every component.
+_WEIGHT_MOVES = re.compile(
+    r"\b(transferr?ed|transfer|added\s+to|carried\s+(?:over|forward)|moved\s+to"
+    r"|re-?weight\w*|redistribut\w*|reallocat\w*|shifted\s+to)\b", re.I)
+
+# How far either side of the movement phrase to read. A sentence cannot be
+# split on "." here -- "(e.g., family or religious obligations)" ends one
+# mid-clause in the real outline this was written for -- so it is a window.
+_TRANSFER_WINDOW = 420
+
+
+def _conditional_transfer_quotes(source_text):
+    """Passages where the outline moves a weight ONLY for a student who was
+    absent. Each one is returned verbatim, because it is what the student will
+    be shown as the reason.
+
+    A window qualifies only when it says all three things: that weight moves,
+    that the trigger is absence, and NOT that the move is automatic. The last
+    is what preserves the legitimate performance transfer -- "if your
+    percentage on the final is higher ... this adjustment is automatic" is
+    every student's right and gating it would understate a grade.
+    """
+    body = re.sub(r"\s+", " ", str(source_text or ""))
+    if not body:
+        return []
+    out, seen = [], set()
+    for match in _WEIGHT_MOVES.finditer(body):
+        start = max(0, match.start() - _TRANSFER_WINDOW)
+        window = body[start:match.end() + _TRANSFER_WINDOW]
+        if not _MISSED_SCHEME.search(window):
+            continue
+        if _AUTOMATIC_TRANSFER.search(window):
+            continue
+        quote = window.strip()
+        key = quote[:120].lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(quote)
+    return out
+
+
+def _gate_conditional_transfers(parsed, source_text):
+    """Mark every option that is really a missed-assessment scheme.
+
+    Reported on SYSC2004 F26: the outline moves the midterm's weight onto the
+    final for students "unable to write" it, "can request", with documentation,
+    within three working days. Nexora offered that scheme to a student who sat
+    the midterm and scored 75 -- and because omitting a component redistributes
+    its weight, it scored HIGHER, so `max()` chose it and reported **97.4%
+    against a real 90.5%**.
+
+    The option is matched by what it LEAVES OUT rather than by what it is
+    called: an option is gated when the outline's absence passage mentions an
+    assessment that this option omits and the others include. That needs no
+    agreement from the model about naming, so it works whatever it called the
+    scheme.
+    """
+    if not isinstance(parsed, dict):
+        return parsed
+    options = [o for o in (parsed.get('grading_options') or []) if isinstance(o, dict)]
+    if not options:
+        return parsed
+    quotes = _conditional_transfer_quotes(source_text)
+    if not quotes:
+        return parsed
+    for option in options:
+        omitted = _omitted_by_option(option, parsed)
+        if not omitted:
+            continue
+        eligibility = option.get('eligibility') if isinstance(
+            option.get('eligibility'), dict) else {}
+        if eligibility.get('requires_missing'):
+            continue        # the model already said so; do not restate it
+        hits, why = [], ''
+        for quote in quotes:
+            low = quote.lower()
+            found = [name for key, name in omitted.items()
+                     if key and key in _assessment_key(low)]
+            if found:
+                hits = found
+                why = quote
+                break
+        if not hits:
+            continue
+        eligibility['requires_missing'] = sorted(set(hits))
+        eligibility['message'] = (
+            'The outline applies this only to a student who did not sit %s: "%s"'
+            % (', '.join(sorted(set(hits))), why[:300]))
+        option['eligibility'] = eligibility
+        rules = parsed.get('rules') if isinstance(parsed.get('rules'), list) else []
+        note = ('"%s" applies only when %s was missed, so Nexora keeps it as a '
+                'scenario until you mark that assessment missed.'
+                % (option.get('option_name') or 'An alternative scheme',
+                   ', '.join(sorted(set(hits)))))
+        if note not in rules:
+            rules.append(note)
+        parsed['rules'] = rules
+    return parsed
 
 
 def _evaluate_option(option,row_map,final_override=None,analysis=None):
@@ -10730,10 +11355,15 @@ def ask_course_ai(course_code):
     if len(question)>2000:
         return jsonify({'error':'Keep your question under 2000 characters.'}),400
 
-    row=CourseContent.query.filter_by(user_id=current_user.id,course_full=course,content_type='outline').order_by(CourseContent.updated_at.desc()).first()
+    profile=CourseOutlineProfile.query.filter_by(user_id=current_user.id,course_full=course).first()
+    # The row the profile was built from, not whatever carries the outline
+    # content_type. Every factual claim in the answer has to be quoted and the
+    # quote verified against THIS text, so reading a different document than
+    # the one that produced the numbers is the one way to make a verified
+    # citation meaningless.
+    row=_outline_row_for(current_user.id,course,profile)
     outline_text=_sanitize_extracted_text(row.content_text) if row and row.content_text else ''
 
-    profile=CourseOutlineProfile.query.filter_by(user_id=current_user.id,course_full=course).first()
     try: analysis=json.loads(profile.grading_json or '{}') if profile else {}
     except Exception: analysis={}
 
@@ -11183,6 +11813,18 @@ def _high_accuracy_outline_analysis(course, outline_text, scale_profile, schema)
     if uncorroborated:
         final["components"] = []
         final["grading_options"] = []
+    # Contact details are checked against the outline's own words and filled
+    # from it where the model left them blank. `excerpt` is what the model was
+    # shown, so it is what the answer has to be corroborated against --
+    # checking against the full document would pass a value the model could
+    # not have read.
+    final = _verify_contacts(final, excerpt)
+    # And a scheme the outline grants only to a student who missed an
+    # assessment is gated here, from the outline's own words. See
+    # `_gate_conditional_transfers`: the model named one of these after the
+    # arithmetic and left all four of its conditions out, so a student who
+    # sat the midterm was shown a grade 6.9 points high.
+    final = _gate_conditional_transfers(final, excerpt)
 
     def _clean_ambiguity_item(v):
         """The AI can report an ambiguity as a rich dict ({'topic':..,
@@ -11371,7 +12013,8 @@ def _outline_extraction_rules():
 14. If wording is ambiguous or pages appear missing, list the uncertainty in ambiguities and lower confidence. Never invent missing rules. AI interpretation is not guaranteed to be 100% accurate and the student must confirm the result.
 15. Some outlines move weight between components according to how the student performs, e.g. "if your final exam percentage is higher than your midterm, the midterm weight transfers to the final". Arithmetically that is the same as two alternative schemes with the better result applied, and it must always be expressed that way: put the stated weighting and the transferred weighting in grading_options, keep the top-level components as the stated weighting, and record the triggering condition in rules. Do not invent a separate rule type for it, and never merge the transferred weight into components as though it always applies.
 16. An alternative scheme is sometimes open only to students who actually sat some number of a group of assessments, e.g. "options 3 and 4 require that you have written at least two and three of the written tests respectively". Record that on the option itself as eligibility, naming the group in from_components using the same component names you used elsewhere, the count in requires_completed, and a plain-language message. Leave eligibility off an option that every student can use. This is about whether an option is available at all, which is not the same as a minimum mark inside it -- a mark floor belongs in component_minimums.
-17. Every name inside a derived_components entry must be one of the components you listed above, spelled the same way. Never name one derived component inside another, and never create a derived component for the course as a whole -- a requirement to pass the course overall is pass_mark, not a group."""
+17. Every name inside a derived_components entry must be one of the components you listed above, spelled the same way. Never name one derived component inside another, and never create a derived component for the course as a whole -- a requirement to pass the course overall is pass_mark, not a group.
+18. Fill instructor, instructor_email, office_hours and office_location from the outline, copying each value exactly as written. Use the person teaching the course, never a teaching assistant or a departmental address. Leave a field empty rather than guessing it."""
 
 
 def _outline_schema():
@@ -11385,6 +12028,14 @@ def _outline_schema():
     """
     return {
         "course_title": "",
+        # Who teaches it and how to reach them. Every outline states this and
+        # it was thrown away, so a student went back to Brightspace to find
+        # their professor's address. Verified against the source afterwards by
+        # `_verify_contacts` -- a fabricated address is worse than none.
+        "instructor": "",
+        "instructor_email": "",
+        "office_hours": "",
+        "office_location": "",
         "pass_mark": 50,
         "final_minimum": None,
         "components": [
@@ -11478,12 +12129,43 @@ def analyze_course_outline(course_code):
     source_uid = str(data.get('source_uid') or '')
     query = CourseContent.query.filter_by(user_id=user_id, course_full=course)
     row = query.filter_by(source_uid=source_uid).first() if source_uid else None
+    # A document the STUDENT named is never second-guessed; they can see the
+    # title and Nexora cannot. Only when they named none does the finder
+    # choose, and then the answer says what it chose.
+    guessed = False
     if not row:
-        row = query.filter(CourseContent.content_type=='outline').order_by(CourseContent.updated_at.desc()).first()
+        row, _confident = _best_outline_row(user_id, course)
+        guessed = row is not None
+    # An analysis the student did not ask for must not replace a calculator
+    # they built by hand. The route's own last act is to delete every
+    # GradeEntry for the course -- correct for an analysis someone PRESSED,
+    # since a new outline replaces the old scheme, and not something to do to
+    # marks that exist nowhere else. The workspace analyses a detected outline
+    # unprompted, and a student can enter assessments by hand with no outline
+    # profile at all, so the two together could silently destroy entered
+    # marks. Checked here rather than in the page, because a caller that
+    # forgets the flag must get the safe answer by default.
+    if bool(data.get('auto')):
+        scored = (GradeEntry.query.filter_by(user_id=user_id, course_full=course)
+                  .filter(GradeEntry.score.isnot(None)).count())
+        if scored:
+            return jsonify({
+                "skipped": "entered_marks",
+                "source_title": row.title or "",
+                "error": (f"Nexora found what looks like this course's outline "
+                          f"(\u201c{row.title or 'an outline'}\u201d) but did not read it, "
+                          f"because you have already entered {scored} mark"
+                          f"{'s' if scored != 1 else ''} here. Analyzing it rebuilds the "
+                          f"assessment list, so press Analyze grading when you want that."),
+            }), 409
     if not row:
-        return jsonify({"error":"No course outline has been detected for this course yet."}),404
+        return jsonify({"error":"Nexora could not find a course outline in this course's "
+                                "material. Upload it or paste it below and it will be read "
+                                "directly."}),404
     if len((row.content_text or '').strip()) < 200:
-        return jsonify({"needs_content":True,"content_request":_outline_request(row),"answer":"Reading the course outline from Brightspace…"}),409
+        return jsonify({"needs_content":True,"content_request":_outline_request(row),
+                        "source_title":row.title or "","source_guessed":guessed,
+                        "answer":"Reading the course outline from Brightspace…"}),409
     # No prompt is built here on purpose. This route hands the outline to
     # _high_accuracy_outline_analysis, which assembles its own three stages and
     # gets the shared rules through _outline_extraction_rules(). A prompt was
@@ -11597,6 +12279,15 @@ def analyze_course_outline(course_code):
     # deterministic parser's differ, and a rule can only be matched against the
     # one that will actually be shown.
     parsed=_compile_pass_rules(parsed)
+    # Both paths converge here, so this is where the contacts are settled. The
+    # pipeline verifies its own answer already, but the DETERMINISTIC fallback
+    # produces no contacts at all -- and a student whose analysis fell back
+    # because the free key was out of quota still has a professor to email.
+    # Verification is idempotent, so running it twice on the pipeline's result
+    # costs nothing and missing the fallback would cost the whole feature on
+    # the path that runs when Gemini is unavailable.
+    parsed=_verify_contacts(parsed, row.content_text or '')
+    parsed=_gate_conditional_transfers(parsed, row.content_text or '')
     parsed['confirmed']=False
     profile = CourseOutlineProfile.query.filter_by(user_id=user_id, course_full=course).first()
     if not profile:
@@ -11690,6 +12381,10 @@ def analyze_course_outline(course_code):
                       "scale for now; save your university's own in Settings so it is read exactly.")
     return jsonify({"ok":True,"fallback":used_fallback,"analysis":parsed,"pass_mark":profile.pass_mark,
                     "final_minimum":profile.final_minimum,
+                    # Which document this scheme came out of. A student about to
+                    # press Confirm has to be able to see that it was their
+                    # outline and not the lab manual.
+                    "source_title":profile.outline_title or "","source_guessed":guessed,
                     "scale_configured":bool(scale_profile.get("configured")),"scale_note":scale_note})
 
 
@@ -11816,9 +12511,29 @@ def _apply_outline_edits(user_id, course, profile, analysis, data):
                     new_weight=max(0.0,min(100.0,float(edit_weight)))
                 except (TypeError,ValueError):
                     continue
-                if round(new_weight,2)!=round(float(comp.get('weight') or 0),2):
+                old_weight=float(comp.get('weight') or 0)
+                if round(new_weight,2)!=round(old_weight,2):
                     changed.append(f"{name}: {comp.get('weight')}% → {new_weight}%")
                 comp['weight']=new_weight
+                # An option carries its OWN copy of each weight, and leaving
+                # those behind is how the scheme on screen stopped being the
+                # scheme the grade came from: after a change here, the page
+                # showed 92.23% from the edited component list while
+                # `_compute_official_result` read the stale option and said
+                # **68** -- two numbers for one student, which is the failure
+                # this whole file keeps paying for.
+                #
+                # Only a copy that still holds the OLD value is updated. An
+                # option that deliberately weighs this component differently
+                # is the entire point of having options, and must not be
+                # flattened into the new number.
+                for option in (analysis.get('grading_options') or []):
+                    if not isinstance(option,dict): continue
+                    for member in (option.get('components') or []):
+                        if not isinstance(member,dict): continue
+                        if _norm_key(_component_source_name(member))!=key: continue
+                        if round(float(member.get('weight') or 0),2)==round(old_weight,2):
+                            member['weight']=new_weight
 
     # Renames: fix a garbled or wrong extracted label (e.g. "out of 12)"
     # instead of the real "Quiz Average") without losing the component's
@@ -11977,8 +12692,21 @@ def _apply_outline_edits(user_id, course, profile, analysis, data):
     row_map={_norm_key(r.name):r for r in rows}
     for key in remove_keys:
         row=row_map.get(key)
-        if row is not None and row.score is None:
+        if row is None:
+            continue
+        if row.score is None:
             db.session.delete(row)
+        elif float(row.weight or 0) != 0.0:
+            # The mark is kept -- it is the student's and nothing here may
+            # destroy it -- but it must stop COUNTING, and it was not. The
+            # row kept its old weight, so every total that divides by the
+            # weights still divided by it: a removed 30% midterm left the
+            # grade calculator reporting 92.23% (119.9 out of 130) for a
+            # student whose scheme now totals 100. Zeroing the weight is what
+            # the removal already promises the student in so many words --
+            # "Nexora keeps the mark, but it will no longer count toward your
+            # grade".
+            row.weight=0.0
     for comp in components:
         if not isinstance(comp,dict): continue
         new_name=str(comp.get('name') or 'Assessment')
@@ -12133,12 +12861,7 @@ def _amend_course_outline(user_id, course, text, label="Added by the student"):
     addenda = analysis.get("addenda") if isinstance(analysis.get("addenda"), list) else []
     addenda.append({"at": stamp, "label": label, "text": text[:6000]})
     analysis["addenda"] = addenda[-20:]
-    row = None
-    if profile.source_uid:
-        row = CourseContent.query.filter_by(user_id=user_id, course_full=course, source_uid=profile.source_uid).first()
-    if not row:
-        row = (CourseContent.query.filter_by(user_id=user_id, course_full=course, content_type="outline")
-               .order_by(CourseContent.updated_at.desc()).first())
+    row = _outline_row_for(user_id, course, profile)
     if row is not None:
         marker = f"\n\n===== {label.upper()} ({stamp[:10]}) =====\n"
         if text not in (row.content_text or ""):
@@ -12171,6 +12894,323 @@ def _amend_course_outline(user_id, course, text, label="Added by the student"):
         db.session.commit()
     summary = str(edits.get("summary") or "").strip()[:400]
     return {"changed": changed, "summary": summary}
+
+
+def _outline_revision_edits(course, analysis, instruction):
+    """Turn a student's sentence into edits in `_apply_outline_edits`'s shape.
+
+    Deliberately the same shape as the correction route and the amendment
+    reader: one applier, so a change made by talking takes exactly the road a
+    change made by typing in the form does -- including the part that never
+    deletes an entered mark.
+    """
+    components = [{"name": c.get("name"), "weight": c.get("weight"),
+                   "category": c.get("category")}
+                  for c in (analysis.get("components") or []) if isinstance(c, dict)]
+    system = (
+        "A university student is telling you what is wrong with the grading scheme Nexora "
+        "extracted from their course outline. Return ONLY the edits they are asking for, as "
+        "strict JSON in the return_shape given.\n"
+        "1. Do what they asked and nothing else. Never add, remove or reweight anything they "
+        "did not mention.\n"
+        "2. Use the EXACT existing component names in components, remove_components and "
+        "rename_components. Never invent a name that is not in current_components.\n"
+        "3. \"Remove X\" means put X in remove_components. \"Rename X to Y\" means "
+        "rename_components {X: Y}. \"X is worth N\" means components {X: N}.\n"
+        "4. If they ask for something you cannot express as these edits, leave the lists empty "
+        "and say so in summary. Never approximate.\n"
+        "5. If they ask to remove a whole group (\"drop all the labs\"), list every matching "
+        "existing component by name in remove_components.\n"
+        "6. understood is one sentence repeating back what you think they asked for, in their "
+        "own terms. summary is one plain sentence describing the edits you returned."
+    )
+    shape = {
+        "components": {"existing component name": 0},
+        "add_components": [{"name": "string", "weight": 0, "category": "string", "notes": "string"}],
+        "remove_components": ["existing component name"],
+        "rename_components": {"existing component name": "new name"},
+        "add_pass_rules": [{"components": ["existing component name"], "minimum_percent": 0,
+                            "message": "string"}],
+        "pass_mark": 0,
+        "rules": ["string"],
+        "understood": "string",
+        "summary": "string",
+    }
+    user = json.dumps({"course": course, "current_components": components,
+                       "current_rules": (analysis.get("rules") or [])[:30],
+                       "pass_mark": analysis.get("pass_mark"),
+                       "request": str(instruction or "")[:4000],
+                       "return_shape": shape}, ensure_ascii=False)
+    parsed = _gemini_json(system, user, 2000, 0.1, mode="quick")
+    # flash-lite wraps its object in a one-element list now and then. Reading
+    # through that rather than treating it as "nothing changes" -- the one
+    # wrong answer that looks exactly like the feature not working.
+    if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+        parsed = parsed[0]
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _revision_edits_against_scheme(analysis, edits):
+    """Keep only the edits that name something this scheme actually has.
+
+    The apply call makes a round trip through the browser, so what comes back
+    is checked rather than trusted -- the `recourse` rule. A name that is not
+    in the scheme is dropped rather than created, because the student
+    confirmed a change to a component they could SEE, and silently inventing a
+    new one is not what they agreed to.
+    """
+    known = {_assessment_key(c.get("name")): str(c.get("name"))
+             for c in (analysis.get("components") or []) if isinstance(c, dict) and c.get("name")}
+    clean, dropped = {}, []
+
+    def _resolve(name):
+        return known.get(_assessment_key(name))
+
+    weights = edits.get("components") if isinstance(edits.get("components"), dict) else {}
+    out_weights = {}
+    for name, value in weights.items():
+        real = _resolve(name)
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            dropped.append(str(name)); continue
+        if real is None or not (0 <= number <= 100):
+            dropped.append(str(name)); continue
+        out_weights[real] = number
+    if out_weights:
+        clean["components"] = out_weights
+
+    removes = [r for r in (edits.get("remove_components") or []) if str(r).strip()]
+    out_removes = []
+    for name in removes:
+        real = _resolve(name)
+        (out_removes.append(real) if real else dropped.append(str(name)))
+    if out_removes:
+        clean["remove_components"] = out_removes
+
+    renames = edits.get("rename_components") if isinstance(edits.get("rename_components"), dict) else {}
+    out_renames = {}
+    for name, new in renames.items():
+        real = _resolve(name)
+        if real and str(new).strip():
+            out_renames[real] = str(new).strip()[:255]
+        else:
+            dropped.append(str(name))
+    if out_renames:
+        clean["rename_components"] = out_renames
+
+    for key in ("add_components", "add_pass_rules", "rules"):
+        value = edits.get(key)
+        if isinstance(value, list) and value:
+            clean[key] = value
+    if edits.get("pass_mark") not in (None, ""):
+        try:
+            mark = float(edits["pass_mark"])
+            if 0 <= mark <= 100:
+                clean["pass_mark"] = mark
+        except (TypeError, ValueError):
+            pass
+    return clean, dropped
+
+
+def _outline_states_weight(source_text, name, weight):
+    """The outline's own line about `name`, when it states a DIFFERENT weight.
+
+    This is "confirm with the schema first". A student setting the midterm to
+    0 when their outline says 30 is usually right -- outlines are amended,
+    sections are cancelled -- but they should see the sentence they are
+    overruling before Nexora overrules it for them.
+    """
+    body = re.sub(r"[ \t]+", " ", str(source_text or ""))
+    if not body.strip() or not str(name or "").strip():
+        return ""
+    words = [w for w in re.split(r"[^A-Za-z0-9]+", str(name)) if len(w) > 2][:3]
+    if not words:
+        return ""
+    pattern = r"[^\n]*" + r"[^\n]{0,40}?".join(re.escape(w) for w in words) + r"[^\n]*"
+    for line in re.finditer(pattern, body, re.I):
+        text = line.group(0).strip()
+        # A line about a THRESHOLD is not a line about a weight. Quoting
+        # "students must get at least 50% on the final examination" as
+        # evidence that the final is worth 50% is confidently wrong in exactly
+        # the way this codebase keeps paying for -- it reads as the outline
+        # stating a weight when it states a pass mark. Caught in the browser.
+        if re.search(r"\b(at\s+least|minimum|min\b|no\s+less|must\s+(get|score|obtain|achieve)"
+                     r"|to\s+pass|or\s+higher|or\s+better)\b", text, re.I):
+            continue
+        stated = re.findall(r"(\d{1,3}(?:\.\d+)?)\s*%|\b(\d{1,3}(?:\.\d+)?)\s*$", text)
+        numbers = [float(a or b) for a, b in stated if (a or b)]
+        if not numbers:
+            continue
+        if any(abs(n - float(weight)) < 0.01 for n in numbers):
+            return ""       # the outline already agrees; nothing to warn about
+        return text[:200]
+    return ""
+
+
+def _outline_revision_warnings(user_id, course, analysis, edits, source_text=""):
+    """What the student should know BEFORE this is applied.
+
+    Every one of these is computed from facts the server holds. None is asked
+    of the model: a warning that depends on the model noticing is not a
+    warning, it is a hope.
+    """
+    warnings = []
+    components = [c for c in (analysis.get("components") or []) if isinstance(c, dict)]
+    rows = {_assessment_key(r.name): r for r in GradeEntry.query.filter_by(
+        user_id=user_id, course_full=course).all()}
+
+    removes = [str(n) for n in (edits.get("remove_components") or [])]
+    for name in removes:
+        row = rows.get(_assessment_key(name))
+        if row is not None and row.score is not None:
+            warnings.append(
+                "%s has a mark you entered (%g/%g). Nexora keeps the mark, but it will no "
+                "longer count toward your grade." % (name, row.score, row.max_score or 100))
+
+    # Anything else that names a component about to disappear. A rule left
+    # pointing at nothing is how a scheme starts failing a student for a
+    # requirement nobody can evaluate -- `_evaluate_pass_rules` again.
+    remove_keys = {_assessment_key(n) for n in removes}
+    if remove_keys:
+        referring = set()
+        for rule in (analysis.get("selection_rules") or []) + (analysis.get("derived_components") or []):
+            if isinstance(rule, dict):
+                for member in (rule.get("components") or []):
+                    if _assessment_key(member) in remove_keys:
+                        referring.add(str(rule.get("name") or rule.get("output_component")
+                                           or "a grading rule"))
+        for option in (analysis.get("grading_options") or []):
+            if not isinstance(option, dict):
+                continue
+            for comp in (option.get("components") or []):
+                if isinstance(comp, dict) and _assessment_key(_component_source_name(comp)) in remove_keys:
+                    referring.add(str(option.get("option_name") or "an alternative scheme"))
+        for where in sorted(referring):
+            warnings.append('"%s" refers to something you are removing; it will be updated to '
+                            "leave it out." % where)
+
+    # Does the scheme still add up? The one error nobody sees until a grade is
+    # wrong. Bonus weight is excluded, the way `_check_total` already does it.
+    after = {}
+    for comp in components:
+        after[_assessment_key(comp.get("name"))] = (str(comp.get("name")), float(comp.get("weight") or 0),
+                                                    str(comp.get("category") or ""))
+    for name, weight in (edits.get("components") or {}).items():
+        key = _assessment_key(name)
+        if key in after:
+            after[key] = (after[key][0], float(weight), after[key][2])
+    for name in removes:
+        after.pop(_assessment_key(name), None)
+    for comp in (edits.get("add_components") or []):
+        if isinstance(comp, dict) and comp.get("name"):
+            after[_assessment_key(comp.get("name"))] = (
+                str(comp.get("name")), float(comp.get("weight") or 0), str(comp.get("category") or ""))
+    total = sum(w for _n, w, cat in after.values()
+                if not re.search(r"bonus|extra\s*credit", cat or "", re.I))
+    if after and abs(total - 100.0) > 0.5:
+        warnings.append("After this change the weights add up to %g%%, not 100%%." % round(total, 2))
+
+    # And the part that gives the feature its name: show them the sentence
+    # they are overruling.
+    for name, weight in (edits.get("components") or {}).items():
+        quote = _outline_states_weight(source_text, name, weight)
+        if quote:
+            warnings.append('Your outline says: "%s" -- you are setting %s to %g%%.'
+                            % (quote, name, float(weight)))
+    return warnings
+
+
+def _outline_revision_preview(analysis, edits):
+    """The component list as it would be afterwards, for the student to read."""
+    rows = []
+    removes = {_assessment_key(n) for n in (edits.get("remove_components") or [])}
+    renames = {_assessment_key(k): v for k, v in (edits.get("rename_components") or {}).items()}
+    weights = {_assessment_key(k): v for k, v in (edits.get("components") or {}).items()}
+    for comp in (analysis.get("components") or []):
+        if not isinstance(comp, dict):
+            continue
+        key = _assessment_key(comp.get("name"))
+        if key in removes:
+            rows.append({"name": str(comp.get("name")), "weight": float(comp.get("weight") or 0),
+                         "state": "removed"})
+            continue
+        name = renames.get(key) or str(comp.get("name"))
+        weight = float(weights[key]) if key in weights else float(comp.get("weight") or 0)
+        state = "changed" if (key in weights or key in renames) else "kept"
+        rows.append({"name": name, "weight": weight, "state": state})
+    for comp in (edits.get("add_components") or []):
+        if isinstance(comp, dict) and comp.get("name"):
+            rows.append({"name": str(comp.get("name")), "weight": float(comp.get("weight") or 0),
+                         "state": "added"})
+    return rows
+
+
+@app.route("/api/course/<course_code>/outline/revise", methods=["POST"])
+@ai_limit
+@login_required
+@requires_active
+def revise_course_outline(course_code):
+    """Change the grading scheme by describing the change.
+
+    Previews by default and WRITES NOTHING. The student sends it back with
+    `apply` once they have read the warnings -- the calendar assistant's
+    split, and the reason it is safe to let a sentence rewrite the thing that
+    decides someone's grade.
+    """
+    course = _normalize_course_code(course_code)
+    user_id = current_user.id
+    body = request.get_json(silent=True) or {}
+    instruction = str(body.get("instruction") or "").strip()
+    profile = CourseOutlineProfile.query.filter_by(user_id=user_id, course_full=course).first()
+    if not profile:
+        return jsonify({"error": "There is no grading scheme on file for this course yet."}), 404
+    try:
+        analysis = json.loads(profile.grading_json or "{}")
+    except (ValueError, TypeError):
+        analysis = {}
+    if not isinstance(analysis, dict) or not analysis.get("components"):
+        return jsonify({"error": "There is no grading scheme on file for this course yet."}), 404
+
+    row = _outline_row_for(user_id, course, profile)
+    source_text = (row.content_text or "") if row is not None else ""
+
+    if body.get("apply"):
+        # Apply exactly what was previewed, re-checked against the scheme --
+        # the round trip through the browser is not trusted.
+        raw = body.get("edits") if isinstance(body.get("edits"), dict) else {}
+        edits, dropped = _revision_edits_against_scheme(analysis, raw)
+        if not edits:
+            return jsonify({"error": "Nothing in that change could be applied to this scheme."}), 422
+        changed = _apply_outline_edits(user_id, course, profile, analysis, edits)
+        return jsonify({"ok": True, "applied": True, "changed": changed,
+                        "dropped": dropped, "analysis": analysis})
+
+    if not instruction:
+        return jsonify({"error": "Describe what you want changed."}), 400
+    try:
+        edits = _outline_revision_edits(course, analysis, instruction)
+    except Exception as exc:
+        app.logger.warning("Outline revision read failed for %s: %s", course, exc)
+        if _looks_like_quota_error(exc):
+            return jsonify({"error": "Nexora's AI has hit its usage limit for now. "
+                                     "Please try again later."}), 429
+        return jsonify({"error": "Nexora could not read that just now. "
+                                 "Please try again in a minute."}), 503
+    clean, dropped = _revision_edits_against_scheme(analysis, edits)
+    return jsonify({
+        "ok": True,
+        "applied": False,
+        # Shown on the page. A misread instruction reshapes the thing that
+        # decides a grade and would look completely authoritative doing it --
+        # the same reason `/api/study-plan/ask` returns `understood`.
+        "understood": str(edits.get("understood") or "")[:400],
+        "summary": str(edits.get("summary") or "")[:400],
+        "edits": clean,
+        "dropped": dropped,
+        "warnings": _outline_revision_warnings(user_id, course, analysis, clean, source_text),
+        "preview": _outline_revision_preview(analysis, clean),
+    })
 
 
 @app.route("/api/course/<course_code>/outline/amend", methods=["POST"])
@@ -14075,6 +15115,8 @@ def analyze_outline_generic():
     uncorroborated = _scheme_is_uncorroborated(parsed, text)
     if uncorroborated:
         parsed = dict(parsed, components=[], grading_options=[])
+    parsed = _verify_contacts(parsed, text)
+    parsed = _gate_conditional_transfers(parsed, text)
 
     components = []
     total = 0.0
@@ -15259,6 +16301,8 @@ def public_analyze_outline():
         return jsonify({"error": "This outline does not say what each assessment is worth -- "
                                  "it says the weighting will be announced separately. Nexora "
                                  "will not guess weights nobody wrote."}), 422
+    parsed = _verify_contacts(parsed, text)
+    parsed = _gate_conditional_transfers(parsed, text)
 
     components = []
     total = 0.0

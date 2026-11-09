@@ -106,7 +106,7 @@ production.
 app.py            the application — routes, models, LLM calls, grade engine
 extension/        Chrome extension (Brightspace scraper)
 templates/        29 Jinja pages
-tests/            1,451 tests
+tests/            1,541 tests
 evals/            live-API evaluation corpus for the outline pipeline
 scripts/          operational tooling (database audits, data repairs)
 docs/             design documents and release notes
@@ -124,7 +124,7 @@ Falls back to SQLite with no `DATABASE_URL`. Gemini features need
 than failing.
 
 ```bash
-venv/Scripts/python.exe -m pytest tests/ -q      # 1,451 tests
+venv/Scripts/python.exe -m pytest tests/ -q      # 1,541 tests
 ```
 
 ---

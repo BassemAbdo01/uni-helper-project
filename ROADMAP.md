@@ -190,7 +190,18 @@ sections below do not say:
 
 1. ~~Ephemeral-disk fix~~ — **live** since 2026-10-27. The `--plan` row
    count is still unrun, but it only reports; nothing waits on it.
-2. **Outline finder** + instructor / email / office-hours extraction (one corpus run)
+2. ~~**Outline finder** + instructor / email / office-hours extraction~~ --
+   **done.** Both are server-side, so they fix rows already in the database
+   with no extension release. The live reasoning is in CLAUDE.md; what the
+   line above did not anticipate:
+   - the finder had to be made **67x faster** before it could ship, and the
+     cost was density, not length -- `_local_outline_analysis` is superlinear
+     in grading-label-like lines, not in characters;
+   - five call sites answered "where is the outline" five ways, and two of
+     them meant a student who picked their outline could not then ASK it
+     anything;
+   - the unprompted analysis could delete hand-entered marks, which was
+     already true on the narrower candidate list.
 3. **Brightspace grade sync** — audit first
 4. **Job system** — heartbeat, 3-attempt cap, idempotency, startup requeue, env flag off
 5. **Ask Nexora ordering** + study blocks and timetable on the Calendar

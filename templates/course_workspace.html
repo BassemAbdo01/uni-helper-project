@@ -125,6 +125,13 @@ a.update{display:block;text-decoration:none;color:inherit}
 a.update:hover{border-color:var(--amber,#E8A94A)}
 .update .ux{display:block;margin:5px 0 2px;font-size:12px;line-height:1.5;opacity:.82;
   display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  /* The contact block. `contact-rows` is a label-above-value grid rather than
+     a definition list because the values are short and a student scans them
+     side by side. */
+  .contact-box .contact-rows{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px 18px;margin:10px 0 6px}
+  .contact-box .contact-rows span{display:block;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px}
+  .contact-box .contact-rows strong{font-weight:600;word-break:break-word}
+  .contact-box .contact-rows a{color:inherit;text-decoration:underline}
 </style>
 </head>
 <body>
@@ -239,7 +246,7 @@ a.update:hover{border-color:var(--amber,#E8A94A)}
 
         <article class="panel tab-panel" data-panel="outline" {% if active_tab != 'outline' %}hidden{% endif %}><h3>Course Outline Intelligence</h3>
           {% if course_outlines %}
-          <div class="smart-box"><h4>Course outline detected</h4><p class="meta">Nexora found {{ course_outlines|length }} possible outline file{% if course_outlines|length != 1 %}s{% endif %}. It will read and analyze the official grading scheme. If Brightspace blocks the file or the detected item is wrong, upload the official outline below.</p></div>
+          <div class="smart-box"><h4>Course outline detected</h4><p class="meta">Nexora found {{ course_outlines|length }} possible outline file{% if course_outlines|length != 1 %}s{% endif %}, best match first, with what each one was matched on. It reads the top one and names the file it read. If that is the wrong file, analyze the right one here or upload the official outline below.</p></div>
           {% else %}
           <div class="outline-required"><div class="outline-required-icon">!</div><div><strong>Nexora could not detect a course outline</strong><p>Upload the official PDF, DOCX, or PPTX below. Nexora will read it, identify every weighted component and pass rule, then build Grade Intelligence automatically.</p></div></div>
           {% endif %}
@@ -251,10 +258,23 @@ a.update:hover{border-color:var(--amber,#E8A94A)}
             student whose outline is a web page with nothing to download had to
             screenshot it. --><div class="outline-paste"><label for="outlinePaste">Or paste the outline text</label><textarea id="outlinePaste" rows="5" placeholder="Paste the grading scheme, or the whole course outline…"></textarea><span class="meta">Analyzed together with anything in the queue above.</span></div><div id="outlineUploadStatus" class="meta"></div></form>
           {% for item in course_outlines %}
-          <div class="item"><div><strong>{{ item.title }}</strong><div class="meta">{{ item.module_name or 'Brightspace course outline' }}{% if item.content_text %} · Ready{% else %} · Needs fetching or upload{% endif %}</div></div><div class="outline-actions"><button class="action open-outline" type="button" data-uid="{{ item.source_uid }}">Open outline</button><button class="action analyze-outline" type="button" data-uid="{{ item.source_uid }}">Analyze grading</button></div></div>
+          <div class="item"><div><strong>{{ item.title }}</strong><div class="meta">{{ item.module_name or 'Brightspace course outline' }}{% if item.content_text %} · Ready{% else %} · Needs fetching or upload{% endif %}{% set _why = outline_pick_meta.get(item.source_uid, {}).get('why') %}{% if _why %} · {{ _why }}{% endif %}</div></div><div class="outline-actions"><button class="action open-outline" type="button" data-uid="{{ item.source_uid }}">Open outline</button><button class="action analyze-outline" type="button" data-uid="{{ item.source_uid }}">Analyze grading</button></div></div>
           <div class="outline-body" id="outlineBody-{{ item.source_uid|replace(':','-')|replace('/','-') }}" hidden>{{ item.content_text }}</div>
           {% else %}<div class="empty" id="noOutlineDetectedEmpty">No outline was detected. Upload it above and Nexora will build the grade calculator from it.</div>{% endfor %}
           <div id="outlineStatus" class="outline-status meta"></div>
+          {% set _who = outline_analysis.get('instructor') %}{% set _mail = outline_analysis.get('instructor_email') %}{% set _hours = outline_analysis.get('office_hours') %}{% set _where = outline_analysis.get('office_location') %}
+          {% if _who or _mail or _hours or _where %}
+          <div class="smart-box contact-box">
+            <h4>Who teaches this course</h4>
+            <div class="contact-rows">
+              {% if _who %}<div><span class="meta">Instructor</span><strong>{{ _who }}</strong></div>{% endif %}
+              {% if _mail %}<div><span class="meta">Email</span><strong><a href="mailto:{{ _mail }}">{{ _mail }}</a></strong></div>{% endif %}
+              {% if _hours %}<div><span class="meta">Office hours</span><strong>{{ _hours }}</strong></div>{% endif %}
+              {% if _where %}<div><span class="meta">Office</span><strong>{{ _where }}</strong></div>{% endif %}
+            </div>
+            <p class="meta">Read from this course's outline. Nexora only shows a detail the outline itself states.</p>
+          </div>
+          {% endif %}
           {% if outline_profile %}<div class="smart-box"><h4>Detected grading rules</h4><div>Pass mark: <strong>{{ outline_profile.pass_mark }}%</strong>{% if outline_profile.final_minimum is not none %} · Final exam minimum: <strong>{{ outline_profile.final_minimum }}%</strong>{% endif %}</div>{% if outline_profile.analysis_notes %}<p class="meta">{{ outline_profile.analysis_notes }}</p>{% endif %}<div class="scheme-grid">{% for c in outline_analysis.get('components',[]) %}<div class="scheme-card"><strong>{{ c.name }} · {{ c.weight }}%</strong><small>{{ c.notes or c.category }}</small></div>{% endfor %}</div></div>{% endif %}
         </article>
         <article class="panel tab-panel grade-intelligence-v3" data-panel="grades" {% if active_tab != 'grades' %}hidden{% endif %}>
@@ -769,17 +789,23 @@ a.update:hover{border-color:var(--amber,#E8A94A)}
 
   async function readJsonSafe(r){try{return await r.json()}catch{return {error:`Nexora's server had a temporary problem (HTTP ${r.status}). Please try again in a moment.`}}}
   function setOutlineWorking(status,text){status.className='outline-status meta is-working';status.innerHTML=`<span class="spinner" aria-hidden="true"></span><span>${text}</span>`;}
-  async function analyzeOutline(uid){const status=document.getElementById('outlineStatus');setOutlineWorking(status,'Reading and analyzing the official course outline… this can take a minute or two.');let r=await fetch(`/api/course/${encodeURIComponent(COURSE)}/outline/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_uid:uid})});let d=await readJsonSafe(r);if(d.needs_content){setOutlineWorking(status,'Fetching the outline from Brightspace…');try{await requestLectureFromExtension(d.content_request)}catch(fetchErr){throw new Error('Brightspace could not provide this file. Upload the course outline above and Nexora will analyze it directly.')}setOutlineWorking(status,'Reading and analyzing the official course outline… this can take a minute or two.');r=await fetch(`/api/course/${encodeURIComponent(COURSE)}/outline/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_uid:uid})});d=await readJsonSafe(r)}if(!r.ok){const err=new Error(d.error||'Could not analyze outline');err.setupRequired=d.setup_required;throw err}status.className='outline-status meta';status.textContent='Outline analyzed. Building your course-specific grade calculator…';setTimeout(()=>{location.href='?tab=grades#workspace-tabs'},650)}
+  /* `auto` marks a call the STUDENT did not make. The server refuses one of
+     those when marks have already been entered by hand, because analysing
+     rebuilds the assessment list and those marks exist nowhere else. */
+  async function analyzeOutline(uid,auto){const status=document.getElementById('outlineStatus');const payload=JSON.stringify(auto?{source_uid:uid,auto:true}:{source_uid:uid});setOutlineWorking(status,'Reading and analyzing the official course outline… this can take a minute or two.');let r=await fetch(`/api/course/${encodeURIComponent(COURSE)}/outline/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:payload});let d=await readJsonSafe(r);if(d.skipped==='entered_marks'){status.className='outline-status meta';status.textContent=d.error;return}if(d.needs_content){setOutlineWorking(status,'Fetching the outline from Brightspace…');try{await requestLectureFromExtension(d.content_request)}catch(fetchErr){throw new Error('Brightspace could not provide this file. Upload the course outline above and Nexora will analyze it directly.')}setOutlineWorking(status,'Reading and analyzing the official course outline… this can take a minute or two.');r=await fetch(`/api/course/${encodeURIComponent(COURSE)}/outline/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:payload});d=await readJsonSafe(r)}if(!r.ok){const err=new Error(d.error||'Could not analyze outline');err.setupRequired=d.setup_required;throw err}status.className='outline-status meta';/* Which document this came out of. Nexora picks it when the student named
+     none, and a scheme read out of the wrong file looks exactly as
+     authoritative as one read out of the right file. */
+  status.textContent=d.source_guessed&&d.source_title?`Read “${d.source_title}” as the course outline. Building your course-specific grade calculator…`:'Outline analyzed. Building your course-specific grade calculator…';setTimeout(()=>{location.href='?tab=grades#workspace-tabs'},d.source_guessed?1400:650)}
   // The instruction is useless if the way to act on it does not look clickable.
   // This was a coloured word at the end of a paragraph of small print, which
   // reads as emphasis, not as the button the sentence is telling you to press.
   function showOutlineError(err,suffix){const status=document.getElementById('outlineStatus');status.className='outline-status meta status-warn';if(err.setupRequired==='grading_scale'){status.innerHTML='';const msg=document.createElement('div');msg.textContent=err.message;const link=document.createElement('a');link.href='/settings';link.textContent='Go to Grading Scale →';link.className='action';link.style.cssText='display:inline-block;margin-top:10px;font-weight:700;text-decoration:none';status.append(msg,link)}else{status.textContent=err.message+(suffix||'')}}
   document.querySelectorAll('.analyze-outline').forEach(btn=>btn.onclick=()=>analyzeOutline(btn.dataset.uid).catch(showOutlineError));
-  {% if not outline_profile %}{% for item in course_outlines %}{% if item.content_text and loop.first %}
+  {% if not outline_profile %}{% for item in course_outlines %}{% if item.content_text and loop.first and outline_pick_meta.get(item.source_uid, {}).get('confident') %}
   // A readable outline was auto-detected by Smart Sync. Analyze it once automatically
   // -- but only once a grading scale exists, otherwise this used to fire a doomed
   // request that raced with any manual analyze click and left the status stuck.
-  (()=>{const key=`nexora-outline-auto:${COURSE}:{{ item.source_uid|e }}`;if(!GRADING_SCALE_CONFIGURED||sessionStorage.getItem(key))return;sessionStorage.setItem(key,'1');setTimeout(()=>analyzeOutline({{ item.source_uid|tojson }}).catch(e=>{if(e.setupRequired!=='grading_scale')e.message='Automatic outline analysis could not finish: '+e.message;showOutlineError(e,' Upload the official outline above.')}),350)})();
+  (()=>{const key=`nexora-outline-auto:${COURSE}:{{ item.source_uid|e }}`;if(!GRADING_SCALE_CONFIGURED||sessionStorage.getItem(key))return;sessionStorage.setItem(key,'1');setTimeout(()=>analyzeOutline({{ item.source_uid|tojson }},true).catch(e=>{if(e.setupRequired!=='grading_scale')e.message='Automatic outline analysis could not finish: '+e.message;showOutlineError(e,' Upload the official outline above.')}),350)})();
   {% endif %}{% endfor %}{% endif %}
   const skipBanner=document.getElementById('skipGradingScaleBanner');
   if(skipBanner){const dismissKey=`nexora-scale-banner-dismissed:${COURSE}`;if(sessionStorage.getItem(dismissKey))document.getElementById('gradingScaleRequiredBanner')?.remove();skipBanner.onclick=()=>{sessionStorage.setItem(dismissKey,'1');document.getElementById('gradingScaleRequiredBanner')?.remove()}}

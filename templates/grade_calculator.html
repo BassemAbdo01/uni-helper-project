@@ -122,6 +122,18 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 .need .targetrow label{margin-bottom:7px}
 .need .answer{margin:16px 0 0;font-size:15px;line-height:1.6;color:var(--fg-2)}
 
+/* The reviser's preview. `fixwarn` is deliberately loud: it is the only
+   thing standing between a mistyped sentence and a rewritten grading scheme. */
+.fixwarn{border:1px solid var(--red,#e06c6c);border-radius:10px;padding:10px 12px;margin:0 0 12px}
+.fixwarn p{margin:0 0 6px;font-size:.88rem}
+.fixwarn p:last-child{margin-bottom:0}
+.fixtable{width:100%;border-collapse:collapse;font-size:.9rem}
+.fixtable td{padding:5px 8px;border-bottom:1px solid var(--line,#2a2a2a)}
+.fixtable td:last-child{text-align:right;white-space:nowrap}
+.fixtable tr[data-state="removed"] td{text-decoration:line-through;opacity:.55}
+.fixtable tr[data-state="changed"] td,.fixtable tr[data-state="added"] td{font-weight:600}
+.fixtable .tag{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;opacity:.7;margin-left:8px}
+.fixact{display:flex;gap:10px;margin-top:14px}
 /* Ask about this outline. Toggled with el.hidden, so nothing here may set
    display on a class -- see the #courseState note in CLAUDE.md. */
 .qrow{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
@@ -327,6 +339,37 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
 
       <div class="note alert" id="statusAlert" role="status"></div>
     </div>
+</section>
+
+<section class="card" id="fixPanel" hidden>
+  <header>
+    <div><span class="k">In your own words</span><h2>Fix this scheme</h2></div>
+  </header>
+  <div class="body">
+    <p class="note">
+      &ldquo;Remove the midterm&rdquo;, &ldquo;the labs are worth 10 not 6&rdquo;,
+      &ldquo;rename Popup quizzes to Wooclap&rdquo;. Nexora shows you exactly what it
+      would change, warns you about anything you would lose, and quotes your outline
+      back where the change disagrees with it &mdash; <strong>nothing is saved until
+      you confirm</strong>.
+    </p>
+    <div class="qrow">
+      <input id="fixBox" maxlength="2000" placeholder="Remove the midterm from the scheme"
+             aria-label="What you want changed about the grading scheme">
+      <button class="btn" id="fixSend" type="button">Show me the change</button>
+    </div>
+    <p class="note meta" id="fixUnderstood" hidden></p>
+    <div class="qanswer" id="fixPlan" hidden>
+      <div id="fixWarn" class="fixwarn" hidden></div>
+      <table class="fixtable" id="fixTable"></table>
+      <p class="note meta" id="fixDropped" hidden></p>
+      <div class="fixact">
+        <button class="btn" id="fixApply" type="button">Confirm and save</button>
+        <button class="btn quiet" id="fixCancel" type="button">Cancel</button>
+      </div>
+    </div>
+    <p class="note" id="fixStatus" hidden></p>
+  </div>
 </section>
 
 <section class="card" id="askPanel" hidden>
@@ -633,6 +676,8 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     const has = course && (components.length > 0 || byHand);
     $('resultsPanel').hidden = !has;
     $('askPanel').hidden = !has;
+    /* The reviser needs a scheme to revise, exactly like the Ask panel. */
+    $('fixPanel').hidden = !has;
     $('inputPanel').classList.toggle('done', !!has);
     $('replaceOutline').hidden = !has;
     $('addToOutline').hidden = !has;
@@ -1253,6 +1298,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
     } finally {
       send.disabled = false;
       send.textContent = 'Ask';
+
     }
   }
   $('qSend').onclick = askOutline;
@@ -1278,6 +1324,110 @@ input[type=file]::file-selector-button{margin-right:12px;padding:6px 12px;border
   // ?course=BIOL1103 makes the page linkable, which is what lets the course
   // workspace hand over to it.
   if (course) loadCourse(course); else render();
+
+  /* ---- Fix this scheme -------------------------------------------------
+     Two calls, never one. The first previews and writes nothing; the second
+     sends back the EDITS the preview returned, so what is saved is exactly
+     what was on screen when the student pressed Confirm -- not a re-reading
+     of the sentence, which could come back different. */
+  let fixEdits = null;
+  function fixSay(text, bad) {
+    const el = $('fixStatus');
+    el.hidden = !text;
+    el.textContent = text || '';
+    el.classList.toggle('bad', !!bad);
+  }
+  function fixReset() {
+    fixEdits = null;
+    $('fixPlan').hidden = true;
+    $('fixUnderstood').hidden = true;
+    $('fixDropped').hidden = true;
+  }
+  function fixRender(data) {
+    fixEdits = data.edits || {};
+    const understood = $('fixUnderstood');
+    understood.hidden = !data.understood;
+    understood.textContent = data.understood ? 'Nexora understood: ' + data.understood : '';
+
+    const warn = $('fixWarn');
+    warn.innerHTML = '';
+    warn.hidden = !(data.warnings || []).length;
+    (data.warnings || []).forEach(line => {
+      const p = document.createElement('p');
+      p.textContent = line;           /* esc(): every one of these can quote the outline */
+      warn.appendChild(p);
+    });
+
+    const table = $('fixTable');
+    table.innerHTML = '';
+    (data.preview || []).forEach(row => {
+      const tr = document.createElement('tr');
+      tr.dataset.state = row.state;
+      const name = document.createElement('td');
+      name.textContent = row.name;
+      if (row.state !== 'kept') {
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = row.state;
+        name.appendChild(tag);
+      }
+      const weight = document.createElement('td');
+      weight.textContent = (Math.round(row.weight * 100) / 100) + '%';
+      tr.appendChild(name); tr.appendChild(weight);
+      table.appendChild(tr);
+    });
+
+    const dropped = $('fixDropped');
+    dropped.hidden = !(data.dropped || []).length;
+    if ((data.dropped || []).length) {
+      dropped.textContent = 'Nexora could not match these to anything in your scheme, '
+        + 'so they were left out: ' + data.dropped.join(', ') + '.';
+    }
+    const nothing = !Object.keys(fixEdits || {}).length;
+    $('fixApply').disabled = nothing;
+    $('fixPlan').hidden = false;
+    if (nothing) fixSay(data.summary || 'Nexora found nothing in that it could change.', true);
+  }
+
+  $('fixSend').onclick = async () => {
+    const text = ($('fixBox').value || '').trim();
+    if (!course) { fixSay('Pick a course first.', true); return; }
+    if (!text) { fixSay('Describe what you want changed.', true); return; }
+    fixReset();
+    fixSay('Reading that\u2026');
+    try {
+      const r = await fetch(`/api/course/${encodeURIComponent(course)}/outline/revise`,
+                            {method:'POST', headers:{'Content-Type':'application/json'},
+                             body: JSON.stringify({instruction: text})});
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Nexora could not read that.');
+      fixSay('');
+      fixRender(d);
+    } catch (e) { fixSay(e.message, true); }
+  };
+
+  $('fixCancel').onclick = () => { fixReset(); fixSay(''); };
+
+  $('fixApply').onclick = async () => {
+    if (!fixEdits) return;
+    $('fixApply').disabled = true;
+    fixSay('Saving\u2026');
+    try {
+      const r = await fetch(`/api/course/${encodeURIComponent(course)}/outline/revise`,
+                            {method:'POST', headers:{'Content-Type':'application/json'},
+                             body: JSON.stringify({apply:true, edits:fixEdits})});
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Nexora could not save that.');
+      fixReset();
+      $('fixBox').value = '';
+      fixSay((d.changed || []).join('; ') || 'Saved.');
+      /* The scheme changed underneath every number on this page. */
+      await loadCourse(course);
+    } catch (e) { $('fixApply').disabled = false; fixSay(e.message, true); }
+  };
+
 })();
+
+
 </script>
 {% endblock %}
