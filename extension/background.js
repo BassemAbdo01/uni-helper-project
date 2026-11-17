@@ -572,14 +572,19 @@ function assignmentItems(data, course, origin) {
       source_uid: itemUid(course.source_uid, 'assignment', id, title),
       title,
       content_type: 'assignment',
-      // The assignment itself, not its upload form. `folder_submit_files.d2l`
-      // is where a file is uploaded, so a folder that takes no file -- on
-      // paper, or observed in person -- has no such page and D2L answers
-      // "Internal Error". Measured against Carleton: folder_user_view.d2l,
-      // folder_history.d2l and folder.d2l do not exist; this route does.
-      // The server rewrites the old shape too, so rows already imported are
-      // repaired without waiting for this to ship.
-      source_url: `${origin}/d2l/le/dropbox/${course.source_uid}/${encodeURIComponent(id)}/View`,
+      // Exactly where D2L's OWN Assignments list sends a student. Verified
+      // signed in against two real Carleton courses: every folder in
+      // folders_list.d2l links to folder_submit_files.d2l, and that page
+      // opens the assignment.
+      //
+      // This briefly built `/d2l/le/dropbox/<ou>/<db>/View` instead, on the
+      // theory that the upload form is the "action" endpoint. That route does
+      // not exist at Carleton -- it redirects to /d2l/error/404 -- so it broke
+      // every assignment link on the dashboard. A folder that accepts no file
+      // still answers "Internal Error" here, but D2L's own list links there
+      // too, so that is Brightspace's behaviour and not ours to invent around.
+      source_url: `${origin}/d2l/lms/dropbox/user/folder_submit_files.d2l`
+        + `?db=${encodeURIComponent(id)}&grpid=0&isprv=0&bp=0&ou=${course.source_uid}`,
       module_name: clean(row.Category?.Name || row.CategoryName || 'Assignments'),
       content_text: htmlToText(row.Instructions || row.Description || ''),
       published_at: dateValue(row.DueDate || row.EndDate || row.StartDate),

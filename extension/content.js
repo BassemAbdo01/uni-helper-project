@@ -467,9 +467,11 @@
         source_uid: itemUid(course.source_uid, 'assignment', id, title),
         title,
         content_type: 'assignment',
-        // See background.js: the upload form 500s for a folder that takes
-        // no file upload. This is the assignment itself.
-        source_url: `${location.origin}/d2l/le/dropbox/${course.source_uid}/${encodeURIComponent(id)}/View`,
+        // See background.js: this is where D2L's own Assignments list sends a
+        // student, verified signed in. The `/d2l/le/dropbox/.../View` route
+        // this briefly used does not exist at Carleton and 404'd every link.
+        source_url: `${location.origin}/d2l/lms/dropbox/user/folder_submit_files.d2l`
+          + `?db=${encodeURIComponent(id)}&grpid=0&isprv=0&bp=0&ou=${course.source_uid}`,
         module_name: clean(row.Category?.Name || row.CategoryName || 'Assignments'),
         content_text: htmlToText(row.Instructions || row.Description || ''),
         published_at: dateValue(row.DueDate || row.EndDate || row.StartDate),

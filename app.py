@@ -1676,53 +1676,35 @@ def _d2l_download_href(url, file_ext):
         match.group(1), match.group(2), match.group(3))
 
 
-# D2L's file-UPLOAD form for an assignment folder. This is what the extension
-# has always built, and it answers "Internal Error" for any folder that has
-# nothing to upload to -- an on-paper or observed submission. Reported against
-# a real CCDP2100C assignment due that day, titled "... (Homework)".
-_D2L_SUBMIT_FOLDER = re.compile(
-    r"^(https?://[^/]+)/d2l/lms/dropbox/user/folder_submit_files\.d2l\?(.+)$", re.I)
+# The URL Nexora wrongly invented for an assignment folder, and which some
+# rows were SCRAPED with before it was withdrawn. D2L's own Assignments list
+# never links here and Carleton answers /d2l/error/404, so a stored one is
+# always our own damage and never something the LMS gave us.
+_D2L_DEAD_DROPBOX = re.compile(
+    r"^(https?://[^/]+)/d2l/le/dropbox/(\d+)/(\d+)/View/?$", re.I)
 
 
-def _d2l_assignment_href(url):
-    """Rewrite an assignment's upload form into the assignment itself.
+def _d2l_repair_assignment_href(url):
+    """Put a stored `/d2l/le/dropbox/<ou>/<db>/View` back to the real route.
 
-    Same shape as the lecture links, one layer over: we were linking to the
-    ACTION endpoint instead of the VIEW endpoint. `folder_submit_files.d2l` is
-    where you upload a file, so a folder that takes no file -- on paper, or
-    observed in person -- has no such page and D2L 500s.
+    The rewrite that produced these ran at RENDER time, so removing it repairs
+    every row whose stored URL was the scraped `folder_submit_files.d2l` --
+    which is all of them on the published 3.5.1 extension. But the unreleased
+    builds put the invented URL into the payload itself, so any row scraped by
+    one of those is stored broken, and only a re-import would clear it.
 
-    The target was measured, not guessed, which matters because the first guess
-    was wrong. Probed against Carleton unauthenticated, where a route that
-    exists redirects to login and one that does not returns the same 303 to
-    /d2l/error/404 as a deliberately invented control:
-
-        folder_submit_files.d2l   302 -> login      exists (and 500s signed in)
-        folder_user_view.d2l      303 -> 404        does not exist
-        folder_history.d2l        303 -> 404        does not exist
-        folder.d2l                303 -> 404        does not exist
-        /d2l/le/dropbox/<ou>/<db>/View              exists
-
-    `folder_user_view.d2l` was the first proposal and would have replaced a 500
-    with a 404. The surviving candidate was then confirmed by the owner against
-    his own session: it opens the assignment.
-
-    Both ids are already in the stored URL, so this repairs every row already
-    in the database and needs no extension release -- the same property that
-    made the `file_ext` download fix work. The extension is corrected too, for
-    rows scraped after it ships.
+    Reversing it costs nothing and needs no re-import. This is not guessing at
+    the LMS: no D2L page links to this shape, so anything carrying it came
+    from Nexora and we are undoing our own edit.
     """
-    match = _D2L_SUBMIT_FOLDER.match(str(url or "").strip())
+    match = _D2L_DEAD_DROPBOX.match(str(url or "").strip())
     if not match:
         return url
-    params = urllib.parse.parse_qs(match.group(2))
-    folder = (params.get("db") or [""])[0].strip()
-    org = (params.get("ou") or [""])[0].strip()
-    # Read, never invented. Without both ids there is no link to build, and a
-    # half-built one is worse than the upload form we already have.
-    if not (folder.isdigit() and org.isdigit()):
-        return url
-    return "%s/d2l/le/dropbox/%s/%s/View" % (match.group(1), org, folder)
+    return ("%s/d2l/lms/dropbox/user/folder_submit_files.d2l"
+            "?db=%s&grpid=0&isprv=0&bp=0&ou=%s"
+            % (match.group(1), match.group(3), match.group(2)))
+
+
 
 
 def content_href(url, file_ext=""):
@@ -1746,7 +1728,7 @@ def content_href(url, file_ext=""):
     # The gate runs FIRST and every rewrite second, over what the gate allowed
     # -- so a scraped `javascript:` URL can never reach a rewrite, and a rewrite
     # can only ever move a link that was already safe to render.
-    safe = _d2l_assignment_href(_lms_link(text))
+    safe = _d2l_repair_assignment_href(_lms_link(text))
     return _d2l_download_href(safe, file_ext)
 
 
@@ -5765,7 +5747,12 @@ def home():
                 "due_label": c.get("status_label", ""),
                 "due_pretty": c.get("main_due_pretty", ""),
                 "status": c.get("status", ""),
-                "link": c.get("source_link", ""),
+                # Through the gate, like every other rendered link. These JSON
+                # link fields took the stored string straight -- the same
+                # "single gate that wasn't" that cost eight hrefs on the course
+                # workspace, and it is why a row stored with a bad URL would
+                # stay bad here after the dashboard was repaired.
+                "link": content_href(c.get("source_link", "")),
             })
 
     upcoming_cards = upcoming_cards[:4]
@@ -5976,7 +5963,7 @@ def study_room():
                 "due": c.get("main_due_pretty") or c.get("status_label") or "Upcoming",
                 "status": c.get("status", ""),
                 "status_label": c.get("status_label", ""),
-                "link": c.get("source_link") or "",
+                "link": content_href(c.get("source_link") or ""),
             })
     tasks = [{
         "group_id": c.get("group_id", ""),
@@ -5984,7 +5971,7 @@ def study_room():
         "course": c.get("course_full", "OTHER"),
         "due": c.get("main_due_pretty") or "No date",
         "status": c.get("status_label") or "Active",
-        "link": c.get("source_link") or "",
+        "link": content_href(c.get("source_link") or ""),
     } for c in active]
     # One entry per course, named by the newest offering -- the same rule the
     # dashboard and the grade calculator use.
@@ -9047,7 +9034,7 @@ def _session_links(rows):
     if not ids:
         return {}
     found = Task.query.filter(Task.id.in_(list(ids)[:400])).all()
-    return {t.id: (t.source_link or "") for t in found if t.source_link}
+    return {t.id: content_href(t.source_link or "") for t in found if t.source_link}
 
 
 def _sessions_json(rows):
@@ -14292,7 +14279,7 @@ def calendar_page():
                 "location": c.get("location") or "",
                 "notes": c.get("notes") or "",
                 "imported": (c.get("source") or "manual") != "manual",
-                "link": c.get("source_link") or "",
+                "link": content_href(c.get("source_link") or ""),
             })
 
     # Chronological within each day, once every entry for it is collected.

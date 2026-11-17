@@ -1140,61 +1140,75 @@ untouched -- this can only ever ADD a download.
 
 **The point of all this: it needs no extension release.** `file_ext` is on the
 payload of the build already published on the Web Store, so one ordinary
-re-import fixes every lecture. The 3.5.3 extension change is still right and
-still worth shipping, but it is no longer what the fix depends on.
+re-import fixes every lecture. The extension-side change (3.5.3) is still
+right and still worth shipping, but it is no longer what the fix depends on.
+The unreleased package is **3.5.4** now; it also carries the assignment-link
+revert below, which the server repairs anyway.
 
-## An assignment deadline must link to the assignment, not to its upload form
+## An assignment deadline links where D2L itself links it
 
-Reported with a screenshot: clicking a deadline due that day -- "Assignment 8c
-Innovation Proposal Assignment Guidelines - Final Submission **(Homework)**" --
-opened Carleton's **Internal Error** page.
+Reported twice, and **the second report was caused by the first fix**.
 
-`extension/background.js` and `content.js` both built
-`/d2l/lms/dropbox/user/folder_submit_files.d2l?db=<db>&grpid=0&...&ou=<ou>`.
-That is D2L's file-UPLOAD form. A folder that takes no file -- submitted on
-paper, or observed in person, which "(Homework)" was -- has no such page, and
-D2L answers 500. Same shape as the lecture links one layer over: the ACTION
-endpoint linked instead of the VIEW endpoint, which is what `_browsable_d2l`
-already fixes for content.
+**Round one.** Clicking "Assignment 8c Innovation Proposal Assignment
+Guidelines - Final Submission **(Homework)**" opened Carleton's **Internal
+Error**. `folder_submit_files.d2l` is D2L's file-upload form, a folder that
+takes no file has no such page, and the conclusion drawn was that Nexora was
+linking the ACTION endpoint where the VIEW endpoint belonged -- the same shape
+as the lecture links one layer over. The replacement was
+`/d2l/le/dropbox/<ou>/<db>/View`, picked by probing Carleton unauthenticated,
+where it answered 200 while invented controls answered 303 to `/d2l/error/404`.
 
-**The first proposed target was wrong, and the probe that caught it was free.**
-Carleton answers an unauthenticated request for a route that exists with a 302
-to login, and one that does not with a 303 to `/d2l/error/404` -- identical to a
-deliberately invented control, which is how to tell them apart:
+**Round two**, two weeks later: *"I keeeeeeeep clicking the external link to be
+directed to brightspace for the assignments and stuff but i keep getting this
+error msg"* -- Carleton's **Page Not Found**, on every assignment on the
+dashboard.
 
-| Route | Unauthenticated | Verdict |
+**That 200 was never evidence, and the probe said so at the time.** The route
+defers auth to JavaScript, so it answers 200 for a nonsense `ou` AND a nonsense
+`db` -- which the old section recorded, in the same paragraph where it then
+treated 200 as "exists". It also claimed the owner had confirmed the result
+signed in. He had not. Signed in, that URL redirects to `/d2l/error/404`.
+
+**What settled it was asking D2L.** Opened in the owner's own session,
+`folders_list.d2l?ou=<ou>` is D2L's own Assignments list, and in two real
+courses **every folder in it links to `folder_submit_files.d2l`** -- including
+the "(Homework)" kind that started round one. Then each candidate was loaded
+signed in:
+
+| Folder | `folder_submit_files.d2l` | `/d2l/le/dropbox/<ou>/<db>/View` |
 |---|---|---|
-| `folder_submit_files.d2l?db=&ou=` | 302 login | exists, and 500s signed in |
-| `folder_user_view.d2l` | 303 -> 404 | **does not exist** |
-| `folder_history.d2l` | 303 -> 404 | does not exist |
-| `folder.d2l` | 303 -> 404 | does not exist |
-| `folders_list.d2l?ou=` | 302 login | exists (the Assignments list) |
-| `/d2l/le/dropbox/<ou>/<db>/View` | 200 + JS redirect to login | exists |
+| SYSC2004A Lab 09, db 304803 | **opens the assignment** | 404 |
+| CCDP2100C #11b (Homework), db 304833 | 500 | 404 |
 
-`folder_user_view.d2l` was the proposed fix and would have swapped a 500 for a
-404. Three rounds were burned guessing at the lecture links before anyone asked
-D2L what it offered; this is the same lesson, and the probe costs one curl.
+So the scraped link was right for the great majority, and the rewrite broke
+all of them to avoid a 500 on a few. The rewrite is **withdrawn**: the
+extension builds `folder_submit_files.d2l` again and the server passes it
+through.
 
-A 200 there is not proof on its own -- a nonsense `ou` AND a nonsense `db` both
-answer 200, because that route defers auth to JavaScript. Only the owner
-clicking it, signed in, settled it.
+**A folder that accepts no file still answers Internal Error, and that stays.**
+D2L's own Assignments list sends a student to exactly the same page, so
+Brightspace does not have a better link either -- and `_lms_link`'s rule is
+that **Nexora never constructs one**. Linking somewhere D2L does not link is
+how every other assignment got broken.
 
-**`_d2l_assignment_href` rewrites the stored URL**, and both ids are already in
-it, so **every row already in the database is repaired with no extension
-release** -- the same property that made the `file_ext` download fix work. The
-extension is corrected too, for rows scraped after it ships.
+`_d2l_repair_assignment_href` turns a stored `/d2l/le/dropbox/<ou>/<db>/View`
+back into the real route. The bad rewrite ran at RENDER time, so simply
+deleting it repairs every row scraped by the published extension -- but the
+unreleased builds wrote the invented URL into the payload itself, and only a
+re-import would clear those. Reversing it costs nothing and is not a guess
+about the LMS: no D2L page links to that shape, so anything carrying it came
+from Nexora and this is undoing our own edit. It runs inside `content_href`,
+after `_lms_link`, so the security gate is still first.
 
-It runs inside `content_href`, after `_lms_link` and beside
-`_d2l_download_href`: the security gate first, every rewrite over what the gate
-allowed. A URL missing either id is returned untouched -- a half-built link is
-worse than the upload form, which at least names the right assignment.
+Quizzes use `quiz_summary.d2l`, a different route, confirmed alive in the same
+session and deliberately untouched.
 
-Quizzes use `quiz_summary.d2l`, a different route that the same probe found
-alive. There is no evidence it is broken and it is deliberately not moved.
-
-An existing test pinned the upload-form URL as the correct `href`. It was
-updated, not weakened: what it exists to check is that the title is an anchor
-and the box ticks, and both still hold -- only the destination was wrong.
+**The lesson is the one this file already had, and it still got skipped.**
+"When the question is what does their system actually return, drive their
+system." A probe that cannot distinguish a real route from an invented one has
+not answered the question, and writing "confirmed by the owner" next to
+something nobody confirmed is how a wrong answer survives two weeks of a
+student clicking it.
 
 ## A row's link belongs to the university; Nexora's copy gets its own field
 

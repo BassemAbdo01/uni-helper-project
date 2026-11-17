@@ -96,13 +96,16 @@ def _user(client):
 # ------------------------------------------------- what to do first: two actions
 
 def test_a_queued_task_ticks_from_the_box_and_opens_from_the_title(client, synced):
-    # The stored URL is the upload form, which is what every row imported
-    # before the fix carries. What the page renders is the assignment -- see
-    # tests/test_assignment_link.py: `folder_submit_files.d2l` is where a file
-    # is uploaded, so a folder that takes no file answers Internal Error, which
-    # is what this test used to pin as correct.
+    # The link the LMS gave is the link the page renders. This briefly pinned
+    # a rewrite to `/d2l/le/dropbox/<ou>/<db>/View`, which does not exist at
+    # Carleton -- every assignment on the dashboard went to Page Not Found for
+    # two weeks with this test green. See tests/test_assignment_link.py: D2L's
+    # own Assignments list links every folder to `folder_submit_files.d2l`.
     stored = f"{ORIGIN}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=5&ou=2"
-    rendered = f"{ORIGIN}/d2l/le/dropbox/2/5/View"
+    # Rendered into an attribute, so the ampersand between the two ids is
+    # escaped -- which is correct HTML, and which never came up while the
+    # link was being rewritten to a route that carried no query string.
+    rendered = stored.replace("&", "&amp;")
     push(client, synced, "SYSC2310", [{"content_type": "assignment", "title": "Lab 1 Report Submission",
                                        "source_uid": "a1", "due_at": f"{(date.today() + timedelta(days=3)).isoformat()}T03:59:00Z",
                                        "source_url": stored}])
@@ -110,7 +113,7 @@ def test_a_queued_task_ticks_from_the_box_and_opens_from_the_title(client, synce
     card = body.split('<div class="task"', 1)[1].split("</div>", 1)[0]
     assert 'class="box"' in card and 'aria-label="Mark done: Lab 1 Report Submission"' in card
     # What this test is for: the title is an anchor into the LMS and the box
-    # ticks. Both still hold; only the destination was wrong.
+    # ticks. The destination is whatever the LMS gave, unmodified.
     assert f'href="{rendered}"' in card and 'target="_blank"' in card
 
 
